@@ -23,10 +23,11 @@ through to Whisparr V3), **Purge** (`POST
 managed via `/api/modes/{mode}/purge/allowlist`, against every tracked
 item's native tags — Adult needed no code changes, since Whisparr's tracked
 scenes resolve through the same `movie` resource Radarr already uses), and
-**Dedup**, Movies only for now (`POST
-/api/modes/movies/dedup/scan` groups unmapped files with any already-tracked
-item sharing the same TMDB ID, ffprobes every candidate directly, and
-stages a proposal per duplicate group with a precomputed quality winner).
+**Dedup** (`POST /api/modes/{movies,adult}/dedup/scan` groups unmapped
+files with any already-tracked item sharing the same identifier — TMDB ID
+for Movies, the resolved scene's foreignID for Adult — ffprobes every
+candidate directly, and stages a proposal per duplicate group with a
+precomputed quality winner; Series isn't wired up).
 These three stage proposals in one shared, persisted review queue; `POST
 /api/proposals/{id}/apply` commits exactly the one a human approved —
 Dedup's apply optionally takes `{"keepIndex": n}` or `{"keepAll": true}` to
@@ -37,8 +38,11 @@ the live vocabulary and `POST`/`DELETE
 /api/modes/{mode}/items/{itemId}/tags[/{tagId}]` to assign or remove one,
 creating a genuinely new tag upstream automatically — this one isn't staged
 through the review queue, since assigning a tag is already a single
-deliberate action, not an automatic decision needing approval. Adult Dedup,
-Series Dedup, AI-suggested tags, and the React frontend don't exist yet.
+deliberate action, not an automatic decision needing approval. Series Dedup,
+AI-suggested tags, and the React frontend don't exist yet. All three Adult
+workflows (Rename, Purge, Dedup) are now live, though tracked-vs-orphan Adult
+Dedup rests on an unverified assumption about Whisparr's API response shape
+(see the commit history) — not yet run against a real Whisparr instance.
 Not ready to run as a media tool.
 
 Secrets are encrypted at rest with a locally generated key
