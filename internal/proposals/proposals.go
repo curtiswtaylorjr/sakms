@@ -9,6 +9,7 @@ package proposals
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -21,6 +22,7 @@ type Workflow string
 const (
 	Rename Workflow = "rename"
 	Purge  Workflow = "purge"
+	Dedup  Workflow = "dedup"
 )
 
 // Status is where a proposal currently sits in its review lifecycle.
@@ -40,25 +42,43 @@ const (
 // ErrNotFound is returned by Get when no proposal exists with the given ID.
 var ErrNotFound = errors.New("proposals: no proposal with that id")
 
+// Candidate is one file in a Dedup duplicate group. Unused by Rename/Purge
+// proposals (an empty slice).
+type Candidate struct {
+	// Label identifies this candidate for display — "tracked" for the
+	// currently-tracked copy, or the source unmapped-folder name otherwise.
+	Label      string `json:"label"`
+	Path       string `json:"path"`
+	TrackedID  int    `json:"trackedId,omitempty"`
+	Resolution int    `json:"resolution"`
+	Codec      string `json:"codec"`
+	BitRate    int64  `json:"bitRate"`
+	// Winner is precomputed at Scan time via place.QualityKey — Apply uses
+	// it as the default "auto-resolve by quality" choice when the caller
+	// doesn't explicitly pick a candidate to keep.
+	Winner bool `json:"winner"`
+}
+
 // Proposal is one staged review-queue row. TVDBID/TMDBID/QualityProfileID
 // and Title are only meaningful once Status is Pending or Applied; Reason
-// explains why Status is Unmatched.
+// explains why Status is Unmatched. Candidates is only populated for Dedup.
 type Proposal struct {
-	ID               int64     `json:"id"`
-	Mode             mode.Mode `json:"mode"`
-	Workflow         Workflow  `json:"workflow"`
-	Status           Status    `json:"status"`
-	SourceName       string    `json:"sourceName"`
-	SourcePath       string    `json:"sourcePath"`
-	RootFolderPath   string    `json:"rootFolderPath"`
-	Title            string    `json:"title,omitempty"`
-	TVDBID           int       `json:"tvdbId,omitempty"`
-	TMDBID           int       `json:"tmdbId,omitempty"`
-	QualityProfileID int       `json:"qualityProfileId,omitempty"`
-	Reason           string    `json:"reason,omitempty"`
-	TrackedID        int       `json:"trackedId,omitempty"`
-	CreatedAt        string    `json:"createdAt"`
-	AppliedAt        string    `json:"appliedAt,omitempty"`
+	ID               int64       `json:"id"`
+	Mode             mode.Mode   `json:"mode"`
+	Workflow         Workflow    `json:"workflow"`
+	Status           Status      `json:"status"`
+	SourceName       string      `json:"sourceName"`
+	SourcePath       string      `json:"sourcePath"`
+	RootFolderPath   string      `json:"rootFolderPath"`
+	Title            string      `json:"title,omitempty"`
+	TVDBID           int         `json:"tvdbId,omitempty"`
+	TMDBID           int         `json:"tmdbId,omitempty"`
+	QualityProfileID int         `json:"qualityProfileId,omitempty"`
+	Reason           string      `json:"reason,omitempty"`
+	TrackedID        int         `json:"trackedId,omitempty"`
+	Candidates       []Candidate `json:"candidates,omitempty"`
+	CreatedAt        string      `json:"createdAt"`
+	AppliedAt        string      `json:"appliedAt,omitempty"`
 }
 
 type Store struct {
@@ -90,14 +110,18 @@ func (s *Store) ReplacePending(ctx context.Context, m mode.Mode, wf Workflow, fr
 	out := make([]Proposal, len(fresh))
 	for i, p := range fresh {
 		p.Mode, p.Workflow = m, wf
+		candidatesJSON, err := json.Marshal(p.Candidates)
+		if err != nil {
+			return nil, fmt.Errorf("encoding candidates for %q: %w", p.SourceName, err)
+		}
 		row := tx.QueryRowContext(ctx, `
 			INSERT INTO proposals (
 				mode, workflow, status, source_name, source_path, root_folder_path,
-				title, tvdb_id, tmdb_id, quality_profile_id, reason, tracked_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				title, tvdb_id, tmdb_id, quality_profile_id, reason, tracked_id, candidates_json
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			RETURNING id, created_at
 		`, string(p.Mode), string(p.Workflow), string(p.Status), p.SourceName, p.SourcePath, p.RootFolderPath,
-			p.Title, p.TVDBID, p.TMDBID, p.QualityProfileID, p.Reason, p.TrackedID)
+			p.Title, p.TVDBID, p.TMDBID, p.QualityProfileID, p.Reason, p.TrackedID, string(candidatesJSON))
 		if err := row.Scan(&p.ID, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("inserting proposal for %q: %w", p.SourceName, err)
 		}
@@ -114,7 +138,8 @@ func (s *Store) ReplacePending(ctx context.Context, m mode.Mode, wf Workflow, fr
 func (s *Store) List(ctx context.Context, m mode.Mode, wf Workflow) ([]Proposal, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, mode, workflow, status, source_name, source_path, root_folder_path,
-		       title, tvdb_id, tmdb_id, quality_profile_id, reason, tracked_id, created_at, COALESCE(applied_at, '')
+		       title, tvdb_id, tmdb_id, quality_profile_id, reason, tracked_id, candidates_json,
+		       created_at, COALESCE(applied_at, '')
 		FROM proposals WHERE mode = ? AND workflow = ? ORDER BY id DESC
 	`, string(m), string(wf))
 	if err != nil {
@@ -137,7 +162,8 @@ func (s *Store) List(ctx context.Context, m mode.Mode, wf Workflow) ([]Proposal,
 func (s *Store) Get(ctx context.Context, id int64) (*Proposal, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, mode, workflow, status, source_name, source_path, root_folder_path,
-		       title, tvdb_id, tmdb_id, quality_profile_id, reason, tracked_id, created_at, COALESCE(applied_at, '')
+		       title, tvdb_id, tmdb_id, quality_profile_id, reason, tracked_id, candidates_json,
+		       created_at, COALESCE(applied_at, '')
 		FROM proposals WHERE id = ?
 	`, id)
 	p, err := scanProposal(row)
@@ -191,11 +217,15 @@ type rowScanner interface {
 
 func scanProposal(row rowScanner) (Proposal, error) {
 	var p Proposal
-	var m, wf, status string
+	var m, wf, status, candidatesJSON string
 	if err := row.Scan(&p.ID, &m, &wf, &status, &p.SourceName, &p.SourcePath, &p.RootFolderPath,
-		&p.Title, &p.TVDBID, &p.TMDBID, &p.QualityProfileID, &p.Reason, &p.TrackedID, &p.CreatedAt, &p.AppliedAt); err != nil {
+		&p.Title, &p.TVDBID, &p.TMDBID, &p.QualityProfileID, &p.Reason, &p.TrackedID, &candidatesJSON,
+		&p.CreatedAt, &p.AppliedAt); err != nil {
 		return Proposal{}, err
 	}
 	p.Mode, p.Workflow, p.Status = mode.Mode(m), Workflow(wf), Status(status)
+	if err := json.Unmarshal([]byte(candidatesJSON), &p.Candidates); err != nil {
+		return Proposal{}, fmt.Errorf("decoding candidates for proposal %d: %w", p.ID, err)
+	}
 	return p, nil
 }

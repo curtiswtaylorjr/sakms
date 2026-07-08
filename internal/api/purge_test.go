@@ -50,7 +50,7 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer srv.Close()
 
 	// Add a tag to the allowlist via the API, not directly on the store.
@@ -143,7 +143,7 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 
 func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
 	connStore, propStore, allowStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer srv.Close()
 
 	body, _ := json.Marshal(addAllowlistTagRequest{})
@@ -159,7 +159,7 @@ func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
 
 func TestPurgeScanHandler_ModeNotConfigured(t *testing.T) {
 	connStore, propStore, allowStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/modes/movies/purge/scan", "application/json", nil)

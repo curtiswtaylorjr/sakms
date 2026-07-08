@@ -11,9 +11,18 @@ import (
 	"github.com/curtiswtaylorjr/tidyarr/internal/allowlist"
 	"github.com/curtiswtaylorjr/tidyarr/internal/connections"
 	"github.com/curtiswtaylorjr/tidyarr/internal/db"
+	"github.com/curtiswtaylorjr/tidyarr/internal/mediainfo"
 	"github.com/curtiswtaylorjr/tidyarr/internal/proposals"
 	"github.com/curtiswtaylorjr/tidyarr/internal/secrets"
 )
+
+// testProber returns a real *mediainfo.Prober — its Probe method is only
+// ever exercised by tests that actually run Dedup's Scan against real
+// on-disk video files, so a real ffprobe binary is only needed there.
+func testProber(t *testing.T) *mediainfo.Prober {
+	t.Helper()
+	return mediainfo.New()
+}
 
 // testStores builds real connections.Store, proposals.Store, and
 // allowlist.Store instances against one freshly migrated temp-file
@@ -47,7 +56,7 @@ func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
 	defer fakeRadarr.Close()
 
 	connStore, propStore, allowStore := testStores(t)
-	tidyarrSrv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	tidyarrSrv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer tidyarrSrv.Close()
 
 	reqBody, _ := json.Marshal(ConnectionTestRequest{
@@ -73,7 +82,7 @@ func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
 
 func TestConnectionsTestHandler_MalformedBody(t *testing.T) {
 	connStore, propStore, allowStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/connections/test", "application/json", bytes.NewReader([]byte("not json")))
@@ -93,7 +102,7 @@ func TestConnectionsTestHandler_MalformedBody(t *testing.T) {
 // isolation.
 func TestConnectionsCRUD_EndToEnd(t *testing.T) {
 	connStore, propStore, allowStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer srv.Close()
 
 	// Save a connection.
@@ -147,7 +156,7 @@ func TestConnectionsCRUD_EndToEnd(t *testing.T) {
 
 func TestUpsertConnectionHandler_RequiresURL(t *testing.T) {
 	connStore, propStore, allowStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t)))
 	defer srv.Close()
 
 	body, _ := json.Marshal(upsertConnectionRequest{APIKey: "key-with-no-url"})

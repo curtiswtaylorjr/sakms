@@ -285,6 +285,38 @@ func (c *Client) QualityProfiles(ctx context.Context) ([]QualityProfile, error) 
 	return out, nil
 }
 
+// DefaultQualityProfileID picks the profile most commonly already used by
+// tracked items in rootPath, so a new addition fits how this particular
+// library is already organized instead of guessing at a hardcoded profile.
+// Falls back to the first available profile if rootPath has no tracked items
+// yet to learn a convention from. Shared by every workflow that registers
+// new items (Rename, Dedup) rather than duplicated in each.
+func DefaultQualityProfileID(tracked []TrackedItem, rootPath string, profiles []QualityProfile) int {
+	counts := make(map[int]int)
+	for _, t := range tracked {
+		if t.RootFolderPath == rootPath {
+			counts[t.QualityProfileID]++
+		}
+	}
+
+	// Map iteration order is randomized — break ties by lowest ID so the
+	// result is deterministic across runs instead of depending on Go's map
+	// ordering.
+	bestID, bestCount := 0, 0
+	for id, count := range counts {
+		if count > bestCount || (count == bestCount && id < bestID) {
+			bestID, bestCount = id, count
+		}
+	}
+	if bestCount > 0 {
+		return bestID
+	}
+	if len(profiles) > 0 {
+		return profiles[0].ID
+	}
+	return 0
+}
+
 // AddRequest is the subset of fields needed to register a new series/movie/
 // scene against a specific root folder — the identification and
 // kids-classification (which RootFolderPath) decisions are made

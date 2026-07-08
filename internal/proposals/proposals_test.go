@@ -50,6 +50,53 @@ func TestReplacePending_InsertsAndAssignsIDs(t *testing.T) {
 	}
 }
 
+// Dedup is the one workflow that stores more than one file per proposal —
+// Candidates must round-trip through the candidates_json column intact.
+func TestReplacePending_PersistsCandidates(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	saved, err := s.ReplacePending(ctx, mode.Movies, Dedup, []Proposal{
+		{
+			Status: Pending, SourceName: "Movie A", Title: "Movie A", TMDBID: 1,
+			Candidates: []Candidate{
+				{Label: "tracked", Path: "/media/Movies/Movie A/a.mkv", TrackedID: 9, Resolution: 720, Codec: "h264", BitRate: 3000},
+				{Label: "Movie.A.1080p", Path: "/media/Movies/Movie.A.1080p/b.mkv", Resolution: 1080, Codec: "av1", BitRate: 4000, Winner: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(saved[0].Candidates) != 2 {
+		t.Fatalf("expected 2 candidates to survive the insert, got %+v", saved[0].Candidates)
+	}
+	if !saved[0].Candidates[1].Winner || saved[0].Candidates[1].Resolution != 1080 {
+		t.Errorf("unexpected candidate data: %+v", saved[0].Candidates[1])
+	}
+
+	got, err := s.Get(ctx, saved[0].ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Candidates) != 2 || got.Candidates[0].TrackedID != 9 {
+		t.Fatalf("expected candidates to round-trip from storage, got %+v", got.Candidates)
+	}
+}
+
+func TestReplacePending_EmptyCandidatesForNonDedupWorkflows(t *testing.T) {
+	s := newTestStore(t)
+	saved, err := s.ReplacePending(context.Background(), mode.Movies, Rename, []Proposal{
+		{Status: Pending, SourceName: "x", Title: "X"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(saved[0].Candidates) != 0 {
+		t.Fatalf("expected no candidates for a Rename proposal, got %+v", saved[0].Candidates)
+	}
+}
+
 // Purge sets TrackedID at Scan time (it's an input identifying which
 // already-tracked item to delete, unlike Rename where it's only an output
 // of Apply) — ReplacePending's INSERT must actually persist it.

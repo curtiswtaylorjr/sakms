@@ -1,0 +1,52 @@
+package place
+
+import "testing"
+
+func TestQualityKeyGreater_Resolution(t *testing.T) {
+	high := NewQualityKey(1080, 0, "h264", 1000)
+	low := NewQualityKey(720, 0, "h264", 5000)
+	if !high.Greater(low) {
+		t.Error("higher resolution should win regardless of bitrate")
+	}
+	if low.Greater(high) {
+		t.Error("lower resolution should not win")
+	}
+}
+
+func TestQualityKeyGreater_SourceRankTiebreak(t *testing.T) {
+	remux := NewQualityKey(1080, 5, "h264", 1000)
+	webdl := NewQualityKey(1080, 3, "h264", 20000)
+	if !remux.Greater(webdl) {
+		t.Error("higher source rank should win at equal resolution regardless of bitrate")
+	}
+}
+
+func TestQualityKeyGreater_AV1Tiebreak(t *testing.T) {
+	av1 := NewQualityKey(1080, 0, "av1", 1000)
+	h264 := NewQualityKey(1080, 0, "h264", 5000)
+	if !av1.Greater(h264) {
+		t.Error("AV1 should win at equal resolution/source regardless of bitrate")
+	}
+}
+
+func TestQualityKeyGreater_BitRateFinalTiebreak(t *testing.T) {
+	a := NewQualityKey(1080, 0, "h264", 8000)
+	b := NewQualityKey(1080, 0, "h264", 4000)
+	if !a.Greater(b) {
+		t.Error("higher bitrate should win when everything else is equal")
+	}
+}
+
+func TestQualityKeyGreater_UnknownSourceRankOnlyLosesToKnown(t *testing.T) {
+	untrackedA := NewQualityKey(1080, 0, "h264", 8000)
+	untrackedB := NewQualityKey(1080, 0, "h264", 4000)
+	// Both unknown source (0): falls through to codec/bitrate, not a forced loss.
+	if !untrackedA.Greater(untrackedB) {
+		t.Error("two unknown-source keys should still compare via bitrate")
+	}
+
+	trackedKnown := NewQualityKey(1080, 4, "h264", 1000)
+	if !trackedKnown.Greater(untrackedA) {
+		t.Error("a known source rank should beat unknown even at lower bitrate")
+	}
+}

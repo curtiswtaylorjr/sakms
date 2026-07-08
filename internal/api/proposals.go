@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
 	"github.com/curtiswtaylorjr/tidyarr/internal/connections"
+	"github.com/curtiswtaylorjr/tidyarr/internal/dedup"
 	"github.com/curtiswtaylorjr/tidyarr/internal/mode"
 	"github.com/curtiswtaylorjr/tidyarr/internal/proposals"
 	"github.com/curtiswtaylorjr/tidyarr/internal/purge"
@@ -34,6 +36,17 @@ func listProposalsHandler(propStore *proposals.Store, wf proposals.Workflow) htt
 	}
 }
 
+// applyProposalRequest is only meaningful for Dedup — a duplicate group's
+// resolution isn't fully decided at Scan time the way Rename's and Purge's
+// are, so Apply needs to know which candidate to keep. Rename and Purge
+// ignore it entirely (an empty or missing body is the normal case for
+// those). KeepIndex nil means "auto" — whichever candidate Scan already
+// marked as the quality winner.
+type applyProposalRequest struct {
+	KeepIndex *int `json:"keepIndex,omitempty"`
+	KeepAll   bool `json:"keepAll,omitempty"`
+}
+
 // applyProposalHandler is the only place in Tidyarr's API that actually
 // mutates a *arr app on a workflow's behalf — and only for the one proposal
 // ID in the URL, never a batch, matching the design's staged-for-approval
@@ -49,6 +62,12 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 		}
 		ctx := r.Context()
 
+		var req applyProposalRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
 		p, err := propStore.Get(ctx, id)
 		if err != nil {
 			proposalNotFoundOr500(w, err)
@@ -61,7 +80,7 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 			return
 		}
 
-		if err := applyByWorkflow(ctx, propStore, sess, *p); err != nil {
+		if err := applyByWorkflow(ctx, propStore, sess, *p, req); err != nil {
 			if errors.Is(err, errUnknownWorkflow) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			} else {
@@ -83,12 +102,13 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 var errUnknownWorkflow = errors.New("unknown proposal workflow")
 
 // applyByWorkflow dispatches to the right package's Apply and records the
-// outcome. Rename and Purge have different success shapes — Rename can
+// outcome. The three workflows have different success shapes — Rename can
 // partially succeed (registered, but the follow-up scan trigger failed) and
-// still counts as applied, where Purge's delete either fully succeeds or
-// fully fails — so each branch marks the queue accordingly rather than
-// forcing both through one shared success rule.
-func applyByWorkflow(ctx context.Context, propStore *proposals.Store, sess *mode.Session, p proposals.Proposal) error {
+// still counts as applied; Purge's delete either fully succeeds or fully
+// fails; Dedup's Apply already returns the resulting tracked id the same
+// way Rename's does — so each branch marks the queue accordingly rather
+// than forcing all three through one shared success rule.
+func applyByWorkflow(ctx context.Context, propStore *proposals.Store, sess *mode.Session, p proposals.Proposal, req applyProposalRequest) error {
 	switch p.Workflow {
 	case proposals.Rename:
 		trackedID, err := rename.Apply(ctx, sess, p)
@@ -106,6 +126,12 @@ func applyByWorkflow(ctx context.Context, propStore *proposals.Store, sess *mode
 			return err
 		}
 		return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
+	case proposals.Dedup:
+		trackedID, err := dedup.Apply(ctx, sess, p, req.KeepIndex, req.KeepAll)
+		if err != nil {
+			return err
+		}
+		return propStore.MarkApplied(ctx, p.ID, trackedID)
 	default:
 		return fmt.Errorf("%w: %q", errUnknownWorkflow, p.Workflow)
 	}

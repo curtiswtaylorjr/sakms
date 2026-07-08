@@ -6,6 +6,7 @@ import (
 
 	"github.com/curtiswtaylorjr/tidyarr/internal/allowlist"
 	"github.com/curtiswtaylorjr/tidyarr/internal/connections"
+	"github.com/curtiswtaylorjr/tidyarr/internal/dedup"
 	"github.com/curtiswtaylorjr/tidyarr/internal/proposals"
 )
 
@@ -15,9 +16,10 @@ import (
 // connStore persists what's actually configured — Test and Save are
 // deliberately separate actions, matching Settings' own "Test connection"
 // then "Save" flow. propStore backs every workflow's review queue (Rename,
-// Purge, and whatever comes next); allowStore backs Purge's per-mode tag
-// allowlist specifically.
-func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store) *http.ServeMux {
+// Purge, Dedup); allowStore backs Purge's per-mode tag allowlist; prober
+// backs Dedup's direct ffprobe reads (a real *mediainfo.Prober in
+// production, anything satisfying dedup.Prober in tests).
+func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/connections/test", connectionsTestHandler(httpClient))
 	mux.HandleFunc("GET /api/connections", listConnectionsHandler(connStore))
@@ -32,6 +34,9 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("GET /api/modes/{mode}/purge/allowlist", listAllowlistHandler(allowStore))
 	mux.HandleFunc("POST /api/modes/{mode}/purge/allowlist", addAllowlistTagHandler(allowStore))
 	mux.HandleFunc("DELETE /api/modes/{mode}/purge/allowlist/{tag}", removeAllowlistTagHandler(allowStore))
+
+	mux.HandleFunc("POST /api/modes/{mode}/dedup/scan", dedupScanHandler(httpClient, connStore, propStore, prober))
+	mux.HandleFunc("GET /api/modes/{mode}/dedup/proposals", listProposalsHandler(propStore, proposals.Dedup))
 
 	mux.HandleFunc("POST /api/proposals/{id}/apply", applyProposalHandler(httpClient, connStore, propStore))
 	mux.HandleFunc("POST /api/proposals/{id}/dismiss", dismissProposalHandler(propStore))

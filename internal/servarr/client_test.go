@@ -465,3 +465,32 @@ func TestWhisparr_AddSendsTPDBPrefixedForeignID(t *testing.T) {
 		t.Errorf("expected the tpdbId-prefixed foreignId to pass through unchanged, got %+v", gotBody["foreignId"])
 	}
 }
+
+func TestDefaultQualityProfileID_LearnsMajorityConvention(t *testing.T) {
+	tracked := []TrackedItem{
+		{RootFolderPath: "/media/Movies", QualityProfileID: 7},
+		{RootFolderPath: "/media/Movies", QualityProfileID: 7},
+		{RootFolderPath: "/media/Movies", QualityProfileID: 9},
+		{RootFolderPath: "/media/Movies (Kids)", QualityProfileID: 3},
+	}
+	profiles := []QualityProfile{{ID: 7, Name: "HD"}, {ID: 9, Name: "4K"}}
+
+	got := DefaultQualityProfileID(tracked, "/media/Movies", profiles)
+	if got != 7 {
+		t.Errorf("expected the majority profile (7) for /media/Movies, got %d", got)
+	}
+}
+
+func TestDefaultQualityProfileID_FallsBackToFirstProfileWhenNoConvention(t *testing.T) {
+	got := DefaultQualityProfileID(nil, "/media/Movies", []QualityProfile{{ID: 4, Name: "HD"}})
+	if got != 4 {
+		t.Errorf("expected fallback to the first available profile (4), got %d", got)
+	}
+}
+
+func TestDefaultQualityProfileID_ZeroWhenNothingAvailable(t *testing.T) {
+	got := DefaultQualityProfileID(nil, "/media/Movies", nil)
+	if got != 0 {
+		t.Errorf("expected 0 when there's no tracked convention and no profiles at all, got %d", got)
+	}
+}

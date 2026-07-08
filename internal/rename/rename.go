@@ -88,7 +88,7 @@ func proposeOne(
 	p.Title = lr.Title
 	p.TVDBID = lr.TVDBID
 	p.TMDBID = lr.TMDBID
-	p.QualityProfileID = defaultQualityProfileID(tracked, root.Path, profiles)
+	p.QualityProfileID = servarr.DefaultQualityProfileID(tracked, root.Path, profiles)
 	return p
 }
 
@@ -105,37 +105,6 @@ func findTrackedDuplicate(tracked []servarr.TrackedItem, app servarr.App, lr ser
 		}
 	}
 	return nil
-}
-
-// defaultQualityProfileID picks the profile most commonly already used by
-// tracked items in rootPath, so a new addition fits how this particular
-// library is already organized instead of guessing at a hardcoded profile.
-// Falls back to the first available profile if rootPath has no tracked items
-// yet to learn a convention from.
-func defaultQualityProfileID(tracked []servarr.TrackedItem, rootPath string, profiles []servarr.QualityProfile) int {
-	counts := make(map[int]int)
-	for _, t := range tracked {
-		if t.RootFolderPath == rootPath {
-			counts[t.QualityProfileID]++
-		}
-	}
-
-	// Map iteration order is randomized — break ties by lowest ID so the
-	// result is deterministic across runs instead of depending on Go's map
-	// ordering.
-	bestID, bestCount := 0, 0
-	for id, count := range counts {
-		if count > bestCount || (count == bestCount && id < bestID) {
-			bestID, bestCount = id, count
-		}
-	}
-	if bestCount > 0 {
-		return bestID
-	}
-	if len(profiles) > 0 {
-		return profiles[0].ID
-	}
-	return 0
 }
 
 // Apply registers p's identified item with sess's Servarr app, then triggers

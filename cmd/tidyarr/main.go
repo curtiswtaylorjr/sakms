@@ -16,6 +16,7 @@ import (
 	"github.com/curtiswtaylorjr/tidyarr/internal/config"
 	"github.com/curtiswtaylorjr/tidyarr/internal/connections"
 	"github.com/curtiswtaylorjr/tidyarr/internal/db"
+	"github.com/curtiswtaylorjr/tidyarr/internal/mediainfo"
 	"github.com/curtiswtaylorjr/tidyarr/internal/proposals"
 	"github.com/curtiswtaylorjr/tidyarr/internal/secrets"
 )
@@ -54,8 +55,9 @@ func run() error {
 	connStore := connections.New(sqlDB, secretStore)
 	propStore := proposals.New(sqlDB)
 	allowStore := allowlist.New(sqlDB)
+	prober := mediainfo.New()
 
-	mux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore)
+	mux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
