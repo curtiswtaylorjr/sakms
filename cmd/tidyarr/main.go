@@ -13,7 +13,9 @@ import (
 
 	"github.com/curtiswtaylorjr/tidyarr/internal/api"
 	"github.com/curtiswtaylorjr/tidyarr/internal/config"
+	"github.com/curtiswtaylorjr/tidyarr/internal/connections"
 	"github.com/curtiswtaylorjr/tidyarr/internal/db"
+	"github.com/curtiswtaylorjr/tidyarr/internal/secrets"
 )
 
 // outboundTimeout bounds every call Tidyarr makes to a configured service
@@ -39,7 +41,17 @@ func run() error {
 	}
 	defer sqlDB.Close()
 
-	mux := api.NewMux(&http.Client{Timeout: outboundTimeout})
+	secretKey, err := secrets.LoadOrCreateKey(filepath.Join(cfg.DataDir, "secret.key"))
+	if err != nil {
+		return err
+	}
+	secretStore, err := secrets.New(secretKey)
+	if err != nil {
+		return err
+	}
+	connStore := connections.New(sqlDB, secretStore)
+
+	mux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
