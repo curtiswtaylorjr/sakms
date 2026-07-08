@@ -46,8 +46,10 @@ type setupStatus struct {
 }
 
 // wizardModes are the modes the setup wizard actually walks through.
-// Adult is intentionally excluded from this list — see modeStatusFor's
-// Available field for how it still gets reported.
+// Adult is reported (via buildSetupStatus appending it) and is now a fully
+// available mode — all three Adult workflows (Rename/Purge/Dedup) exist — but
+// its identify-pipeline setup (Ollama + a stash-box) is a different shape from
+// the wizard's *arr-connection walk, so it stays out of this list.
 var wizardModes = []mode.Mode{mode.Movies, mode.Series}
 
 func setupStatusHandler(connStore *connections.Store, allowStore *allowlist.Store, settingsStore *settings.Store) http.HandlerFunc {
@@ -101,18 +103,12 @@ func buildSetupStatus(ctx context.Context, connStore *connections.Store, allowSt
 }
 
 func modeStatusFor(ctx context.Context, m mode.Mode, connStore *connections.Store, allowStore *allowlist.Store) (modeStatus, error) {
-	if m == mode.Adult {
-		// Adult's Tag workflow is wired (Whisparr V3, see internal/mode.Build),
-		// but full mode configuration — Rename/Purge/Dedup and the identify
-		// pipeline they need — isn't yet, and the wizard walks full-mode setup.
-		// So report Adult as a real option the wizard can preview, never as
-		// something that's fully configurable today.
-		return modeStatus{Mode: m, Available: false}, nil
-	}
-
 	service := "radarr"
-	if m == mode.Series {
+	switch m {
+	case mode.Series:
 		service = "sonarr"
+	case mode.Adult:
+		service = "whisparr"
 	}
 	arrConfigured, err := connectionExists(ctx, connStore, service)
 	if err != nil {

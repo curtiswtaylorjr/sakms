@@ -44,8 +44,8 @@ func TestSetupStatus_ReflectsRealConfiguredState(t *testing.T) {
 			movies = m
 		}
 	}
-	if adult.Available {
-		t.Error("expected Adult to be reported unavailable")
+	if !adult.Available || adult.ArrConfigured {
+		t.Errorf("expected Adult available but not yet configured, got %+v", adult)
 	}
 	if !movies.Available || movies.ArrConfigured {
 		t.Errorf("expected Movies available but not yet configured, got %+v", movies)

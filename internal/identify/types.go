@@ -18,3 +18,22 @@ type MatchResult struct {
 	SceneID string // stash-box scene id, "" if none (e.g. source == "web_search")
 	Box     string // "stashdb" | "fansdb" | "tpdb" | ""
 }
+
+// WhisparrForeignID returns the normalized identifier Whisparr V3's
+// AddRequest.ForeignID expects for this match, and whether the match has one at
+// all. A match without a valid stash-box/TPDB scene id (web_search-only,
+// SceneID=="" || Box=="") has no valid ForeignID — ok is false, and callers
+// must not persist or register it as a scene. Raw stash-box UUID for
+// stashdb/fansdb matches; "tpdbId:<id>" for TPDB-only matches (client.go's
+// AddRequest doc, confirmed against Whisparr-Eros MovieResource.cs). Both
+// rename (orphan-side, via classifyAdultMatch) and dedup (both sides) derive
+// foreignIDs through this single method so they can never silently diverge.
+func (r MatchResult) WhisparrForeignID() (id string, ok bool) {
+	if r.SceneID == "" || r.Box == "" {
+		return "", false
+	}
+	if r.Box == "tpdb" {
+		return "tpdbId:" + r.SceneID, true
+	}
+	return r.SceneID, true
+}

@@ -13,8 +13,9 @@ import (
 
 // dedupScanHandler runs the Dedup workflow's propose-phase for {mode}:
 // identifies every unmapped file, groups it with any already-tracked item
-// sharing the same TMDB ID, ffprobes every candidate, and replaces the live
-// Dedup queue with whatever duplicate groups it found. prober takes
+// sharing the same identifier (TMDB ID for Movies, foreignID for Adult),
+// ffprobes every candidate, and replaces the live Dedup queue with whatever
+// duplicate groups it found. prober takes
 // dedup.Prober's interface, not the concrete *mediainfo.Prober, so tests can
 // inject a fake instead of depending on a real ffprobe binary.
 func dedupScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, prober dedup.Prober) http.HandlerFunc {

@@ -431,6 +431,14 @@ type TrackedItem struct {
 	Monitored        bool     `json:"monitored"`
 	TVDBID           int      `json:"tvdbId"`
 	TMDBID           int      `json:"tmdbId"`
+	// ForeignID is Whisparr V3's external scene identifier (raw stash-box UUID,
+	// or "tpdbId:<id>" for a TPDB-only match) — the only key an adult scene can
+	// be grouped/deduped by, since its TMDBID is always 0. Empty for Radarr/Sonarr
+	// items and for any Whisparr response that doesn't report it; Dedup treats
+	// empty as "not groupable" (skips it), so a missing/renamed field degrades to
+	// orphan-vs-orphan dedup rather than breaking. Confirmed on the resource shape
+	// via Whisparr-Eros MovieResource.cs (see AddRequest), NOT against a live GET.
+	ForeignID        string   `json:"foreignId"`
 	Genres           []string `json:"genres"`
 	Certification    string   `json:"certification"`
 	QualityProfileID int      `json:"qualityProfileId"`

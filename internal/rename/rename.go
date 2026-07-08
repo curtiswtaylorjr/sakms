@@ -153,12 +153,10 @@ func classifyAdultMatch(res *identify.MatchResult, err error) (status proposals.
 		return proposals.Unmatched, fmt.Sprintf("identification failed: %v", err), "", "", ""
 	case res == nil:
 		return proposals.Unmatched, "no confident identification", "", "", ""
-	case res.SceneID == "" || res.Box == "":
-		return proposals.Unmatched, "web-identified only (no scene ID) — needs manual review", "", "", ""
 	}
-	foreignID = res.SceneID
-	if res.Box == "tpdb" {
-		foreignID = "tpdbId:" + res.SceneID
+	foreignID, hasID := res.WhisparrForeignID()
+	if !hasID {
+		return proposals.Unmatched, "web-identified only (no scene ID) — needs manual review", "", "", ""
 	}
 	return proposals.Pending, "", res.Title, foreignID, res.Type
 }

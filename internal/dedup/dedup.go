@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/curtiswtaylorjr/tidyarr/internal/config"
+	"github.com/curtiswtaylorjr/tidyarr/internal/identify"
 	"github.com/curtiswtaylorjr/tidyarr/internal/mediainfo"
 	"github.com/curtiswtaylorjr/tidyarr/internal/mode"
 	"github.com/curtiswtaylorjr/tidyarr/internal/place"
@@ -116,14 +117,29 @@ func markWinner(candidates []proposals.Candidate) {
 	candidates[best].Winner = true
 }
 
-// Scan identifies every unmapped file and groups it (and any already-tracked
-// item) by resolved TMDB ID. A group with 2+ probeable candidates becomes a
-// Pending Dedup proposal; a lone new item is left for Rename to handle, not
-// reported here.
+// Scan dispatches on the session's app: Radarr runs the Movies duplicate
+// detection (scanMovies, keyed by TMDB ID); Whisparr runs the Adult one
+// (scanAdult, keyed by foreignID); Sonarr and anything else is refused, since
+// Series' per-episode file model is a different shape (see the package doc).
 func Scan(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.Proposal, error) {
-	if sess.Servarr.AppType() != servarr.Radarr {
-		return nil, fmt.Errorf("dedup: only Movies is implemented so far, not %v", sess.Mode)
+	switch sess.Servarr.AppType() {
+	case servarr.Radarr:
+		return scanMovies(ctx, sess, prober)
+	case servarr.Whisparr:
+		if sess.Identify == nil {
+			return nil, fmt.Errorf("adult identification isn't configured — add an Ollama connection and set the Ollama model in Settings, plus at least one of StashDB/FansDB/TPDB")
+		}
+		return scanAdult(ctx, sess, prober)
+	default:
+		return nil, fmt.Errorf("dedup: only Movies and Adult are implemented so far, not %v", sess.Mode)
 	}
+}
+
+// scanMovies identifies every unmapped file and groups it (and any
+// already-tracked item) by resolved TMDB ID. A group with 2+ probeable
+// candidates becomes a Pending Dedup proposal; a lone new item is left for
+// Rename to handle, not reported here.
+func scanMovies(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.Proposal, error) {
 	client := sess.Servarr
 
 	folders, err := client.RootFolders(ctx)
@@ -206,6 +222,120 @@ func Scan(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.P
 	return out, nil
 }
 
+// scanAdult is scanMovies' Whisparr counterpart: it groups a tracked scene and
+// any unmapped copies of it by the normalized foreignID string (raw stash-box
+// UUID, or "tpdbId:<id>" for a TPDB-only match), identifying orphans via
+// sess.Identify exactly as Rename does. Structure mirrors scanMovies
+// deliberately (per the plan) rather than sharing a parameterized helper.
+//
+// The tracked side skips any item whose ForeignID is empty — the same
+// graceful-degradation posture Movies uses for TMDBID==0. If a real Whisparr
+// GET /movie doesn't report foreignId (or reports it in a different format than
+// Add sent), then len(tracked) > 0 but trackedByForeignID stays empty, and this
+// silently degrades to orphan-vs-orphan dedup (keys computed locally from
+// sess.Identify, independent of any Whisparr response) — no crash, no misgroup,
+// no misfile. This is an UNVERIFIED assumption (no live Whisparr here); see the
+// commit body. Deliberately not logged: no internal/* package in this codebase
+// logs directly (only cmd/tidyarr/main.go does).
+func scanAdult(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.Proposal, error) {
+	client := sess.Servarr
+
+	folders, err := client.RootFolders(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading root folders: %w", err)
+	}
+	tracked, err := client.AllTracked(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading tracked items: %w", err)
+	}
+	profiles, err := client.QualityProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading quality profiles: %w", err)
+	}
+
+	trackedByForeignID := make(map[string]servarr.TrackedItem, len(tracked))
+	for _, t := range tracked {
+		if t.ForeignID != "" {
+			trackedByForeignID[t.ForeignID] = t
+		}
+	}
+
+	type orphanHit struct {
+		name, path, title, itemType string
+	}
+	orphansByForeignID := make(map[string][]orphanHit)
+
+	for _, root := range folders {
+		for _, uf := range root.UnmappedFolders {
+			if config.SidecarExts[strings.ToLower(filepath.Ext(uf.Name))] {
+				continue
+			}
+			res, err := sess.Identify.Identify(ctx, uf.Name, filepath.Base(root.Path))
+			fid, itemType, title, ok := adultForeignID(res, err)
+			if !ok {
+				continue // web-only / no scene id / identify error — Rename's concern, not Dedup's
+			}
+			orphansByForeignID[fid] = append(orphansByForeignID[fid], orphanHit{name: uf.Name, path: uf.Path, title: title, itemType: itemType})
+		}
+	}
+
+	var out []proposals.Proposal
+	for fid, orphans := range orphansByForeignID {
+		trackedItem, isTracked := trackedByForeignID[fid]
+		if !isTracked && len(orphans) < 2 {
+			continue // a single new, untracked scene — nothing to dedup
+		}
+
+		title := orphans[0].title
+		rootPath := ""
+		var candidates []proposals.Candidate
+		if isTracked {
+			if c := probeCandidate(ctx, prober, "tracked", trackedItem.Path, trackedItem.ID); c != nil {
+				candidates = append(candidates, *c)
+			}
+			title, rootPath = trackedItem.Title, trackedItem.RootFolderPath
+		}
+		for _, o := range orphans {
+			if c := probeCandidate(ctx, prober, o.name, o.path, 0); c != nil {
+				candidates = append(candidates, *c)
+				if rootPath == "" {
+					rootPath = filepath.Dir(o.path)
+				}
+			}
+		}
+		if len(candidates) < 2 {
+			continue // couldn't probe enough of the group to compare
+		}
+		markWinner(candidates)
+
+		out = append(out, proposals.Proposal{
+			Mode: sess.Mode, Workflow: proposals.Dedup, Status: proposals.Pending,
+			SourceName: title, Title: title,
+			ForeignID: fid, ItemType: orphans[0].itemType, RootFolderPath: rootPath,
+			QualityProfileID: servarr.DefaultQualityProfileID(tracked, rootPath, profiles),
+			Candidates:       candidates,
+			Reason:           fmt.Sprintf("%d copies identified as %q", len(candidates), title),
+		})
+	}
+	return out, nil
+}
+
+// adultForeignID maps an Identify result to the normalized foreignID both sides
+// group by, the item's type, and its title. ok is false for an identify error,
+// a nil result, or a match with no valid Whisparr ForeignID. The actual
+// derivation is delegated to identify.MatchResult.WhisparrForeignID so dedup
+// and rename can never silently diverge on what a scene's foreignID is.
+func adultForeignID(res *identify.MatchResult, err error) (fid, itemType, title string, ok bool) {
+	if err != nil || res == nil {
+		return "", "", "", false
+	}
+	fid, ok = res.WhisparrForeignID()
+	if !ok {
+		return "", "", "", false
+	}
+	return fid, res.Type, res.Title, true
+}
+
 // Apply resolves p by keeping exactly one candidate and removing the rest.
 // keepIndex selects which candidate survives; nil means "auto" — whichever
 // candidate Scan already marked Winner. keepAll skips all removal (both/all
@@ -222,6 +352,18 @@ func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal, keepIn
 	}
 	if len(p.Candidates) < 2 {
 		return 0, fmt.Errorf("proposal %d has fewer than 2 candidates to resolve", p.ID)
+	}
+
+	// Structural safety guard at the TOP of Apply — before the removal loop and
+	// both early-return paths (keepAll, already-tracked winner). A Whisparr scene
+	// needs BOTH a ForeignID and an ItemType, or the Add below silently files the
+	// surviving copy as a mis-typed movie (Whisparr's ItemType enum zero value is
+	// "movie"). Placed here, not just before Add: the removal loop deletes losing
+	// candidates first, so a guard placed late would destroy files and THEN refuse
+	// — partial destruction. For a real Scan-produced Adult proposal these fields
+	// are always set, so it only catches a hand-crafted / future-buggy proposal.
+	if sess.Servarr.AppType() == servarr.Whisparr && (p.ForeignID == "" || p.ItemType == "") {
+		return 0, fmt.Errorf("proposal %d has no scene identifier — refusing to register it as a mis-typed movie", p.ID)
 	}
 
 	if keepAll {
@@ -257,6 +399,7 @@ func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal, keepIn
 
 	id, err := sess.Servarr.Add(ctx, servarr.AddRequest{
 		Title: p.Title, TMDBID: p.TMDBID,
+		ForeignID: p.ForeignID, ItemType: p.ItemType, // Radarr proposals carry "" here and Add ignores them
 		QualityProfileID: p.QualityProfileID, RootFolderPath: p.RootFolderPath, Monitored: true,
 	})
 	if err != nil {
