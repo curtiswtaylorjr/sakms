@@ -11,6 +11,7 @@ package rename
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -562,4 +563,228 @@ func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Prop
 		return 0, fmt.Errorf("recording %q in the library: %w", p.Title, err)
 	}
 	return item.ID, nil
+}
+
+// episodeKey identifies one already-tracked-with-a-file episode, for
+// ScanLibrarySeries' duplicate-skip check.
+type episodeKey struct {
+	tmdbID, season, episode int
+}
+
+// ScanLibrarySeries is Rename's Series-library counterpart to Scan — used
+// only once Series stops requiring Sonarr (see the plan this was built
+// from, Stage 2). It walks rootFolderPath (and sess.KidsRootPath, if
+// configured and different) for orphaned files or season-pack folders,
+// resolves each file's season/episode from its own name, resolves the show
+// via TMDB search, and skips anything already tracked WITH a file — an
+// episode TMDB previously reported as missing (file_path == "") is NOT
+// skipped, since finding its file is exactly what fills that gap in.
+//
+// One proposal per resolved episode file, never one per season-pack folder
+// — same "surface everything individually" posture ScanLibrary (Movies)
+// and every other workflow already follows.
+func ScanLibrarySeries(ctx context.Context, sess *mode.Session, libStore *library.Store, rootFolderPath string) ([]proposals.Proposal, error) {
+	if sess.TMDB == nil {
+		return nil, fmt.Errorf("tmdb isn't configured yet — add it in Settings first")
+	}
+	if rootFolderPath == "" {
+		return nil, fmt.Errorf("no Series library root folder configured yet — add one in Settings first")
+	}
+
+	allSeries, err := libStore.ListSeries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading series: %w", err)
+	}
+
+	known := map[string]bool{}
+	tracked := map[episodeKey]bool{}
+	for _, series := range allSeries {
+		episodes, err := libStore.ListEpisodes(ctx, series.ID)
+		if err != nil {
+			return nil, fmt.Errorf("loading episodes for %q: %w", series.Title, err)
+		}
+		for _, ep := range episodes {
+			if ep.FilePath == "" {
+				continue // known from TMDB but not on disk yet — not a duplicate
+			}
+			// An organized episode lives two levels below root
+			// (root/Series Title/Season NN/file.ext) — mark the file itself
+			// plus both containing directories known, so ScanRootFolder's
+			// one-level view of root doesn't re-report the series' own
+			// top-level folder as unmapped.
+			known[ep.FilePath] = true
+			known[filepath.Dir(ep.FilePath)] = true
+			known[filepath.Dir(filepath.Dir(ep.FilePath))] = true
+			tracked[episodeKey{tmdbID: series.TMDBID, season: ep.SeasonNumber, episode: ep.EpisodeNumber}] = true
+		}
+	}
+
+	roots := []string{rootFolderPath}
+	if sess.KidsRootPath != "" && sess.KidsRootPath != rootFolderPath {
+		roots = append(roots, sess.KidsRootPath)
+	}
+
+	var out []proposals.Proposal
+	for _, root := range roots {
+		entries, err := library.ScanRootFolder(root, known)
+		if err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", root, err)
+		}
+		for _, entry := range entries {
+			if config.SidecarExts[strings.ToLower(filepath.Ext(entry.Name))] {
+				continue
+			}
+			videoFiles, err := library.ResolveEpisodeVideoFiles(entry.Path)
+			if err != nil {
+				out = append(out, proposals.Proposal{
+					Mode: mode.Series, Workflow: proposals.Rename, Status: proposals.Unmatched,
+					SourceName: entry.Name, SourcePath: entry.Path, RootFolderPath: root,
+					Reason: fmt.Sprintf("no video file found under %q: %v", entry.Path, err),
+				})
+				continue
+			}
+			for _, videoPath := range videoFiles {
+				out = append(out, proposeOneEpisodeLibrary(ctx, sess, tracked, rootFolderPath, root, videoPath))
+			}
+		}
+	}
+	return out, nil
+}
+
+func proposeOneEpisodeLibrary(
+	ctx context.Context, sess *mode.Session, tracked map[episodeKey]bool,
+	generalRoot, foundRoot, videoPath string,
+) proposals.Proposal {
+	name := filepath.Base(videoPath)
+	p := proposals.Proposal{
+		Mode: mode.Series, Workflow: proposals.Rename,
+		SourceName: name, SourcePath: videoPath, RootFolderPath: foundRoot,
+	}
+
+	season, episode, ok := library.ParseEpisodeFilename(name)
+	if !ok {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("could not determine season/episode from %q", name)
+		return p
+	}
+
+	term := searchterm.FromName(library.StripEpisodeMarker(name))
+	items, err := sess.TMDB.SearchTV(ctx, term)
+	if err != nil {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("TMDB search failed for %q: %v", term, err)
+		return p
+	}
+	if len(items) == 0 {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("no TMDB match for %q", term)
+		return p
+	}
+	match := items[0]
+
+	if tracked[episodeKey{tmdbID: match.ID, season: season, episode: episode}] {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("appears to already be in the library as %q S%02dE%02d — leaving in place for manual review", match.Title, season, episode)
+		return p
+	}
+
+	// Confirming the season actually exists in TMDB before accepting the
+	// filename-parsed season/episode — a cheap sanity check against a
+	// bogus parse landing a file under the wrong show/season. Whether the
+	// exact episode number is IN that season's list isn't required (the
+	// filename parse is trusted over TMDB's completeness); TMDB reporting
+	// the season at all is confirmation enough.
+	if _, err := sess.TMDB.SeasonDetails(ctx, match.ID, season); err != nil {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("could not confirm season %d of %q via TMDB: %v", season, match.Title, err)
+		return p
+	}
+
+	targetRoot := generalRoot
+	switch {
+	case foundRoot == sess.KidsRootPath:
+		targetRoot = sess.KidsRootPath
+	case sess.KidsRootPath != "" && sess.MainstreamAI != nil:
+		if result, err := classify.WithAI(ctx, sess.MainstreamAI, match.Title, match.Overview); err == nil && result.IsKids {
+			targetRoot = sess.KidsRootPath
+		}
+	}
+
+	p.Status = proposals.Pending
+	p.Title = match.Title
+	p.TMDBID = match.ID
+	p.SeasonNumber = season
+	p.EpisodeNumber = episode
+	p.RootFolderPath = targetRoot
+	return p
+}
+
+// RelocateEpisode moves sourcePath into destRoot/Series Title/Season NN/,
+// naming the destination file via library.EpisodeFileName rather than
+// preserving sourcePath's original basename (unlike Relocate) — an
+// episode's original release name carries no useful organization on its
+// own the way a movie's own wrapping folder often already does, so Series
+// needs Rename to actually impose the season-folder structure. No episode
+// title is threaded through here (proposals.Proposal carries none — see
+// ScanLibrarySeries) — a deliberate v1 simplification; EpisodeFileName
+// handles an empty title by simply omitting that segment.
+func RelocateEpisode(sourcePath, destRoot, seriesTitle string, seasonNumber, episodeNumber int) (string, error) {
+	seasonDir := filepath.Join(destRoot, seriesTitle, library.SeasonDirName(seasonNumber))
+	if err := os.MkdirAll(seasonDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating %q: %w", seasonDir, err)
+	}
+
+	dest := filepath.Join(seasonDir, library.EpisodeFileName(seriesTitle, seasonNumber, episodeNumber, "", filepath.Ext(sourcePath)))
+	unique, err := place.UniquePath(dest, func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := os.Rename(sourcePath, unique); err != nil {
+		return "", fmt.Errorf("moving %q to %q: %w", sourcePath, unique, err)
+	}
+	return unique, nil
+}
+
+// ApplyLibrarySeries is Rename's Series-library counterpart to ApplyLibrary.
+// p must be Pending. Relocates the file via RelocateEpisode, then
+// get-or-creates the series (by TMDB id) and upserts the episode row.
+// Existing title/air-date metadata for this exact episode (e.g. from a
+// prior Sonarr import or Scan reporting it as missing) is preserved rather
+// than blanked out, since this Apply call only ever supplies a file path,
+// never episode metadata of its own.
+func ApplyLibrarySeries(ctx context.Context, libStore *library.Store, p proposals.Proposal) (episodeID int64, err error) {
+	if p.Status != proposals.Pending {
+		return 0, fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+	}
+
+	moved, err := RelocateEpisode(p.SourcePath, p.RootFolderPath, p.Title, p.SeasonNumber, p.EpisodeNumber)
+	if err != nil {
+		return 0, fmt.Errorf("relocating %q: %w", p.SourcePath, err)
+	}
+
+	series, err := libStore.UpsertSeries(ctx, library.Series{
+		TMDBID: p.TMDBID, Title: p.Title, RootFolderPath: p.RootFolderPath,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("recording series %q: %w", p.Title, err)
+	}
+
+	title, airDate := "", ""
+	if existing, err := libStore.GetEpisode(ctx, series.ID, p.SeasonNumber, p.EpisodeNumber); err == nil {
+		title, airDate = existing.Title, existing.AirDate
+	} else if !errors.Is(err, library.ErrNotFound) {
+		return 0, fmt.Errorf("checking existing episode metadata: %w", err)
+	}
+
+	ep, err := libStore.UpsertEpisode(ctx, library.Episode{
+		SeriesID: series.ID, SeasonNumber: p.SeasonNumber, EpisodeNumber: p.EpisodeNumber,
+		Title: title, AirDate: airDate, FilePath: moved,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("recording episode: %w", err)
+	}
+	return ep.ID, nil
 }

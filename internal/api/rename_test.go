@@ -13,46 +13,45 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
-// fakeRadarrHandler serves just enough of Radarr's API for a Scan followed
-// by an Apply to succeed end to end. Kept for Series' equivalent Sonarr
-// wire shape (itemResource() differs only in path segment) — Movies no
-// longer uses Radarr at all (see TestRenameWorkflow_Movies_ScanThenApply_EndToEnd).
-func fakeSonarrRenameHandler(t *testing.T, addedID int) http.HandlerFunc {
+// fakeTMDBSeriesRenameHandler serves TMDB's /search/tv and
+// /tv/{id}/season/{n} endpoints for Series' libStore-backed Rename path.
+func fakeTMDBSeriesRenameHandler(t *testing.T, tmdbID int, title string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.URL.Path == "/api/v3/rootfolder":
-			w.Write([]byte(`[{"id":1,"path":"/media/Series","accessible":true,"freeSpace":1,"unmappedFolders":[
-				{"name":"Some.Show.S01E01.1080p.WEB-DL.x264-GROUP","path":"/media/Series/Some.Show.S01E01.1080p.WEB-DL.x264-GROUP","relativePath":"Some.Show.S01E01.1080p.WEB-DL.x264-GROUP"}
-			]}]`))
-		case r.URL.Path == "/api/v3/series" && r.Method == http.MethodGet:
-			w.Write([]byte(`[]`))
-		case r.URL.Path == "/api/v3/series" && r.Method == http.MethodPost:
-			json.NewEncoder(w).Encode(map[string]any{"id": addedID})
-		case r.URL.Path == "/api/v3/series/lookup":
-			w.Write([]byte(`[{"title":"Some Show","year":2020,"tvdbId":453}]`))
-		case r.URL.Path == "/api/v3/qualityprofile":
-			w.Write([]byte(`[{"id":4,"name":"HD-1080p"}]`))
-		case r.URL.Path == "/api/v3/command":
-			w.Write([]byte(`{}`))
+		case r.URL.Path == "/search/tv":
+			json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
+				{"id": tmdbID, "name": title},
+			}})
+		case r.URL.Path == "/tv/"+strconv.Itoa(tmdbID)+"/season/1":
+			w.Write([]byte(`{"episodes":[{"episode_number":1,"name":"Pilot","air_date":"2020-01-01"}]}`))
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	}
 }
 
-// TestRenameWorkflow_ScanThenApply_EndToEnd exercises the full staged-review
-// loop the design spec describes: Scan populates the queue, the queue is
-// visible via List, and Apply commits exactly the one proposal a human
-// approved — hitting SAK's real HTTP handlers, a real migrated SQLite
-// database, and a fake Sonarr, not any package in isolation. Series still
-// uses the *arr-backed path; Movies' own libStore-backed path is covered
-// separately below.
-func TestRenameWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
-	fakeSonarr := httptest.NewServer(fakeSonarrRenameHandler(t, 55))
-	defer fakeSonarr.Close()
+// TestRenameWorkflow_Series_ScanThenApply_EndToEnd exercises the full
+// staged-review loop for Series' libStore-backed Rename path — no Sonarr
+// connection at all, a real temp-dir root folder, and a fake TMDB standing
+// in for Sonarr's own Lookup — hitting SAK's real HTTP handlers and a real
+// migrated SQLite database, not any package in isolation. Adult's
+// generic *arr-backed rename.Scan/Apply path is covered separately by
+// TestAdultRenameWorkflow_ScanThenApply_EndToEnd.
+func TestRenameWorkflow_Series_ScanThenApply_EndToEnd(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Some.Show.S01E01.1080p.WEB-DL.x264-GROUP.mkv"), []byte("fake video data"), 0o644); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fakeTMDB := httptest.NewServer(fakeTMDBSeriesRenameHandler(t, 555, "Some Show"))
+	defer fakeTMDB.Close()
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	if err := connStore.Upsert(context.Background(), "sonarr", fakeSonarr.URL, "test-key"); err != nil {
+	ctx := context.Background()
+	if err := connStore.Upsert(ctx, "tmdb", fakeTMDB.URL, "test-key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, seriesLibraryRootFolderKey, root); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -71,7 +70,8 @@ func TestRenameWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 	if err := json.NewDecoder(scanResp.Body).Decode(&scanned); err != nil {
 		t.Fatalf("decoding scan response: %v", err)
 	}
-	if len(scanned) != 1 || scanned[0].Status != proposals.Pending || scanned[0].Title != "Some Show" {
+	if len(scanned) != 1 || scanned[0].Status != proposals.Pending || scanned[0].Title != "Some Show" ||
+		scanned[0].SeasonNumber != 1 || scanned[0].EpisodeNumber != 1 {
 		t.Fatalf("unexpected scan result: %+v", scanned)
 	}
 
@@ -99,8 +99,16 @@ func TestRenameWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 	if err := json.NewDecoder(applyResp.Body).Decode(&applied); err != nil {
 		t.Fatalf("decoding apply response: %v", err)
 	}
-	if applied.Status != proposals.Applied || applied.TrackedID != 55 {
-		t.Fatalf("expected the proposal to come back Applied with trackedId=55, got %+v", applied)
+	if applied.Status != proposals.Applied || applied.TrackedID == 0 {
+		t.Fatalf("expected the proposal to come back Applied with a nonzero episode id, got %+v", applied)
+	}
+
+	series, err := libStore.GetSeriesByTMDBID(ctx, 555)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if series.Title != "Some Show" {
+		t.Errorf("unexpected series: %+v", series)
 	}
 }
 
@@ -232,8 +240,33 @@ func TestApplyProposalHandler_UnknownID(t *testing.T) {
 	}
 }
 
+// TestScanHandler_ModeNotConfigured proves Adult's Scan still requires a
+// Whisparr connection (unchanged, *arr-backed) — Movies/Series' own Scan
+// requirements are covered by TestScanHandler_Movies_RequiresTMDBConfigured
+// and TestScanHandler_Series_RequiresTMDBConfigured below.
 func TestScanHandler_ModeNotConfigured(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/modes/adult/rename/scan", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when whisparr isn't configured yet, got %d", resp.StatusCode)
+	}
+}
+
+// TestScanHandler_Series_RequiresTMDBConfigured confirms Series' Scan fails
+// with a clear 502 (not a crash) when TMDB isn't set up — there's no Sonarr
+// connection requirement to check anymore.
+func TestScanHandler_Series_RequiresTMDBConfigured(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := settingsStore.Set(context.Background(), seriesLibraryRootFolderKey, t.TempDir()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
@@ -242,8 +275,8 @@ func TestScanHandler_ModeNotConfigured(t *testing.T) {
 		t.Fatalf("POST failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 when sonarr isn't configured yet, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 when tmdb isn't configured yet (ScanLibrarySeries' error surfaces the same way ScanLibrary's does), got %d", resp.StatusCode)
 	}
 }
 

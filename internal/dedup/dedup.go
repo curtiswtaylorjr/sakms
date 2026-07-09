@@ -4,12 +4,15 @@
 // stage a proposal to keep the better-quality copy instead of leaving both
 // silently in place (today's behavior in both source CLIs).
 //
-// Series (Sonarr) isn't implemented yet: Sonarr's per-episode file model
-// means "a duplicate" doesn't reduce to "two candidate files for one
-// tracked thing" the way it does for a movie — a real design needs to name
-// which episode(s) collide, which is a meaningfully different shape from
-// what's built here. Scan refuses Series sessions with a clear error rather
-// than silently doing the wrong thing.
+// Series isn't implemented yet, even though it now owns its own library
+// (internal/library's Series/Episode tables — Sonarr is no longer the
+// blocker): grouping duplicates by show+season+episode instead of by a
+// single TMDB id is a real, undecided design (what "the tracked copy" even
+// means for an episode, how a duplicate season-pack file groups against a
+// duplicate single-episode file), deliberately deferred to a later stage
+// rather than rushed in alongside the rest of Series' Sonarr elimination.
+// Scan refuses Series sessions with a clear error rather than silently
+// doing the wrong thing.
 //
 // Quality comparison never trusts a *arr app's own reported file quality —
 // every candidate, tracked or not, gets ffprobed directly by SAK itself
@@ -120,9 +123,14 @@ func markWinner(candidates []proposals.Candidate) {
 
 // Scan dispatches on the session's app: Radarr runs the Movies duplicate
 // detection (scanMovies, keyed by TMDB ID); Whisparr runs the Adult one
-// (scanAdult, keyed by foreignID); Sonarr and anything else is refused, since
-// Series' per-episode file model is a different shape (see the package doc).
+// (scanAdult, keyed by foreignID); anything else (including a Series
+// session, whether it's still Sonarr-backed or already on its own library —
+// sess.Servarr is nil in the latter case) is refused, since Series dedup
+// isn't built yet (see the package doc).
 func Scan(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.Proposal, error) {
+	if sess.Servarr == nil {
+		return nil, fmt.Errorf("dedup: Series-library dedup isn't implemented yet (tracked separately) — Movies and Adult only")
+	}
 	switch sess.Servarr.AppType() {
 	case servarr.Radarr:
 		return scanMovies(ctx, sess, prober)
@@ -132,7 +140,7 @@ func Scan(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.P
 		}
 		return scanAdult(ctx, sess, prober)
 	default:
-		return nil, fmt.Errorf("dedup: only Movies and Adult are implemented so far, not %v", sess.Mode)
+		return nil, fmt.Errorf("dedup: Series-library dedup isn't implemented yet (tracked separately) — Movies and Adult only, not %v", sess.Mode)
 	}
 }
 

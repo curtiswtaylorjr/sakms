@@ -142,3 +142,84 @@ func TestExternalIDs_MissingTVDBIDReturnsZero(t *testing.T) {
 		t.Errorf("expected 0 when tvdb_id is null, got %d", tvdbID)
 	}
 }
+
+func TestSearchTV_NormalizesAndSendsQuery(t *testing.T) {
+	var gotPath, gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(tvFixture))
+	})
+
+	items, err := c.SearchTV(context.Background(), "Some Show")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/search/tv" {
+		t.Errorf("unexpected path: %s", gotPath)
+	}
+	if gotQuery != "Some Show" {
+		t.Errorf("expected query param %q, got %q", "Some Show", gotQuery)
+	}
+	if len(items) != 1 || items[0].Title != "Some Show" || items[0].MediaType != TV {
+		t.Errorf("unexpected items: %+v", items)
+	}
+}
+
+func TestSeasonDetails_NormalizesEpisodes(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tv/2/season/1" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"episodes": [
+		  {"episode_number": 1, "name": "Pilot", "air_date": "2022-01-01"},
+		  {"episode_number": 2, "name": "Second", "air_date": "2022-01-08"}
+		]}`))
+	})
+
+	episodes, err := c.SeasonDetails(context.Background(), 2, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(episodes) != 2 || episodes[0].EpisodeNumber != 1 || episodes[0].Name != "Pilot" || episodes[0].AirDate != "2022-01-01" {
+		t.Errorf("unexpected episodes: %+v", episodes)
+	}
+}
+
+func TestFindByTVDBID_ResolvesTMDBID(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/find/12345" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("external_source"); got != "tvdb_id" {
+			t.Errorf("expected external_source=tvdb_id, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"tv_results": [{"id": 42, "name": "Some Show"}], "movie_results": []}`))
+	})
+
+	tmdbID, ok, err := c.FindByTVDBID(context.Background(), 12345)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || tmdbID != 42 {
+		t.Errorf("expected (42, true), got (%d, %v)", tmdbID, ok)
+	}
+}
+
+func TestFindByTVDBID_NoMatch(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"tv_results": [], "movie_results": []}`))
+	})
+
+	_, ok, err := c.FindByTVDBID(context.Background(), 99999)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false when tv_results is empty")
+	}
+}

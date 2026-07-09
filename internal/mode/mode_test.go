@@ -57,19 +57,18 @@ func TestBuild_Movies_NoServarrConnectionRequired(t *testing.T) {
 	}
 }
 
-func TestBuild_SeriesUsesSonarrConnection(t *testing.T) {
+func TestBuild_Series_NoServarrConnectionRequired(t *testing.T) {
 	store, settingsStore := newTestStores(t)
-	ctx := context.Background()
-	if err := store.Upsert(ctx, "sonarr", "http://sonarr.local:8989", "sonarr-key"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	sess, err := Build(ctx, store, settingsStore, &http.Client{Timeout: time.Second}, Series)
+	sess, err := Build(context.Background(), store, settingsStore, &http.Client{Timeout: time.Second}, Series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sess.Servarr.AppType() != servarr.Sonarr {
-		t.Errorf("expected the Sonarr app type, got %v", sess.Servarr.AppType())
+	if sess.Mode != Series {
+		t.Errorf("expected Mode to be Series, got %v", sess.Mode)
+	}
+	if sess.Servarr != nil {
+		t.Errorf("expected a nil Servarr client for Series, got %+v", sess.Servarr)
 	}
 	if sess.Identify != nil {
 		t.Error("expected Identify to be nil for a Series session")
@@ -78,8 +77,8 @@ func TestBuild_SeriesUsesSonarrConnection(t *testing.T) {
 
 func TestBuild_MissingConnection(t *testing.T) {
 	store, settingsStore := newTestStores(t)
-	if _, err := Build(context.Background(), store, settingsStore, &http.Client{}, Series); err == nil {
-		t.Fatal("expected an error when sonarr isn't configured yet")
+	if _, err := Build(context.Background(), store, settingsStore, &http.Client{}, Adult); err == nil {
+		t.Fatal("expected an error when whisparr isn't configured yet")
 	}
 }
 

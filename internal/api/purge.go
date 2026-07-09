@@ -16,8 +16,9 @@ import (
 // purgeScanHandler runs the Purge workflow's propose-phase for {mode}:
 // fetches that mode's current allowlist, matches it against every tracked
 // item's tags, and replaces the live Purge queue with whatever matched.
-// Movies dispatches to purge.ScanLibrary (libStore, no Radarr involved);
-// Series/Adult use the existing Servarr-backed purge.Scan, unchanged.
+// Movies/Series dispatch to purge.ScanLibrary/ScanLibrarySeries (libStore,
+// no *arr app involved); Adult uses the existing Servarr-backed
+// purge.Scan, unchanged.
 func purgeScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, allowStore *allowlist.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -30,9 +31,12 @@ func purgeScanHandler(httpClient *http.Client, connStore *connections.Store, set
 		}
 
 		var found []proposals.Proposal
-		if m == mode.Movies {
+		switch m {
+		case mode.Movies:
 			found, err = purge.ScanLibrary(ctx, libStore, rules)
-		} else {
+		case mode.Series:
+			found, err = purge.ScanLibrarySeries(ctx, libStore, rules)
+		default:
 			sess, buildErr := mode.Build(ctx, connStore, settingsStore, httpClient, m)
 			if buildErr != nil {
 				http.Error(w, buildErr.Error(), http.StatusBadRequest)

@@ -82,9 +82,11 @@
 const MODES = ["movies", "series", "adult"];
 const MODE_LABELS = { movies: "Movies", series: "Series", adult: "Adult" };
 // Which workflows apply to which mode — matches the backend's own wiring
-// (Series Dedup isn't built; Tag is live for all three; Search/Discover is
-// Movies/Series only — Prowlarr/qBittorrent/NZBGet/TMDB replace Radarr/
-// Sonarr's own acquisition loop, not Whisparr's).
+// (Series Dedup is deferred to a later stage — grouping duplicates by
+// show+season+episode is undecided design work, see internal/dedup's
+// package doc; Tag is live for all three; Search/Discover is Movies/Series
+// only — Prowlarr/qBittorrent/NZBGet/TMDB replace Radarr/Sonarr's own
+// acquisition loop, not Whisparr's).
 const MODE_WORKFLOWS = {
   movies: ["search", "rename", "purge", "dedup", "tag", "settings"],
   series: ["search", "rename", "purge", "tag", "settings"],
@@ -215,21 +217,17 @@ function buildConnectionControls(service, existingConn, onSaved) {
 }
 
 // ---- Setup Wizard ----
-// Walks through Movies' library root folder and connecting Sonarr (both
-// required for Movies/Series to do anything at all), Whisparr and an AI
-// provider (both optional — Adult and AI-assisted features are opt-in),
+// Walks through Movies' and Series' library root folders (both required to
+// do anything at all — neither proxies a *arr app anymore), Whisparr and an
+// AI provider (both optional — Adult and AI-assisted features are opt-in),
 // then hands off to the normal app. Shown automatically until dismissed
 // (see boot()); reachable afterward from Settings' "Re-run setup wizard"
 // link.
 
-// WIZARD_SERVICE_BY_MODE covers Series/Adult only — Movies has no
-// connection-based step anymore (see buildMoviesLibraryWizardStep).
-const WIZARD_SERVICE_BY_MODE = { series: "sonarr", adult: "whisparr" };
-
 async function renderWizard(container) {
   container.innerHTML = "";
   container.appendChild(el("h2", { text: "Set up SAK" }));
-  container.appendChild(el("p", { class: "muted", text: "Movies needs a library root folder to do anything at all; Series needs its *arr app's URL and API key (found in that app's Settings → General) — Whisparr (Adult) and an AI provider are optional." }));
+  container.appendChild(el("p", { class: "muted", text: "Movies and Series each need a library root folder to do anything at all — Whisparr (Adult) and an AI provider are optional." }));
 
   let status, connections;
   try {
@@ -241,11 +239,8 @@ async function renderWizard(container) {
   for (const ms of status.modes) modeStatusByMode[ms.mode] = ms;
 
   let step = 1;
-  container.appendChild(await buildMoviesLibraryWizardStep(step++, modeStatusByMode.movies && modeStatusByMode.movies.arrConfigured, container));
-  {
-    const configured = modeStatusByMode.series && modeStatusByMode.series.arrConfigured;
-    container.appendChild(buildWizardStep(step++, "Series — connect sonarr", false, configured, "sonarr", byService.sonarr, container));
-  }
+  container.appendChild(await buildLibraryWizardStep("movies", step++, modeStatusByMode.movies && modeStatusByMode.movies.arrConfigured, container));
+  container.appendChild(await buildLibraryWizardStep("series", step++, modeStatusByMode.series && modeStatusByMode.series.arrConfigured, container));
   {
     const configured = modeStatusByMode.adult && modeStatusByMode.adult.arrConfigured;
     container.appendChild(buildWizardStep(step++, "Adult — connect whisparr", true, configured, "whisparr", byService.whisparr, container));
@@ -253,10 +248,9 @@ async function renderWizard(container) {
   container.appendChild(await buildWizardAIStep(step++, byService, container));
 
   // Movies and Series can't do anything at all without a library root
-  // folder / *arr app respectively, so "Continue to SAK" stays disabled
-  // until both are actually configured — otherwise dismissing the wizard
-  // just lands on the same bare, useless Scan button the wizard exists to
-  // prevent, one step later.
+  // folder configured, so "Continue to SAK" stays disabled until both are
+  // actually set — otherwise dismissing the wizard just lands on the same
+  // bare, useless Scan button the wizard exists to prevent, one step later.
   const moviesConfigured = modeStatusByMode.movies && modeStatusByMode.movies.arrConfigured;
   const seriesConfigured = modeStatusByMode.series && modeStatusByMode.series.arrConfigured;
   const canContinue = moviesConfigured && seriesConfigured;
@@ -268,7 +262,7 @@ async function renderWizard(container) {
     } }),
     el("span", { class: canContinue ? "muted" : "error", text: canContinue
       ? "You can revisit any of this later in Settings."
-      : "Set Movies' library root folder and connect Sonarr (Series) above to continue — SAK can't review anything without them." }),
+      : "Set Movies' and Series' library root folders above to continue — SAK can't review anything without them." }),
   ]);
   container.appendChild(footer);
 }
@@ -286,21 +280,21 @@ function buildWizardStep(n, title, optional, configured, service, existingConn, 
   return fs;
 }
 
-// buildMoviesLibraryWizardStep is Movies' counterpart to buildWizardStep —
-// there's no Radarr connection to test/save anymore (see internal/library's
+// buildLibraryWizardStep is Movies'/Series' counterpart to buildWizardStep —
+// neither has a *arr connection to test/save anymore (see internal/library's
 // package doc), just a free-typed path SAK will scan/import into directly.
-async function buildMoviesLibraryWizardStep(n, configured, wizardContainer) {
+async function buildLibraryWizardStep(m, n, configured, wizardContainer) {
   let current = "";
-  try { current = (await api("/api/modes/movies/library/root-folder")).path; } catch (e) {}
+  try { current = (await api("/api/modes/" + m + "/library/root-folder")).path; } catch (e) {}
 
   const fs = el("fieldset", {}, [
-    el("legend", { text: n + ". Movies — library root folder" + (configured ? " ✓" : "") }),
+    el("legend", { text: n + ". " + MODE_LABELS[m] + " — library root folder" + (configured ? " ✓" : "") }),
   ]);
-  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/Movies", style: "min-width:20rem" });
+  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/" + MODE_LABELS[m], style: "min-width:20rem" });
   const status = el("span", { class: "muted" });
   const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
     try {
-      await api("/api/modes/movies/library/root-folder", { method: "PUT", body: JSON.stringify({ path: pathInput.value }) });
+      await api("/api/modes/" + m + "/library/root-folder", { method: "PUT", body: JSON.stringify({ path: pathInput.value }) });
       status.textContent = "✓ saved"; status.className = "muted";
       await renderWizard(wizardContainer);
     } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
@@ -394,6 +388,16 @@ function posterURL(path) {
   return path ? ("https://image.tmdb.org/t/p/w342" + path) : "";
 }
 
+// episodeSearchQuery builds a Series search term for a specific season (and
+// optionally episode) — mirrors internal/api/search.go's own
+// episodeSearchQuery exactly, so a manual search and a server-built one
+// produce the same query shape.
+function episodeSearchQuery(title, seasonNumber, episodeNumber) {
+  const s = "S" + String(seasonNumber).padStart(2, "0");
+  if (episodeNumber) return title + " " + s + "E" + String(episodeNumber).padStart(2, "0");
+  return title + " " + s;
+}
+
 async function renderSearch(container) {
   const m = state.mode;
   container.innerHTML = "";
@@ -446,26 +450,39 @@ async function renderSearch(container) {
   async function grabRelease(release, picked) {
     let rootFolderPath = "";
     try {
-      if (m === "movies") {
-        rootFolderPath = (await api("/api/modes/movies/library/root-folder")).path;
-      } else {
-        const folders = await api("/api/modes/" + m + "/root-folders");
-        if (folders.length) rootFolderPath = folders[0].path;
-      }
+      rootFolderPath = (await api("/api/modes/" + m + "/library/root-folder")).path;
     } catch (e) { /* fall through to the "no root folder" error below */ }
     if (!rootFolderPath) throw new Error("no root folder configured for " + m + " — add one in Settings first");
 
     await api("/api/modes/" + m + "/search/grab", { method: "POST", body: JSON.stringify({
       title: release.title, tmdbId: picked.tmdbId, tvdbId: picked.tvdbId,
+      seasonNumber: picked.seasonNumber || undefined, episodeNumber: picked.episodeNumber || undefined,
       indexer: release.indexer, protocol: release.protocol, downloadUrl: release.downloadUrl,
       rootFolderPath,
     }) });
   }
 
-  container.appendChild(el("div", { class: "row" }, [
-    queryInput,
-    el("button", { class: "primary", text: "Search releases", onclick: () => runSearch(queryInput.value, {}) }),
-  ]));
+  // Series only: an optional season/episode picker — leave both blank for a
+  // plain title search, set season alone for a season-pack search, or both
+  // for one specific episode. Nothing forces using this over free text.
+  const seasonInput = el("input", { type: "text", placeholder: "Season", style: "max-width:6rem" });
+  const episodeInput = el("input", { type: "text", placeholder: "Episode", style: "max-width:6rem" });
+
+  function pickedFromInputs() {
+    if (m !== "series") return {};
+    const seasonNumber = parseInt(seasonInput.value, 10) || 0;
+    const episodeNumber = parseInt(episodeInput.value, 10) || 0;
+    return seasonNumber ? { seasonNumber, episodeNumber } : {};
+  }
+
+  const searchRow = [queryInput];
+  if (m === "series") searchRow.push(seasonInput, episodeInput);
+  searchRow.push(el("button", { class: "primary", text: "Search releases", onclick: () => {
+    const picked = pickedFromInputs();
+    const query = picked.seasonNumber ? episodeSearchQuery(queryInput.value, picked.seasonNumber, picked.episodeNumber) : queryInput.value;
+    runSearch(query, picked);
+  } }));
+  container.appendChild(el("div", { class: "row" }, searchRow));
   container.appendChild(resultsSlot);
 
   container.appendChild(el("h3", { text: "Discover" }));
@@ -763,6 +780,9 @@ async function renderTag(container) {
 
 // No "radarr" here — Movies owns its own library instead of proxying it
 // (see internal/library's package doc), so there's nothing left to connect.
+// "sonarr" is kept even though Series is off it too now — a user migrating
+// from Sonarr still needs to connect it once, to run the one-time importer
+// (see renderSonarrImport / internal/sonarrimport's package doc).
 const CONNECTION_SERVICES = ["sonarr", "whisparr", "prowlarr", "qbittorrent", "nzbget", "tmdb", "ollama", "openai", "gemini", "anthropic", "stashdb", "fansdb", "tpdb", "brave", "stash"];
 const AI_PROVIDERS = ["ollama", "openai", "gemini", "anthropic"];
 const QUALITY_TIERS = ["low", "medium", "high", "lossless"];
@@ -779,32 +799,82 @@ async function renderSettings(container) {
   ]));
   await renderConnections(container);
   await renderAISettings(container);
-  await renderMoviesLibrarySettings(container);
+  await renderLibrarySettings(container, state.mode);
   await renderQualityPrefs(container);
   await renderKidsRootPath(container);
+  await renderSonarrImport(container);
 }
 
-// renderMoviesLibrarySettings is Movies-only — its library root folder,
-// free-typed since there's no *arr app to enumerate folders from anymore.
-async function renderMoviesLibrarySettings(container) {
-  if (state.mode !== "movies") return;
+// renderLibrarySettings is Movies'/Series' library root folder setting —
+// free-typed since neither has a *arr app to enumerate folders from
+// anymore (see internal/library's package doc). No-op for Adult.
+async function renderLibrarySettings(container, m) {
+  if (m !== "movies" && m !== "series") return;
 
-  const fs = el("fieldset", {}, [el("legend", { text: "Movies library" })]);
+  const fs = el("fieldset", {}, [el("legend", { text: MODE_LABELS[m] + " library" })]);
   let current = "";
-  try { current = (await api("/api/modes/movies/library/root-folder")).path; } catch (e) {}
+  try { current = (await api("/api/modes/" + m + "/library/root-folder")).path; } catch (e) {}
 
-  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/Movies", style: "min-width:20rem" });
+  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/" + MODE_LABELS[m], style: "min-width:20rem" });
   const status = el("span", { class: "muted" });
   const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
     try {
-      await api("/api/modes/movies/library/root-folder", { method: "PUT", body: JSON.stringify({ path: pathInput.value }) });
+      await api("/api/modes/" + m + "/library/root-folder", { method: "PUT", body: JSON.stringify({ path: pathInput.value }) });
       status.textContent = "saved"; status.className = "muted";
     } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
   } });
 
   fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), pathInput]));
   fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
-  fs.appendChild(el("div", { class: "muted", text: "Where Rename/Purge/Dedup and Search's Check & Import look for and place Movies files — no Radarr involved." }));
+  fs.appendChild(el("div", { class: "muted", text: "Where Rename/Purge/Dedup and Search's Check & Import look for and place " + MODE_LABELS[m] + " files — no " + (m === "movies" ? "Radarr" : "Sonarr") + " involved." }));
+  container.appendChild(fs);
+}
+
+// renderSonarrImport shows the one-time "Import from Sonarr" action —
+// Series only, and only if a sonarr connection still exists to migrate
+// from (see internal/sonarrimport's package doc). Safe to run more than
+// once; the button doesn't hide itself after a successful run.
+async function renderSonarrImport(container) {
+  if (state.mode !== "series") return;
+  let existing = [];
+  try { existing = await api("/api/connections"); } catch (e) {}
+  if (!existing.some((c) => c.service === "sonarr")) return;
+
+  const fs = el("fieldset", {}, [el("legend", { text: "Import from Sonarr" })]);
+  fs.appendChild(el("div", { class: "muted", text: "One-time import of every show Sonarr currently tracks into SAK's own library, including which episodes are still missing (from TMDB's season data). Read-only against Sonarr — makes no changes there." }));
+
+  const resultSlot = el("div");
+  const importBtn = el("button", { class: "primary", text: "Import from Sonarr", onclick: async () => {
+    importBtn.disabled = true;
+    resultSlot.innerHTML = "";
+    resultSlot.appendChild(el("div", { class: "muted", text: "Importing…" }));
+    try {
+      const result = await api("/api/series/import-from-sonarr", { method: "POST" });
+      resultSlot.innerHTML = "";
+      const list = result.series || [];
+      if (!list.length) { resultSlot.appendChild(el("div", { class: "empty", text: "Sonarr has nothing tracked to import." })); }
+      else {
+        const table = el("table", {}, [
+          el("thead", {}, [el("tr", {}, ["Show", "Result", "Episodes found", "Episodes missing"].map((h) => el("th", { text: h })))]),
+        ]);
+        const tbody = el("tbody");
+        for (const sr of list) {
+          tbody.appendChild(el("tr", {}, [
+            el("td", { text: sr.title }),
+            el("td", { text: sr.imported ? "Imported" : ("Skipped: " + (sr.reason || "unknown reason")) }),
+            el("td", { text: String(sr.episodesFound || 0) }),
+            el("td", { text: String(sr.episodesMissing || 0) }),
+          ]));
+        }
+        table.appendChild(tbody);
+        resultSlot.appendChild(table);
+      }
+    } catch (e) { resultSlot.innerHTML = ""; resultSlot.appendChild(fmtErr(e)); }
+    importBtn.disabled = false;
+  } });
+
+  fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [importBtn]));
+  fs.appendChild(resultSlot);
   container.appendChild(fs);
 }
 
@@ -901,6 +971,9 @@ async function renderAISettings(container) {
   container.appendChild(fs);
 }
 
+// renderKidsRootPath is Movies'/Series' Kids classification setting — a
+// free-typed path for both now (neither has a *arr app to enumerate root
+// folders from anymore, see internal/library's package doc).
 async function renderKidsRootPath(container) {
   const modesWithKids = ["movies", "series"];
   if (!modesWithKids.includes(state.mode)) return;
@@ -910,58 +983,17 @@ async function renderKidsRootPath(container) {
   let current = "";
   try { current = (await api("/api/modes/" + m + "/rename/kids-root-path")).path; } catch (e) {}
 
-  // Movies has no *arr app to enumerate root folders from anymore (see
-  // internal/library's package doc) — a free-typed path, same treatment as
-  // the library root folder setting itself, instead of the picker below.
-  if (m === "movies") {
-    const input = el("input", { type: "text", placeholder: "/path/to/Movies (Kids)", style: "min-width:20rem", value: current });
-    const status = el("span", { class: "muted" });
-    const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
-      try {
-        await api("/api/modes/movies/rename/kids-root-path", { method: "PUT", body: JSON.stringify({ path: input.value }) });
-        status.textContent = "saved"; status.className = "muted";
-      } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
-    } });
-    fs.appendChild(el("label", { class: "row" }, [document.createTextNode("Kids root folder path"), input]));
-    fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
-    fs.appendChild(el("div", { class: "muted", text: "Leave blank to turn Kids classification off. Applies to both newly-found files and already-tracked items whose classification has drifted." }));
-    container.appendChild(fs);
-    return;
-  }
-
-  let folders = [];
-  try {
-    folders = await api("/api/modes/" + m + "/root-folders");
-  } catch (e) {
-    // Root folders come from the mode's *arr app — nothing to classify into
-    // yet if it isn't connected. That's a normal, expected state on a fresh
-    // instance, not a failure, so it gets a quiet note instead of the red
-    // error box used for actual unexpected errors.
-    fs.appendChild(el("div", { class: "muted", text: "Connect " + WIZARD_SERVICE_BY_MODE[m] + " above to enable Kids classification." }));
-    container.appendChild(fs);
-    return;
-  }
-
-  const enabled = el("input", { type: "checkbox" });
-  enabled.checked = !!current;
-  const select = el("select", {});
-  select.appendChild(el("option", { value: "", text: "— pick a root folder —" }));
-  for (const f of folders) select.appendChild(el("option", { value: f.path, text: f.path + (f.accessible ? "" : " (inaccessible)"), selected: f.path === current ? "selected" : null }));
-  select.disabled = !enabled.checked;
-  enabled.addEventListener("change", () => { select.disabled = !enabled.checked; if (!enabled.checked) select.value = ""; });
-
+  const input = el("input", { type: "text", placeholder: "/path/to/" + MODE_LABELS[m] + " (Kids)", style: "min-width:20rem", value: current });
   const status = el("span", { class: "muted" });
   const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
-    const path = enabled.checked ? select.value : "";
     try {
-      await api("/api/modes/" + m + "/rename/kids-root-path", { method: "PUT", body: JSON.stringify({ path }) });
+      await api("/api/modes/" + m + "/rename/kids-root-path", { method: "PUT", body: JSON.stringify({ path: input.value }) });
       status.textContent = "saved"; status.className = "muted";
     } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
   } });
-
-  fs.appendChild(el("label", { class: "row" }, [enabled, document.createTextNode("Route kids-appropriate content to a separate root folder"), select]));
+  fs.appendChild(el("label", { class: "row" }, [document.createTextNode("Kids root folder path"), input]));
   fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
-  fs.appendChild(el("div", { class: "muted", text: "Applies to both newly-found files and already-tracked items whose classification has drifted." }));
+  fs.appendChild(el("div", { class: "muted", text: "Leave blank to turn Kids classification off. Applies to both newly-found files and already-tracked items whose classification has drifted." }));
   container.appendChild(fs);
 }
 

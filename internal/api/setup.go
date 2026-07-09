@@ -102,25 +102,24 @@ func buildSetupStatus(ctx context.Context, connStore *connections.Store, allowSt
 	return status, nil
 }
 
-// modeStatusFor reports whether m is ready to use. Movies has no *arr
-// connection to check anymore — it's "configured" once its library root
-// folder setting is populated instead (see internal/library's package
-// doc); Series/Adult still check their Sonarr/Whisparr connection,
-// unchanged. The field stays named ArrConfigured for both cases (the
-// wizard's "is this mode ready" signal), even though Movies' check isn't
-// really an *arr connection anymore.
+// modeStatusFor reports whether m is ready to use. Movies and Series have
+// no *arr connection to check anymore — each is "configured" once its own
+// library root folder setting is populated instead (see internal/library's
+// package doc); Adult still checks its Whisparr connection, unchanged. The
+// field stays named ArrConfigured across all three (the wizard's "is this
+// mode ready" signal), even though Movies/Series' check isn't really an
+// *arr connection anymore.
 func modeStatusFor(ctx context.Context, m mode.Mode, connStore *connections.Store, allowStore *allowlist.Store, settingsStore *settings.Store) (modeStatus, error) {
 	var arrConfigured bool
 	var err error
 	switch m {
-	case mode.Movies:
-		rootPath, getErr := settingsStore.Get(ctx, moviesLibraryRootFolderKey)
+	case mode.Movies, mode.Series:
+		key, _ := libraryRootFolderKey(m)
+		rootPath, getErr := settingsStore.Get(ctx, key)
 		if getErr != nil && !errors.Is(getErr, settings.ErrNotFound) {
 			return modeStatus{}, getErr
 		}
 		arrConfigured = rootPath != ""
-	case mode.Series:
-		arrConfigured, err = connectionExists(ctx, connStore, "sonarr")
 	case mode.Adult:
 		arrConfigured, err = connectionExists(ctx, connStore, "whisparr")
 	}

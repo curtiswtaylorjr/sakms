@@ -52,6 +52,7 @@ func TestGet_RoundTripsEveryField(t *testing.T) {
 
 	created, err := s.Create(ctx, Grab{
 		Mode: mode.Series, Title: "Some Show S01E01", TVDBID: 456,
+		SeasonNumber: 1, EpisodeNumber: 1,
 		Indexer: "SomeUsenetIndexer", Protocol: "usenet", DownloadClient: "nzbget",
 		ClientRef: "42", RootFolderPath: "/tv",
 	})
@@ -64,6 +65,7 @@ func TestGet_RoundTripsEveryField(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Mode != mode.Series || got.Title != "Some Show S01E01" || got.TVDBID != 456 ||
+		got.SeasonNumber != 1 || got.EpisodeNumber != 1 ||
 		got.Indexer != "SomeUsenetIndexer" || got.Protocol != "usenet" || got.DownloadClient != "nzbget" ||
 		got.ClientRef != "42" || got.RootFolderPath != "/tv" || got.Status != Queued {
 		t.Errorf("unexpected round-tripped grab: %+v", got)

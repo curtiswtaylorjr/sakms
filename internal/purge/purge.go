@@ -168,3 +168,69 @@ func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Prop
 	}
 	return libStore.Delete(ctx, int64(p.TrackedID))
 }
+
+// ScanLibrarySeries is Purge's Series-library counterpart to ScanLibrary —
+// used once Series stops requiring Sonarr (see the plan this was built
+// from, Stage 2). Tags live at the series level, not per-episode (matching
+// Sonarr's own tag granularity, and the only sane unit for Purge to act on
+// anyway — see ApplyLibrarySeries), so one proposal per matched SERIES, not
+// per episode.
+func ScanLibrarySeries(ctx context.Context, libStore *library.Store, allowlist []string) ([]proposals.Proposal, error) {
+	series, err := libStore.ListSeries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading series: %w", err)
+	}
+
+	var out []proposals.Proposal
+	for _, s := range series {
+		tags, err := libStore.SeriesTags(ctx, s.ID)
+		if err != nil {
+			return nil, fmt.Errorf("loading tags for %q: %w", s.Title, err)
+		}
+		var matched []string
+		for _, tag := range tags {
+			matched = append(matched, MatchedEntries(tag, allowlist)...)
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		out = append(out, proposals.Proposal{
+			Mode: mode.Series, Workflow: proposals.Purge, Status: proposals.Pending,
+			SourceName: s.Title, SourcePath: s.RootFolderPath, RootFolderPath: s.RootFolderPath,
+			Title: s.Title, TMDBID: s.TMDBID, TrackedID: int(s.ID),
+			Reason: fmt.Sprintf("matched allowlist tag(s): %s", strings.Join(matched, ", ")),
+		})
+	}
+	return out, nil
+}
+
+// ApplyLibrarySeries is Purge's Series-library counterpart to ApplyLibrary —
+// removes every one of the series' episode files directly (no *arr app to
+// ask), then deletes the series (and its episode/tag rows) from libStore in
+// one call. p must be Pending and carry a TrackedID from ScanLibrarySeries
+// (the series' own id). This has a larger blast radius per Apply than
+// Movies' (a whole show's files, not one movie's) — the same blast radius
+// Sonarr's own DeleteTracked(deleteFiles=true) already had, just executed
+// locally now; still exactly one already-approved proposal per call.
+func ApplyLibrarySeries(ctx context.Context, libStore *library.Store, p proposals.Proposal) error {
+	if p.Status != proposals.Pending {
+		return fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+	}
+	if p.TrackedID == 0 {
+		return fmt.Errorf("proposal %d has no series id to delete", p.ID)
+	}
+
+	episodes, err := libStore.ListEpisodes(ctx, int64(p.TrackedID))
+	if err != nil {
+		return fmt.Errorf("loading episodes for series %d: %w", p.TrackedID, err)
+	}
+	for _, ep := range episodes {
+		if ep.FilePath == "" {
+			continue
+		}
+		if err := os.Remove(ep.FilePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("deleting %q: %w", ep.FilePath, err)
+		}
+	}
+	return libStore.DeleteSeries(ctx, int64(p.TrackedID))
+}

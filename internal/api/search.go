@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,12 +41,26 @@ type searchResult struct {
 }
 
 // categoriesForSearch restricts a search to m's Newznab category —
-// the 2000-range for Movies, the 5000-range for TV.
+// the 2000-range for Movies, the 5000-range for TV. Covers both single
+// episodes and season packs — Newznab doesn't split those into separate
+// categories.
 func categoriesForSearch(m mode.Mode) []int {
 	if m == mode.Series {
 		return []int{5000}
 	}
 	return []int{2000}
+}
+
+// episodeSearchQuery builds a Series search term for a specific season (and
+// optionally episode) — "Show Name S03" for a season-pack search, "Show
+// Name S03E05" for one episode. Used by the frontend's season/episode
+// picker; a plain free-text search (typing the show's name alone) is still
+// available and doesn't go through this helper.
+func episodeSearchQuery(title string, seasonNumber, episodeNumber int) string {
+	if episodeNumber > 0 {
+		return fmt.Sprintf("%s S%02dE%02d", title, seasonNumber, episodeNumber)
+	}
+	return fmt.Sprintf("%s S%02d", title, seasonNumber)
 }
 
 // searchHandler queries Prowlarr for {mode} and scores every result against
@@ -134,6 +149,8 @@ type grabRequest struct {
 	Title            string `json:"title"`
 	TMDBID           int    `json:"tmdbId,omitempty"`
 	TVDBID           int    `json:"tvdbId,omitempty"`
+	SeasonNumber     int    `json:"seasonNumber,omitempty"`
+	EpisodeNumber    int    `json:"episodeNumber,omitempty"`
 	QualityProfileID int    `json:"qualityProfileId,omitempty"`
 	Indexer          string `json:"indexer"`
 	Protocol         string `json:"protocol"`
@@ -206,6 +223,7 @@ func grabHandler(httpClient *http.Client, connStore *connections.Store, settings
 
 		created, err := grabsStore.Create(ctx, grabs.Grab{
 			Mode: m, Title: req.Title, TMDBID: req.TMDBID, TVDBID: req.TVDBID,
+			SeasonNumber: req.SeasonNumber, EpisodeNumber: req.EpisodeNumber,
 			QualityProfileID: req.QualityProfileID, Indexer: req.Indexer, Protocol: req.Protocol,
 			DownloadClient: downloadClient, ClientRef: clientRef, RootFolderPath: req.RootFolderPath,
 		})
@@ -352,7 +370,8 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 				http.Error(w, fmt.Sprintf("download completed but import failed: %v", err), http.StatusBadGateway)
 				return
 			}
-			if g.Mode == mode.Movies {
+			switch g.Mode {
+			case mode.Movies:
 				videoPath, err := library.ResolveVideoFile(movedPath)
 				if err != nil {
 					http.Error(w, fmt.Sprintf("file relocated but resolving the video file failed: %v", err), http.StatusBadGateway)
@@ -365,7 +384,40 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 					http.Error(w, fmt.Sprintf("file relocated but recording it in the library failed: %v", err), http.StatusBadGateway)
 					return
 				}
-			} else {
+			case mode.Series:
+				videoPaths, err := library.ResolveEpisodeVideoFiles(movedPath)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("file relocated but resolving the video file(s) failed: %v", err), http.StatusBadGateway)
+					return
+				}
+				series, err := libStore.UpsertSeries(ctx, library.Series{
+					TMDBID: g.TMDBID, Title: g.Title, RootFolderPath: g.RootFolderPath,
+				})
+				if err != nil {
+					http.Error(w, fmt.Sprintf("file relocated but recording the series failed: %v", err), http.StatusBadGateway)
+					return
+				}
+				for _, videoPath := range videoPaths {
+					season, episode, ok := library.ParseEpisodeFilename(filepath.Base(videoPath))
+					if !ok {
+						// A season-pack grab's own request already recorded
+						// which season it targeted; a single-episode grab
+						// whose relocated file name didn't carry its own
+						// SxxExx token falls back to what was requested —
+						// only sound when there's exactly one resolved file.
+						if len(videoPaths) != 1 || g.SeasonNumber == 0 {
+							continue
+						}
+						season, episode = g.SeasonNumber, g.EpisodeNumber
+					}
+					if _, err := libStore.UpsertEpisode(ctx, library.Episode{
+						SeriesID: series.ID, SeasonNumber: season, EpisodeNumber: episode, FilePath: videoPath,
+					}); err != nil {
+						http.Error(w, fmt.Sprintf("file relocated but recording episode s%de%d failed: %v", season, episode, err), http.StatusBadGateway)
+						return
+					}
+				}
+			default:
 				if _, err := sess.Servarr.Add(ctx, servarr.AddRequest{
 					Title: g.Title, TVDBID: g.TVDBID, TMDBID: g.TMDBID,
 					QualityProfileID: g.QualityProfileID, RootFolderPath: g.RootFolderPath, Monitored: true,

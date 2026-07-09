@@ -5,13 +5,17 @@
 // modeled as a normal "url + api key" connections.Store entry, matching how
 // this project already treats Brave/TPDB.
 //
-// A movie's TMDB id is exactly what Radarr's AddRequest.TMDBID expects, but
-// Sonarr's AddRequest.TVDBID is a DIFFERENT id space entirely (TheTVDB, not
-// TMDB) — TMDB covers TV shows too, but under its own id. ExternalIDs
-// resolves a TMDB TV show id to its TVDB id, which the Discover flow calls
-// once a user actually picks a TV show to search+grab (not for every item in
-// a trending list — see the API handler for why that's deferred to
-// click-time).
+// A movie's TMDB id is a different id space entirely from TheTVDB's — TMDB
+// covers TV shows too, but under its own id. ExternalIDs resolves a TMDB TV
+// show id to its TVDB id (used by Discover once a user picks a TV show to
+// search+grab, not for every item in a trending list); FindByTVDBID is the
+// reverse, used by the one-time Sonarr importer since Sonarr tracks shows
+// by TVDB id but SAK's library keys everything by TMDB id.
+//
+// SearchMovies/Trending/Popular/ExternalIDs are exercised live by this
+// project's Discover flow. SeasonDetails and FindByTVDBID are NOT — their
+// response shapes are modeled from TMDB's public API documentation only,
+// per this project's honesty-about-unverified-assumptions convention.
 package tmdb
 
 import (
@@ -155,6 +159,19 @@ func (c *Client) SearchMovies(ctx context.Context, query string) ([]Item, error)
 	return normalizeAll(resp.Results, Movie), nil
 }
 
+// SearchTV searches TMDB's TV catalog by title — the show-title lookup
+// Rename's Series-library code path and the Sonarr importer use, direct
+// sibling of SearchMovies.
+func (c *Client) SearchTV(ctx context.Context, query string) ([]Item, error) {
+	q := url.Values{}
+	q.Set("query", query)
+	var resp listResponse
+	if err := c.do(ctx, "/search/tv", q, &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, TV), nil
+}
+
 type externalIDsResponse struct {
 	TVDBID int `json:"tvdb_id"`
 }
@@ -168,4 +185,65 @@ func (c *Client) ExternalIDs(ctx context.Context, tmdbTVID int) (tvdbID int, err
 		return 0, err
 	}
 	return resp.TVDBID, nil
+}
+
+// SeasonEpisode is one episode as TMDB's season-details endpoint reports
+// it — enough to record a canonical episode row even before any file for
+// it exists on disk (see internal/library's Episode).
+type SeasonEpisode struct {
+	EpisodeNumber int    `json:"episodeNumber"`
+	Name          string `json:"name"`
+	AirDate       string `json:"airDate"`
+}
+
+type seasonEpisodeRaw struct {
+	EpisodeNumber int    `json:"episode_number"`
+	Name          string `json:"name"`
+	AirDate       string `json:"air_date"`
+}
+
+type seasonDetailsResponse struct {
+	Episodes []seasonEpisodeRaw `json:"episodes"`
+}
+
+// SeasonDetails returns every episode TMDB knows about for one season of a
+// TV show — hits /tv/{id}/season/{season_number}. Unlike SearchMovies/
+// ExternalIDs (already exercised live by Discover), this shape is modeled
+// from TMDB's public documentation, not yet confirmed against a live call
+// — flagged per this project's honesty-about-unverified-assumptions
+// convention.
+func (c *Client) SeasonDetails(ctx context.Context, tmdbTVID, seasonNumber int) ([]SeasonEpisode, error) {
+	var resp seasonDetailsResponse
+	path := fmt.Sprintf("/tv/%d/season/%d", tmdbTVID, seasonNumber)
+	if err := c.do(ctx, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]SeasonEpisode, len(resp.Episodes))
+	for i, e := range resp.Episodes {
+		out[i] = SeasonEpisode{EpisodeNumber: e.EpisodeNumber, Name: e.Name, AirDate: e.AirDate}
+	}
+	return out, nil
+}
+
+type findResponse struct {
+	TVResults []rawResult `json:"tv_results"`
+}
+
+// FindByTVDBID resolves a TVDB id to its TMDB TV show id — the reverse of
+// ExternalIDs, needed by the one-time Sonarr importer (Sonarr tracks shows
+// by TVDB id; SAK's library keys everything by TMDB id). ok is false if
+// TMDB has no TV match on file for tvdbID. Hits /find/{tvdb_id}?
+// external_source=tvdb_id — like SeasonDetails, this shape is modeled from
+// TMDB's public documentation, not yet confirmed against a live call.
+func (c *Client) FindByTVDBID(ctx context.Context, tvdbID int) (tmdbID int, ok bool, err error) {
+	q := url.Values{}
+	q.Set("external_source", "tvdb_id")
+	var resp findResponse
+	if err := c.do(ctx, fmt.Sprintf("/find/%d", tvdbID), q, &resp); err != nil {
+		return 0, false, err
+	}
+	if len(resp.TVResults) == 0 {
+		return 0, false, nil
+	}
+	return resp.TVResults[0].ID, true, nil
 }

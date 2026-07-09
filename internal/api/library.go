@@ -11,13 +11,29 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
-// moviesLibraryRootFolderKey is the settings key holding Movies' library
-// root folder path — the free-typed replacement for picking a path from
-// Radarr's own RootFolders response, since there's no Radarr to ask
-// anymore (see internal/library's package doc). Movies-only in this stage;
-// Series keeps using Sonarr's own root folders until it gets the same
-// treatment in a later stage.
-const moviesLibraryRootFolderKey = "movies_library_root_folder"
+// moviesLibraryRootFolderKey and seriesLibraryRootFolderKey are the
+// settings keys holding each mode's library root folder path — the
+// free-typed replacement for picking a path from a *arr app's own
+// RootFolders response, since neither Radarr nor Sonarr sits in front of
+// SAK's own library anymore (see internal/library's package doc). Adult
+// still gets its root folders from Whisparr — no key exists for it.
+const (
+	moviesLibraryRootFolderKey = "movies_library_root_folder"
+	seriesLibraryRootFolderKey = "series_library_root_folder"
+)
+
+// libraryRootFolderKey returns m's library-root-folder settings key, or
+// ok=false if m doesn't have one (Adult).
+func libraryRootFolderKey(m mode.Mode) (key string, ok bool) {
+	switch m {
+	case mode.Movies:
+		return moviesLibraryRootFolderKey, true
+	case mode.Series:
+		return seriesLibraryRootFolderKey, true
+	default:
+		return "", false
+	}
+}
 
 type libraryRootFolderResponse struct {
 	Path string `json:"path"`
@@ -27,16 +43,18 @@ type libraryRootFolderRequest struct {
 	Path string `json:"path"`
 }
 
-// getLibraryRootFolderHandler returns Movies' configured library root
-// folder path, or an empty string if unset. 400s for any mode other than
-// Movies — Series/Adult still get their root folders from their *arr app.
+// getLibraryRootFolderHandler returns {mode}'s configured library root
+// folder path, or an empty string if unset. 400s for Adult, which has no
+// library-root-folder concept — it still gets its root folder from
+// Whisparr.
 func getLibraryRootFolderHandler(settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if mode.Mode(r.PathValue("mode")) != mode.Movies {
-			http.Error(w, "a library root folder is only applicable to movies right now", http.StatusBadRequest)
+		key, ok := libraryRootFolderKey(mode.Mode(r.PathValue("mode")))
+		if !ok {
+			http.Error(w, "a library root folder is only applicable to movies and series right now", http.StatusBadRequest)
 			return
 		}
-		path, err := settingsStore.Get(r.Context(), moviesLibraryRootFolderKey)
+		path, err := settingsStore.Get(r.Context(), key)
 		if err != nil && !errors.Is(err, settings.ErrNotFound) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -46,11 +64,12 @@ func getLibraryRootFolderHandler(settingsStore *settings.Store) http.HandlerFunc
 	}
 }
 
-// putLibraryRootFolderHandler stores Movies' library root folder path.
+// putLibraryRootFolderHandler stores {mode}'s library root folder path.
 func putLibraryRootFolderHandler(settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if mode.Mode(r.PathValue("mode")) != mode.Movies {
-			http.Error(w, "a library root folder is only applicable to movies right now", http.StatusBadRequest)
+		key, ok := libraryRootFolderKey(mode.Mode(r.PathValue("mode")))
+		if !ok {
+			http.Error(w, "a library root folder is only applicable to movies and series right now", http.StatusBadRequest)
 			return
 		}
 		var req libraryRootFolderRequest
@@ -62,7 +81,7 @@ func putLibraryRootFolderHandler(settingsStore *settings.Store) http.HandlerFunc
 			http.Error(w, "path is required", http.StatusBadRequest)
 			return
 		}
-		if err := settingsStore.Set(r.Context(), moviesLibraryRootFolderKey, req.Path); err != nil {
+		if err := settingsStore.Set(r.Context(), key, req.Path); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

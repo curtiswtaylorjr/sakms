@@ -43,6 +43,11 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("GET /api/modes/{mode}/quality-prefs", getQualityPrefsHandler(settingsStore))
 	mux.HandleFunc("PUT /api/modes/{mode}/quality-prefs", putQualityPrefsHandler(settingsStore))
 
+	// One-time Sonarr library importer (see internal/sonarrimport) — Series
+	// only, not mode-generic, since Movies never had a Sonarr library to
+	// migrate from.
+	mux.HandleFunc("POST /api/series/import-from-sonarr", sonarrImportHandler(httpClient, connStore, libStore))
+
 	mux.HandleFunc("POST /api/modes/{mode}/rename/scan", renameScanHandler(httpClient, connStore, settingsStore, propStore, libStore))
 	mux.HandleFunc("GET /api/modes/{mode}/rename/proposals", listProposalsHandler(propStore, proposals.Rename))
 	mux.HandleFunc("GET /api/modes/{mode}/rename/kids-root-path", getKidsRootPathHandler(settingsStore))

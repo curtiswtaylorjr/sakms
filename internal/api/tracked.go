@@ -22,7 +22,7 @@ type libraryTrackedItem struct {
 }
 
 // listTrackedHandler returns every item {mode} currently tracks — for
-// Movies, straight from libStore (no Radarr involved); for Series/Adult,
+// Movies/Series, straight from libStore (no *arr app involved); for Adult,
 // straight from the live *arr app, unchanged. Backs the Tag workflow's item
 // picker (there's no other way to browse what's trackable to assign/remove
 // a tag on) and is generically useful anywhere a UI needs real item
@@ -46,6 +46,25 @@ func listTrackedHandler(httpClient *http.Client, connStore *connections.Store, s
 					return
 				}
 				out[i] = libraryTrackedItem{ID: item.ID, Title: item.Title, Tags: tags}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		if m == mode.Series {
+			series, err := libStore.ListSeries(ctx)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			out := make([]libraryTrackedItem, len(series))
+			for i, s := range series {
+				tags, err := libStore.SeriesTags(ctx, s.ID)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				out[i] = libraryTrackedItem{ID: s.ID, Title: s.Title, Tags: tags}
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(out)

@@ -1,9 +1,9 @@
 # SAK Media Server
 
 A unified, human-in-the-loop review console and media manager for Movies,
-Series, and Adult content. Movies owns its own library directly (no Radarr
-involved); Series still layers on Sonarr and Adult on Whisparr, with the
-same elimination planned for Series in a later stage.
+Series, and Adult content. Movies and Series both own their own library
+directly now (no Radarr or Sonarr involved); Adult still layers on
+Whisparr.
 
 One self-hosted web app, three isolated modes (Movies, Series, Adult), five
 review/management workflows (Search, Rename, Purge, Dedup, Tag) — every disk
@@ -13,51 +13,54 @@ Stash dependency.
 ## Status
 
 Early scaffolding. What's real so far: a Go server with a SQLite-backed
-migration runner, the Sonarr/Radarr/Whisparr client and the full
+migration runner, the Sonarr/Radarr/Whisparr client (still used for Adult,
+and by the one-time Sonarr importer — see below) and the full
 StashDB/FansDB/TPDB/Brave identification pipeline (ported from the CLIs this
 project grew out of), a `/api/connections` endpoint to test and persist
 service credentials (encrypted at rest — see below), and all four review
 workflows the design calls for, three of them queue-staged:
 **Rename** (`POST /api/modes/{movies,series,adult}/rename/scan` finds orphaned
-files, identifies them, and stages one proposal per item — Movies/Series via
-the *arr app's own TVDB/TMDB lookup, falling back to an AI-guessed title when
-that lookup finds nothing, Adult via the StashDB/FansDB/TPDB + AI
-identification pipeline, with Apply carrying the resolved scene identifier
-through to Whisparr V3. Every AI-assisted feature (Adult identification,
-Movies/Series' title-guess fallback, and Kids/general classification below)
-shares one configured provider+model — Ollama, OpenAI, Gemini, or Anthropic,
-`GET`/`PUT /api/settings/ai-provider` and `/api/settings/ai-model` — behind a
-single internal interface every prompt is written against, so switching
-providers needs no other code changes. When Adult identification confidently
-identifies a file via web search but it matches no existing scene anywhere,
-the resulting Unmatched proposal can be given back to the community
-databases as a new scene draft — `POST /api/proposals/{id}/submit-draft`,
-preferring TPDB when configured and falling back to StashDB — a separate,
-explicitly human-triggered action, unlike the original CLIs' automatic
-submission during scan. Movies/Series Rename also classifies matched content
-as kids-appropriate or not (certification/genre first, the same shared AI as
-a fallback when that signal is weak) and routes it to a per-mode Kids root
-folder — `GET`/`PUT /api/modes/{movies,series}/rename/kids-root-path`
-(`{"path": "..."}`; an empty path is the "off" state, not an error), picked
-explicitly from `GET /api/modes/{mode}/root-folders` (the same root folders
-Rename's Scan itself sees) rather than free-typed or guessed from a naming
-convention; Apply physically relocates the file into that root before
-registering it, since Sonarr/Radarr can only import from where it's actually
-sitting. Classification isn't only applied to new orphans: Scan also audits
-every ALREADY-TRACKED item under the general or Kids root and stages a
-proposal when its classification has drifted from where it currently sits —
-Apply reclassifies those through the *arr app's own root-folder move
-(`moveFiles=true`), never touching the filesystem directly for an item it
-already manages), **Purge** (`POST
-/api/modes/{movies,series,adult}/purge/scan` matches a per-mode tag allowlist,
-managed via `/api/modes/{mode}/purge/allowlist`, against every tracked
-item's native tags — Adult needed no code changes, since Whisparr's tracked
-scenes resolve through the same `movie` resource Radarr already uses), and
-**Dedup** (`POST /api/modes/{movies,adult}/dedup/scan` groups unmapped
-files with any already-tracked item sharing the same identifier — TMDB ID
-for Movies, the resolved scene's foreignID for Adult — ffprobes every
-candidate directly, and stages a proposal per duplicate group with a
-precomputed quality winner; Series isn't wired up).
+files, identifies them, and stages one proposal per item — Movies via TMDB
+search, Series via TMDB's TV search plus its season-details endpoint
+(resolving each orphan file's own season/episode from its name — one
+proposal per episode file, even inside a season-pack folder), Adult via
+the StashDB/FansDB/TPDB + AI identification pipeline, with Apply carrying
+the resolved scene identifier through to Whisparr V3. Every AI-assisted
+feature (Adult identification, Movies/Series' title-guess fallback, and
+Kids/general classification below) shares one configured provider+model —
+Ollama, OpenAI, Gemini, or Anthropic, `GET`/`PUT /api/settings/ai-provider`
+and `/api/settings/ai-model` — behind a single internal interface every
+prompt is written against, so switching providers needs no other code
+changes. When Adult identification confidently identifies a file via web
+search but it matches no existing scene anywhere, the resulting Unmatched
+proposal can be given back to the community databases as a new scene
+draft — `POST /api/proposals/{id}/submit-draft`, preferring TPDB when
+configured and falling back to StashDB — a separate, explicitly
+human-triggered action, unlike the original CLIs' automatic submission
+during scan. Movies/Series Rename also classifies matched content as
+kids-appropriate or not (certification/genre first for Movies — TMDB's
+season/episode data carries neither for Series, so Series always falls
+back to the shared AI classifier when a Kids root is configured) and
+routes it to a per-mode Kids root folder — `GET`/`PUT
+/api/modes/{movies,series}/rename/kids-root-path` (`{"path": "..."}`; an
+empty path is the "off" state, not an error), free-typed for both modes
+now (see below) rather than picked from a live *arr app or guessed from a
+naming convention. Kids/general drift reconciliation for already-tracked
+items (auditing whether a tracked item's classification has since changed)
+is a known v1 simplification neither Movies' nor Series' library-backed
+Rename does yet — new orphans still get classified, just not
+already-tracked items on every Scan), **Purge** (`POST
+/api/modes/{movies,series,adult}/purge/scan` matches a per-mode tag
+allowlist, managed via `/api/modes/{mode}/purge/allowlist`, against every
+tracked item's tags — Movies/Series against their own local library tags,
+Adult against Whisparr's native tag resource), and **Dedup** (`POST
+/api/modes/{movies,adult}/dedup/scan` groups unmapped files with any
+already-tracked item sharing the same identifier — TMDB ID for Movies, the
+resolved scene's foreignID for Adult — ffprobes every candidate directly,
+and stages a proposal per duplicate group with a precomputed quality
+winner; Series isn't wired up — grouping duplicates by show+season+episode
+instead of a single id is real, deliberately deferred design work, not a
+missing port, now that Series has its own library too).
 These three stage proposals in one shared, persisted review queue; `POST
 /api/proposals/{id}/apply` commits exactly the one a human approved —
 Dedup's apply optionally takes `{"keepIndex": n}` or `{"keepAll": true}` to
@@ -65,72 +68,89 @@ override the auto-computed winner. Nothing is ever applied in bulk.
 **Tag** is the fourth, and the first workflow live for all three modes —
 Movies, Series, and Adult (Whisparr V3): `GET /api/modes/{mode}/tags` for
 the live vocabulary and `POST`/`DELETE
-/api/modes/{mode}/items/{itemId}/tags[/{tagId}]` to assign or remove one,
-creating a genuinely new tag upstream automatically — this one isn't staged
-through the review queue, since assigning a tag is already a single
-deliberate action, not an automatic decision needing approval. Series Dedup
-and AI-suggested tags don't exist yet. All three Adult workflows (Rename,
-Purge, Dedup) are now live, though tracked-vs-orphan Adult Dedup rests on an
-unverified assumption about Whisparr's API response shape (see the commit
-history) — not yet run against a real Whisparr instance.
+/api/modes/{mode}/items/{itemId}/tags[/{tagId}]` to assign or remove one —
+Movies/Series both use local string-label tags (no numeric id — `id` and
+`label` are the same string), Adult still creates a genuinely new tag
+upstream on Whisparr automatically. Not staged through the review queue,
+since assigning a tag is already a single deliberate action, not an
+automatic decision needing approval. Series Dedup and AI-suggested tags
+don't exist yet. All three Adult workflows (Rename, Purge, Dedup) are now
+live, though tracked-vs-orphan Adult Dedup rests on an unverified
+assumption about Whisparr's API response shape (see the commit history) —
+not yet run against a real Whisparr instance.
 
-Movies and Series also get a fifth capability, **Search** — phase 1 of a
-longer-term plan to reimplement Radarr's and Sonarr's own indexer-search and
-download-grab functionality directly into SAK, with a Seerr/Overseerr-style
-browse UI in front of it, rather than treating them as a separate app to
-review after the fact. It deliberately isn't staged through the same
-proposals queue as Rename/Purge/Dedup: a grab's lifecycle (queued →
-downloading → completed → imported → failed) doesn't fit that
-Pending/Unmatched/Applied/Dismissed review-queue model, so it's tracked in
-its own `internal/grabs` store instead. `GET /api/modes/{movies,series}/
-search?q=...` proxies a query to **Prowlarr** (one indexer aggregator client,
-not one per tracker), covering both torrent (**qBittorrent**) and usenet
-(**NZBGet**) protocols, and scores every result with `internal/release`'s
-pragmatic title parser (resolution/source/codec/group) against a hardcoded
-default preference order (1080p > 2160p > 720p > 480p; WEB-DL > WEBRip >
-BluRay > WEB > HDTV > DVDRip) — a real per-mode quality-profile UI is a
-later phase. `POST /api/modes/{mode}/search/grab` sends the picked release
-to qBittorrent or NZBGet (by protocol) and records a `Grab`; `GET
-/api/modes/{mode}/grabs` lists them for that mode. Nothing auto-imports:
-`POST /api/grabs/{id}/check-import` is a manual, human-clicked refresh that
-polls the download client's current status and, once it reports complete,
-relocates the finished download and registers it with Radarr/Sonarr
-(reusing Rename's own file-relocation logic) — there is no background
-poller or scheduler anywhere in this codebase, by design, matching every
-other workflow's "nothing happens without a click" rule. A **Discover**
-browse view sits in front of Search: `GET /api/modes/{mode}/discover`
-proxies TMDB's trending/popular titles (poster art, overview, rating) for
-that mode's catalog, and picking a title auto-fills Search's query —
-Series titles resolve their TMDB id to the different TVDB id Sonarr's
-`AddRequest` actually needs via a separate `GET /api/modes/{mode}/
-discover/tvdb-id` call, made only once a specific title is picked rather
-than eagerly for every item in a trending list. None of this touches
-Adult/Whisparr search, or Jellyfin — Jellyfin integration is a distinct,
-not-yet-started piece of the roadmap, kept deliberately separate from this
-milestone. Also out of scope for now: RSS/automatic search, a calendar,
-blocklist/retry-on-failure, and a real quality-profile management UI.
+Movies and Series also get a fifth capability, **Search** — a
+reimplementation of Radarr's/Sonarr's own indexer-search and download-grab
+functionality directly into SAK, with a Seerr/Overseerr-style browse UI in
+front of it, rather than treating them as a separate app to review after
+the fact. It deliberately isn't staged through the same proposals queue as
+Rename/Purge/Dedup: a grab's lifecycle (queued → downloading → completed →
+imported → failed) doesn't fit that Pending/Unmatched/Applied/Dismissed
+review-queue model, so it's tracked in its own `internal/grabs` store
+instead. `GET /api/modes/{movies,series}/search?q=...` proxies a query to
+**Prowlarr** (one indexer aggregator client, not one per tracker), covering
+both torrent (**qBittorrent**) and usenet (**NZBGet**) protocols, and
+scores every result with `internal/release`'s pragmatic title parser
+(resolution/source/codec/group) against each mode's configured quality
+tier (see below). For Series, an optional season/episode picker next to
+the search box builds a targeted `"Show S03E05"`/`"Show S03"` query for a
+single episode or a whole season pack — free-text search still works too.
+`POST /api/modes/{mode}/search/grab` sends the picked release to
+qBittorrent or NZBGet (by protocol) and records a `Grab` (carrying
+season/episode numbers for Series); `GET /api/modes/{mode}/grabs` lists
+them for that mode. Nothing auto-imports: `POST
+/api/grabs/{id}/check-import` is a manual, human-clicked refresh that polls
+the download client's current status and, once it reports complete,
+relocates the finished download and records it directly in Movies'/Series'
+own library (reusing Rename's own file-relocation logic; a completed
+season-pack grab resolves every episode file inside the download, not just
+one) — there is no background poller or scheduler anywhere in this
+codebase, by design, matching every other workflow's "nothing happens
+without a click" rule. A **Discover** browse view sits in front of Search:
+`GET /api/modes/{mode}/discover` proxies TMDB's trending/popular titles
+(poster art, overview, rating) for that mode's catalog, and picking a
+title auto-fills Search's query. None of this touches Adult/Whisparr
+search, or Jellyfin — Jellyfin integration is a distinct, not-yet-started
+piece of the roadmap, kept deliberately separate. Also out of scope for
+now: RSS/automatic search, a calendar, blocklist/retry-on-failure, and
+Series Dedup.
 
-**Movies no longer uses Radarr at all** — SAK owns its own Movies library
-directly (`internal/library`, a SQLite-backed store of `{tmdbId, title,
-file path, root folder}` plus freeform tags), the first step of a longer
-plan to reimplement Radarr's and Sonarr's own functionality rather than
-just reviewing it after the fact (Series/Sonarr elimination is the next
-stage; Series and Adult are completely unaffected by this milestone). The
-practical differences for Movies: there's no more `radarr` connection to
-configure — Settings has a plain **Movies library** root-folder path
-instead (`GET`/`PUT /api/modes/movies/library/root-folder`, `{"path":
-"..."}`, free-typed since there's no *arr app left to enumerate folders
-from); Rename resolves orphans via **TMDB search** instead of Radarr's own
-lookup and records new items straight into the library (no
-register-then-rescan round trip — the record itself IS the tracked state);
-Purge and Dedup match against the library's own tags/TMDB ids instead of
-Radarr's tracked-item list and delete files directly; Tag's vocabulary is
-now local free-form strings (`GET /api/modes/movies/tags` returns
-`{id, label}` pairs where `id` is the label itself, since a local tag has
-no numeric id) instead of Radarr's tag resource. The setup wizard's Movies
-step is a root-folder path instead of a connection test, and `GET
+**Neither Movies nor Series uses a *arr app at all anymore** — each owns
+its own library directly (`internal/library`): Movies' flat `Item`
+(`{tmdbId, title, file path, root folder}` plus freeform tags), and
+Series' genuinely different `Series`/`Episode` pair — a `Series` parent row
+plus one `Episode` row per season/episode TMDB reports, whether or not a
+file exists for it yet (`file_path == ""` is exactly what makes "missing
+episodes" a plain query instead of an inferred state). The practical
+differences for both modes: no more `radarr`/`sonarr` connection required
+to do anything — Settings has a plain **library root-folder path** for
+each (`GET`/`PUT /api/modes/{movies,series}/library/root-folder`,
+`{"path": "..."}`, free-typed since neither has a *arr app left to
+enumerate folders from); Rename resolves orphans via TMDB search (movie
+search for Movies, TV search + season-details for Series) and records new
+items straight into the library (no register-then-rescan round trip — the
+record itself IS the tracked state); Purge and Tag both work off the
+library's own tags/ids directly (Purge deletes files itself; Tag's
+vocabulary is local free-form strings — `GET /api/modes/{mode}/tags`
+returns `{id, label}` pairs where `id` is the label itself, since a local
+tag has no numeric id). The setup wizard's Movies and Series steps are
+both a root-folder path instead of a connection test, and `GET
 /api/setup/status`'s per-mode `arrConfigured` flag reports whether that
-path is set rather than whether a Radarr connection exists.
+path is set rather than whether a *arr connection exists.
+
+**Migrating an existing Sonarr library**: `POST
+/api/series/import-from-sonarr` ("Import from Sonarr" in Series' Settings,
+shown only while a `sonarr` connection still exists) is a one-time,
+human-triggered import — for every series Sonarr currently tracks, it
+resolves the show's TVDB id to a TMDB id (TMDB's `/find` endpoint, the
+reverse of the `/tv/{id}/external_ids` call Discover already uses), walks
+that series' folder on disk directly (Sonarr exposes no per-episode-file
+API to ask instead — matching this project's existing "compute what's on
+disk yourself" philosophy), and records both the episodes actually found
+and, from TMDB's season data, the ones that aren't (real "missing
+episodes" data from the very first import). Read-only against Sonarr —
+makes no changes there — and safe to run more than once, since every write
+is an idempotent upsert.
 
 Quality tiers (**Low/Medium/High/Lossless**, `GET`/`PUT
 /api/modes/{mode}/quality-prefs`) drive Search's scoring for both Movies
@@ -148,13 +168,14 @@ signal used, sourced entirely from Prowlarr with no additional lookup.
 
 A working frontend now exists: a single dependency-free HTML/JS page (no
 build step, no framework) embedded into the Go binary and served at `/` —
-Settings (connections, AI provider/model, per-mode Kids root path, per-mode
-Purge allowlist) plus all five workflow views (Search/Rename/Purge/Dedup/Tag)
-for each mode (Search only for Movies/Series, matching the backend), driving
-the exact same API a script would. Functional, not polished — it's for
-exercising the real workflows against a real Sonarr/Whisparr/Prowlarr/
-qBittorrent/NZBGet/TMDB instance (Movies needs none of these to be
-reviewed — just a library root folder), not a finished design.
+Settings (connections, AI provider/model, per-mode library root folder,
+per-mode Kids root path, per-mode Purge allowlist) plus all five workflow
+views (Search/Rename/Purge/Dedup/Tag) for each mode (Search only for
+Movies/Series, matching the backend), driving the exact same API a script
+would. Functional, not polished — it's for exercising the real workflows
+against a real Whisparr/Prowlarr/qBittorrent/NZBGet/TMDB instance (Movies
+and Series need none of these to be reviewed — just their own library root
+folder), not a finished design.
 
 Every install is gated behind three layers, most fundamental first, each
 hiding all navigation until it's satisfied: **login**, then the **connections
@@ -168,12 +189,12 @@ itself is a stateless, AES-GCM-encrypted cookie (same key as connection
 secrets, see below) carrying only an expiry — 30-day TTL, `HttpOnly`,
 `SameSite=Lax`, deliberately not `Secure` since SAK's primary deployment
 is plain HTTP on a LAN, same as Radarr/Sonarr/Whisparr themselves. Once
-logged in, the setup wizard walks through setting Movies' library root
-folder and connecting Sonarr (Series) — required, since neither mode can do
-anything without them — plus Whisparr and an AI provider (both optional);
-"Continue to SAK" stays disabled with an inline explanation until both are
-actually configured, so dismissing the wizard can never strand a user on a
-bare, useless Scan button.
+logged in, the setup wizard walks through setting Movies' and Series'
+library root folders — required, since neither mode can do anything
+without one — plus Whisparr and an AI provider (both optional); "Continue
+to SAK" stays disabled with an inline explanation until both root folders
+are actually configured, so dismissing the wizard can never strand a user
+on a bare, useless Scan button.
 
 Secrets are encrypted at rest with a locally generated key
 (`<data-dir>/secret.key`, mode 0600) rather than an OS keychain — the
@@ -187,10 +208,11 @@ decisions well on their own, but there's no single place to see what a
 change is *about* to do before it happens, correct a bad match, resolve a
 duplicate by eye, or search for something to purge that isn't already on an
 allowlist — and no shared view across all three libraries. SAK started as
-that review layer, not a replacement for any of them — Movies has since
-grown into a genuine replacement for Radarr specifically (its own library,
-its own indexer search and grab), while Series and Adult still layer the
-same review workflows on top of Sonarr and Whisparr underneath.
+that review layer, not a replacement for any of them — Movies and Series
+have since grown into genuine replacements for Radarr and Sonarr
+specifically (each owns its own library, its own indexer search and grab),
+while Adult still layers the same review workflows on top of Whisparr
+underneath.
 
 ## Install
 

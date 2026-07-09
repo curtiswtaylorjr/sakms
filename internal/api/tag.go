@@ -22,17 +22,24 @@ type libraryTagEntry struct {
 	Label string `json:"label"`
 }
 
-// listTagsHandler returns {mode}'s current tag vocabulary. For Movies this
-// is entirely local (libStore.TagVocabulary — distinct tags already in use,
-// imported live from usage); Series/Adult still go straight to the live
-// *arr app, unchanged.
+// listTagsHandler returns {mode}'s current tag vocabulary. For Movies/
+// Series this is entirely local (libStore's TagVocabulary/
+// SeriesTagVocabulary — distinct tags already in use, imported live from
+// usage); Adult still goes straight to the live *arr app, unchanged.
 func listTagsHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
 		ctx := r.Context()
 
-		if m == mode.Movies {
-			vocab, err := libStore.TagVocabulary(ctx, m)
+		var vocab []string
+		var err error
+		switch m {
+		case mode.Movies:
+			vocab, err = libStore.TagVocabulary(ctx, m)
+		case mode.Series:
+			vocab, err = libStore.SeriesTagVocabulary(ctx)
+		}
+		if m == mode.Movies || m == mode.Series {
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -69,10 +76,10 @@ type addItemTagRequest struct {
 // addItemTagHandler assigns a tag to one tracked item — a single,
 // immediately-committed action, not staged through the proposals queue (see
 // internal/tag's doc comment for why Tag doesn't follow the Scan/Apply
-// shape the other three workflows do). For Movies, itemId is a library
-// item's own id and this writes straight to libStore — there's no upstream
-// "create the tag first" step the way Servarr's Tags resource needs, since
-// a local tag is just a string.
+// shape the other three workflows do). For Movies/Series, itemId is a
+// library item/series' own id and this writes straight to libStore —
+// there's no upstream "create the tag first" step the way Servarr's Tags
+// resource needs, since a local tag is just a string.
 func addItemTagHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -91,8 +98,16 @@ func addItemTagHandler(httpClient *http.Client, connStore *connections.Store, se
 		}
 		ctx := r.Context()
 
-		if m == mode.Movies {
+		switch m {
+		case mode.Movies:
 			if err := libStore.AddTag(ctx, int64(itemID), req.Label); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case mode.Series:
+			if err := libStore.AddSeriesTag(ctx, int64(itemID), req.Label); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -115,8 +130,9 @@ func addItemTagHandler(httpClient *http.Client, connStore *connections.Store, se
 
 // removeItemTagHandler unassigns a tag from one tracked item. The route's
 // {tagId} path segment means different things per mode: a numeric Servarr
-// tag id for Series/Adult, or the tag string itself for Movies (a local tag
-// has no numeric id at all — it's just a string in library_tags).
+// tag id for Adult, or the tag string itself for Movies/Series (a local tag
+// has no numeric id at all — it's just a string in library_tags/
+// library_series_tags).
 func removeItemTagHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -126,9 +142,18 @@ func removeItemTagHandler(httpClient *http.Client, connStore *connections.Store,
 		}
 		ctx := r.Context()
 
-		if m == mode.Movies {
+		switch m {
+		case mode.Movies:
 			tagLabel := r.PathValue("tagId") // string label for Movies, not a numeric Servarr tag id
 			if err := libStore.RemoveTag(ctx, int64(itemID), tagLabel); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case mode.Series:
+			tagLabel := r.PathValue("tagId") // string label for Series too, same reasoning as Movies
+			if err := libStore.RemoveSeriesTag(ctx, int64(itemID), tagLabel); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}

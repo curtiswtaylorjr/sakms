@@ -29,12 +29,14 @@ of.
 ## Scope: opportunistic, not a fixed roadmap
 
 There is **no committed target list** of what SAK will eventually absorb.
-Radarr is eliminated for Movies (done). Sonarr is next for Series (not
-started). Whether Jellyfin, Stash, Bazarr, Tdarr, or anything else ever
-gets absorbed is an open question, decided app-by-app as the pain of
-running it separately becomes concrete — not decided in advance by a
-roadmap. When a new consolidation opportunity comes up, engage with it on
-its own merits; don't cite (or invent) a fixed end-state that includes or
+Radarr is eliminated for Movies (done); Sonarr is eliminated for Series
+(done). Series Dedup (grouping duplicate episode files by show+season+
+episode) is a known, deliberately deferred gap — see Current state.
+Whether Jellyfin, Stash, Bazarr, Tdarr, or anything else ever gets
+absorbed is an open question, decided app-by-app as the pain of running
+it separately becomes concrete — not decided in advance by a roadmap.
+When a new consolidation opportunity comes up, engage with it on its own
+merits; don't cite (or invent) a fixed end-state that includes or
 excludes it a priori.
 
 ## Automation: manual by default, scheduling earns its way back in
@@ -96,12 +98,27 @@ above, so don't drop them for convenience:
   settings. Search/grab (Prowlarr + qBittorrent/NZBGet) and Discover
   (TMDB) are shared infrastructure, already live for both Movies and
   Series.
-- **Series**: still fully Sonarr-backed. Eliminating it is the next stage
-  — a bigger lift than Movies was, since Sonarr's per-episode tracking
-  (missing episodes, season packs) has no flat equivalent yet. Needs its
-  own scoped plan: episode/season data model, TMDB season/episode
-  metadata, a one-time Sonarr library importer, and a file-naming
-  convention for episodes.
+- **Series**: fully off Sonarr. Owns its own episode-aware library
+  (`internal/library`'s `Series`/`Episode` types — genuinely different
+  tables from Movies' `Item`, since Series needs rows for episodes TMDB
+  knows about but that aren't on disk yet, to make "missing episodes" a
+  real query; see `internal/library`'s package doc). Own
+  ScanLibrarySeries/ApplyLibrarySeries Rename and Purge paths, own
+  root-folder + quality-tier settings, own episode/season-aware Search →
+  grab → check-import. A one-time, human-triggered importer
+  (`internal/sonarrimport`, "Import from Sonarr" in Settings) migrates an
+  existing Sonarr library by walking disk directly + resolving TVDB→TMDB
+  ids via TMDB's `/find` endpoint — read-only against Sonarr, safe to
+  re-run. `internal/servarr`'s Sonarr support is kept (still a valid
+  generic capability, same precedent as Radarr) even though nothing in
+  `mode.Build` constructs one anymore.
+  - **Known gap, deliberately deferred**: Series Dedup isn't built.
+    Grouping duplicate episode files by show+season+episode (not a single
+    TMDB id, the way Movies' Dedup works) is genuinely undecided design
+    work — what "the tracked copy" even means for an episode, how a
+    duplicate season-pack file groups against a duplicate single-episode
+    file — not a mechanical port of something that already existed.
+    `dedup.Scan` refuses Series with a clear error rather than guessing.
 - **Adult (Whisparr)**: untouched, not in any near-term plan.
 - **Jellyfin**: not integrated at all yet. Whether it's ever absorbed vs.
   stays a permanent separate playback layer is genuinely undecided (see

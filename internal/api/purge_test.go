@@ -163,36 +163,38 @@ func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
 	}
 }
 
-// TestPurgeScanHandler_ModeNotConfigured proves Series' Purge Scan still
-// requires a Sonarr connection (unchanged, *arr-backed) — Movies no longer
-// needs any connection at all for Purge (see
-// TestPurgeScanHandler_Movies_NoConnectionNeeded below).
+// TestPurgeScanHandler_ModeNotConfigured proves Adult's Purge Scan still
+// requires a Whisparr connection (unchanged, *arr-backed) — Movies/Series
+// no longer need any connection at all for Purge (see
+// TestPurgeScanHandler_NoConnectionNeeded below).
 func TestPurgeScanHandler_ModeNotConfigured(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/api/modes/series/purge/scan", "application/json", nil)
+	resp, err := http.Post(srv.URL+"/api/modes/adult/purge/scan", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 when sonarr isn't configured yet, got %d", resp.StatusCode)
+		t.Fatalf("expected 400 when whisparr isn't configured yet, got %d", resp.StatusCode)
 	}
 }
 
-func TestPurgeScanHandler_Movies_NoConnectionNeeded(t *testing.T) {
+func TestPurgeScanHandler_NoConnectionNeeded(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/api/modes/movies/purge/scan", "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST failed: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 with no radarr connection at all, got %d", resp.StatusCode)
+	for _, m := range []string{"movies", "series"} {
+		resp, err := http.Post(srv.URL+"/api/modes/"+m+"/purge/scan", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for %s with no *arr connection at all, got %d", m, resp.StatusCode)
+		}
 	}
 }

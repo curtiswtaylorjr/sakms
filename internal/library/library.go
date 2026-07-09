@@ -1,13 +1,23 @@
 // Package library is SAK's own record of "what's in my library" — the
-// replacement for asking Radarr (and, eventually, Sonarr) what it tracks.
-// One Item per movie today; the same table/Store is designed to be reused
-// for Series in a later stage (see the plan this was built from), keyed by
-// mode so both share one schema instead of two near-duplicate ones.
+// replacement for asking Radarr and Sonarr what they track. One Item per
+// movie, keyed by mode (movies today; adult could use this same shape
+// later, since a scene is also a flat one-file-done-once thing).
+//
+// Series does NOT reuse Item/library_items — a much earlier draft of this
+// doc comment said it would, but that turned out wrong once Series was
+// actually designed: a movie is downloaded once and done, while a series
+// needs rows for episodes TMDB knows about but that aren't on disk yet, to
+// make "missing episodes" a real query instead of an inferred state.
+// Forcing that into Item's one-row-per-title shape would mean faking a
+// synthetic per-episode "title" row. See library_series.go for Series'
+// own Series/Episode types and Store methods, living in this same package
+// (same concern — "what's in my library" — just a genuinely different
+// shape), not a new top-level package.
 //
 // This package owns no HTTP client and makes no outbound calls — it's a
 // thin SQLite-backed Store (same shape as internal/grabs/internal/
 // connections) plus ScanRootFolder, a plain directory walk that replaces
-// what Radarr's RootFolder.UnmappedFolders used to compute for free.
+// what Radarr/Sonarr's RootFolder.UnmappedFolders used to compute for free.
 package library
 
 import (

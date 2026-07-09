@@ -67,9 +67,9 @@ func putKidsRootPathHandler(settingsStore *settings.Store) http.HandlerFunc {
 
 // renameScanHandler runs the Rename workflow's propose-phase for {mode} and
 // replaces that mode's live Rename queue with the result — the HTTP
-// equivalent of the top bar's Scan button. Movies dispatches to
-// rename.ScanLibrary (libStore, no Radarr involved); Series/Adult use the
-// existing Servarr-backed rename.Scan, unchanged.
+// equivalent of the top bar's Scan button. Movies/Series dispatch to
+// rename.ScanLibrary/ScanLibrarySeries (libStore, no *arr app involved);
+// Adult uses the existing Servarr-backed rename.Scan, unchanged.
 func renameScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -82,13 +82,17 @@ func renameScanHandler(httpClient *http.Client, connStore *connections.Store, se
 		}
 
 		var found []proposals.Proposal
-		if m == mode.Movies {
-			rootPath, rpErr := settingsStore.Get(ctx, moviesLibraryRootFolderKey)
+		if key, ok := libraryRootFolderKey(m); ok {
+			rootPath, rpErr := settingsStore.Get(ctx, key)
 			if rpErr != nil && !errors.Is(rpErr, settings.ErrNotFound) {
 				http.Error(w, rpErr.Error(), http.StatusInternalServerError)
 				return
 			}
-			found, err = rename.ScanLibrary(ctx, sess, libStore, rootPath)
+			if m == mode.Movies {
+				found, err = rename.ScanLibrary(ctx, sess, libStore, rootPath)
+			} else {
+				found, err = rename.ScanLibrarySeries(ctx, sess, libStore, rootPath)
+			}
 		} else {
 			found, err = rename.Scan(ctx, sess)
 		}

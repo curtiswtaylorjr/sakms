@@ -107,11 +107,11 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 var errUnknownWorkflow = errors.New("unknown proposal workflow")
 
 // applyByWorkflow dispatches to the right package's Apply and records the
-// outcome. Movies routes each workflow to its libStore-backed *Library
-// counterpart instead (no Radarr involved); Series/Adult use the existing
-// Servarr-backed functions, unchanged. The three workflows have different
-// success shapes — Rename can partially succeed (registered, but the
-// follow-up scan trigger failed) and still counts as applied; Purge's
+// outcome. Movies/Series route each workflow to its libStore-backed
+// *Library counterpart instead (no *arr app involved); Adult uses the
+// existing Servarr-backed functions, unchanged. The three workflows have
+// different success shapes — Rename can partially succeed (registered, but
+// the follow-up scan trigger failed) and still counts as applied; Purge's
 // delete either fully succeeds or fully fails; Dedup's Apply already
 // returns the resulting tracked id the same way Rename's does — so each
 // branch marks the queue accordingly rather than forcing all three through
@@ -119,12 +119,19 @@ var errUnknownWorkflow = errors.New("unknown proposal workflow")
 func applyByWorkflow(ctx context.Context, propStore *proposals.Store, libStore *library.Store, sess *mode.Session, p proposals.Proposal, req applyProposalRequest) error {
 	switch p.Workflow {
 	case proposals.Rename:
-		if p.Mode == mode.Movies {
+		switch p.Mode {
+		case mode.Movies:
 			itemID, err := rename.ApplyLibrary(ctx, libStore, p)
 			if err != nil {
 				return err
 			}
 			return propStore.MarkApplied(ctx, p.ID, int(itemID))
+		case mode.Series:
+			episodeID, err := rename.ApplyLibrarySeries(ctx, libStore, p)
+			if err != nil {
+				return err
+			}
+			return propStore.MarkApplied(ctx, p.ID, int(episodeID))
 		}
 		trackedID, err := rename.Apply(ctx, sess, p)
 		if trackedID != 0 {
@@ -137,8 +144,14 @@ func applyByWorkflow(ctx context.Context, propStore *proposals.Store, libStore *
 		}
 		return err
 	case proposals.Purge:
-		if p.Mode == mode.Movies {
+		switch p.Mode {
+		case mode.Movies:
 			if err := purge.ApplyLibrary(ctx, libStore, p); err != nil {
+				return err
+			}
+			return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
+		case mode.Series:
+			if err := purge.ApplyLibrarySeries(ctx, libStore, p); err != nil {
 				return err
 			}
 			return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
