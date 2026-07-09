@@ -78,6 +78,25 @@ each mode, driving the exact same API a script would. Functional, not
 polished — it's for exercising the real workflows against a real Radarr/
 Sonarr/Whisparr instance, not a finished design.
 
+Every install is gated behind three layers, most fundamental first, each
+hiding all navigation until it's satisfied: **login**, then the **connections
+setup wizard**, then the normal app. A fresh instance's very first screen is
+"Create your Tidyarr login" (`POST /api/auth/setup`, one username/password,
+bcrypt-hashed) — there is no unauthenticated path to anything else, since an
+unauthenticated Tidyarr could otherwise be used to control every connected
+service. `POST /api/auth/login` and `/logout` manage the session afterward;
+`GET /api/auth/status` reports `{configured, authenticated}`. The session
+itself is a stateless, AES-GCM-encrypted cookie (same key as connection
+secrets, see below) carrying only an expiry — 30-day TTL, `HttpOnly`,
+`SameSite=Lax`, deliberately not `Secure` since Tidyarr's primary deployment
+is plain HTTP on a LAN, same as Radarr/Sonarr/Whisparr themselves. Once
+logged in, the setup wizard walks through connecting Radarr (Movies) and
+Sonarr (Series) — required, since neither mode can do anything without its
+*arr app — plus Whisparr and an AI provider (both optional); "Continue to
+Tidyarr" stays disabled with an inline explanation until Radarr and Sonarr
+are both actually configured, so dismissing the wizard can never strand a
+user on a bare, useless Scan button.
+
 Secrets are encrypted at rest with a locally generated key
 (`<data-dir>/secret.key`, mode 0600) rather than an OS keychain — the
 primary deployment target is a headless Docker container, which has no

@@ -4,6 +4,7 @@ go 1.25.7
 
 require (
 	github.com/pressly/goose/v3 v3.27.2
+	golang.org/x/crypto v0.54.0
 	modernc.org/sqlite v1.53.0
 )
 
@@ -17,7 +18,7 @@ require (
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

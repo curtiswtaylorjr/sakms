@@ -52,6 +52,8 @@
   fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0 0 1rem; }
   legend { color: var(--muted); font-size: 0.85rem; padding: 0 0.4rem; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; align-items: end; }
+  form label { display: block; margin-bottom: 0.75rem; font-size: 0.9rem; }
+  form label input { margin-top: 0.25rem; }
   code { background: var(--bg); padding: 0.1rem 0.3rem; border-radius: 4px; }
 </style>
 </head>
@@ -60,9 +62,9 @@
   <h1>Tidyarr</h1>
   <div class="tabs" id="mode-tabs"></div>
   <div class="tabs" id="view-tabs" style="margin-left:auto"></div>
+  <div id="logout-slot"></div>
 </header>
 <main>
-  <div id="banner-slot"></div>
   <div id="view"></div>
 </main>
 <script>
@@ -86,6 +88,13 @@ const state = {
 
 async function api(path, opts) {
   const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    // The session expired or was never there — the safest recovery is to
+    // re-run boot() from scratch, which re-checks /api/auth/status and
+    // shows the login screen instead of a confusing inline error.
+    boot();
+    throw new Error("session expired");
+  }
   if (res.status === 204) return null;
   const isJSON = (res.headers.get("Content-Type") || "").includes("application/json");
   const body = isJSON ? await res.json() : await res.text();
@@ -135,21 +144,164 @@ function renderNav() {
       onclick: () => { state.view = v; render(); },
     }));
   }
+  const logoutSlot = document.getElementById("logout-slot");
+  logoutSlot.innerHTML = "";
+  logoutSlot.appendChild(el("button", { text: "Log out", onclick: async () => { await api("/api/auth/logout", { method: "POST" }); await boot(); } }));
 }
 
-// ---- Setup banner ----
+// ---- Connection controls (shared by Settings' table and the Setup Wizard) ----
 
-async function renderBanner() {
-  const slot = document.getElementById("banner-slot");
-  slot.innerHTML = "";
+// buildConnectionControls returns the live input/button elements for one
+// service's connection — Test, Save, and a status readout — without
+// assuming a particular layout, so both the Settings table (table cells)
+// and the Wizard (a plain row) can arrange them differently.
+function buildConnectionControls(service, existingConn, onSaved) {
+  const urlInput = el("input", { type: "text", value: existingConn ? existingConn.url : "", placeholder: "https://..." });
+  const keyPlaceholder = existingConn && existingConn.hasApiKey ? "unchanged (••••" + existingConn.keySuffix + ")" : "api key (if needed)";
+  const keyInput = el("input", { type: "password", placeholder: keyPlaceholder });
+  const status = el("span", { class: "muted" });
+
+  const testBtn = el("button", { text: "Test", onclick: async () => {
+    status.textContent = "testing…"; status.className = "muted";
+    try {
+      const result = await api("/api/connections/test", { method: "POST", body: JSON.stringify({ service, url: urlInput.value, apiKey: keyInput.value }) });
+      status.textContent = result.ok ? "✓ ok" : ("✗ " + result.error);
+      status.className = result.ok ? "muted" : "error";
+    } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+  } });
+  const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
+    try {
+      await api("/api/connections/" + service, { method: "PUT", body: JSON.stringify({ url: urlInput.value, apiKey: keyInput.value }) });
+      status.textContent = "✓ saved"; status.className = "muted";
+      if (onSaved) await onSaved();
+    } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+  } });
+  const deleteBtn = el("button", { class: "danger", text: "Delete", disabled: !existingConn, onclick: async () => {
+    if (!confirm("Remove the " + service + " connection?")) return;
+    try {
+      await api("/api/connections/" + service, { method: "DELETE" });
+      if (onSaved) await onSaved();
+    } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+  } });
+
+  return { urlInput, keyInput, testBtn, saveBtn, deleteBtn, status };
+}
+
+// ---- Setup Wizard ----
+// Walks through connecting Radarr/Sonarr (required for Movies/Series to do
+// anything at all), Whisparr and an AI provider (both optional — Adult and
+// AI-assisted features are opt-in), then hands off to the normal app. Shown
+// automatically until dismissed (see boot()); reachable afterward from
+// Settings' "Re-run setup wizard" link.
+
+const WIZARD_SERVICE_BY_MODE = { movies: "radarr", series: "sonarr", adult: "whisparr" };
+
+async function renderWizard(container) {
+  container.innerHTML = "";
+  container.appendChild(el("h2", { text: "Set up Tidyarr" }));
+  container.appendChild(el("p", { class: "muted", text: "Connect the services Tidyarr will review. Movies and Series need their *arr app's URL and API key (found in that app's Settings → General) to do anything at all — Whisparr (Adult) and an AI provider are optional." }));
+
+  let status, connections;
   try {
-    const status = await api("/api/setup/status");
-    if (status.dismissed || status.anyConfigured) return;
-    slot.appendChild(el("div", { class: "banner" }, [
-      el("span", { text: "Welcome to Tidyarr — head to Settings to connect Radarr, Sonarr, or Whisparr to get started." }),
-      el("button", { text: "Dismiss", onclick: async () => { await api("/api/setup/dismissed", { method: "PUT", body: JSON.stringify({ dismissed: true }) }); slot.innerHTML = ""; } }),
+    [status, connections] = await Promise.all([api("/api/setup/status"), api("/api/connections")]);
+  } catch (e) { container.appendChild(fmtErr(e)); return; }
+  const byService = {};
+  for (const c of connections) byService[c.service] = c;
+  const modeStatusByMode = {};
+  for (const ms of status.modes) modeStatusByMode[ms.mode] = ms;
+
+  let step = 1;
+  for (const m of ["movies", "series"]) {
+    const service = WIZARD_SERVICE_BY_MODE[m];
+    const configured = modeStatusByMode[m] && modeStatusByMode[m].arrConfigured;
+    container.appendChild(buildWizardStep(step++, MODE_LABELS[m] + " — connect " + service, false, configured, service, byService[service], container));
+  }
+  {
+    const configured = modeStatusByMode.adult && modeStatusByMode.adult.arrConfigured;
+    container.appendChild(buildWizardStep(step++, "Adult — connect whisparr", true, configured, "whisparr", byService.whisparr, container));
+  }
+  container.appendChild(await buildWizardAIStep(step++, byService, container));
+
+  // Movies and Series can't do anything at all without their *arr app, so
+  // "Continue to Tidyarr" stays disabled until both are actually configured
+  // — otherwise dismissing the wizard just lands on the same bare, useless
+  // Scan button the wizard exists to prevent, one step later.
+  const moviesConfigured = modeStatusByMode.movies && modeStatusByMode.movies.arrConfigured;
+  const seriesConfigured = modeStatusByMode.series && modeStatusByMode.series.arrConfigured;
+  const canContinue = moviesConfigured && seriesConfigured;
+
+  const footer = el("div", { class: "row", style: "margin-top:1rem" }, [
+    el("button", { class: "primary", text: "Continue to Tidyarr", disabled: !canContinue, onclick: async () => {
+      await api("/api/setup/dismissed", { method: "PUT", body: JSON.stringify({ dismissed: true }) });
+      await boot();
+    } }),
+    el("span", { class: canContinue ? "muted" : "error", text: canContinue
+      ? "You can revisit any of this later in Settings."
+      : "Connect Radarr (Movies) and Sonarr (Series) above to continue — Tidyarr can't review anything without them." }),
+  ]);
+  container.appendChild(footer);
+}
+
+function buildWizardStep(n, title, optional, configured, service, existingConn, wizardContainer) {
+  const fs = el("fieldset", {}, [
+    el("legend", { text: n + ". " + title + (optional ? " (optional)" : "") + (configured ? " ✓" : "") }),
+  ]);
+  const c = buildConnectionControls(service, existingConn, () => renderWizard(wizardContainer));
+  fs.appendChild(el("div", { class: "grid2" }, [
+    el("label", {}, [document.createTextNode("URL"), c.urlInput]),
+    el("label", {}, [document.createTextNode("API Key"), c.keyInput]),
+  ]));
+  fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [c.testBtn, c.saveBtn, c.status]));
+  return fs;
+}
+
+// buildWizardAIStep lets the wizard connect AND select whichever AI
+// provider right there (not a stub pointing at Settings) — same
+// ai-provider/ai-model settings Settings itself reads/writes, so nothing
+// done here needs redoing later.
+async function buildWizardAIStep(n, byService, wizardContainer) {
+  let provider = "ollama", model = "";
+  try { provider = (await api("/api/settings/ai-provider")).provider; } catch (e) {}
+  try { model = (await api("/api/settings/ai-model")).model; } catch (e) {}
+  const configured = !!byService[provider];
+
+  const fs = el("fieldset", {}, [
+    el("legend", { text: n + ". AI provider (optional) — powers Adult identification, the Movies/Series title-guess fallback, and Kids classification" + (configured && model ? " ✓" : "") }),
+  ]);
+
+  const providerSelect = el("select", {});
+  for (const p of AI_PROVIDERS) providerSelect.appendChild(el("option", { value: p, text: p, selected: p === provider ? "selected" : null }));
+  const modelInput = el("input", { type: "text", value: model, placeholder: "e.g. qwen2.5vl:7b, gpt-4o-mini, gemini-2.5-flash, claude-haiku-4-5" });
+  const modelStatus = el("span", { class: "muted" });
+  const saveModelBtn = el("button", { text: "Save provider + model", onclick: async () => {
+    try {
+      await api("/api/settings/ai-provider", { method: "PUT", body: JSON.stringify({ provider: providerSelect.value }) });
+      await api("/api/settings/ai-model", { method: "PUT", body: JSON.stringify({ model: modelInput.value }) });
+      modelStatus.textContent = "✓ saved"; modelStatus.className = "muted";
+    } catch (e) { modelStatus.textContent = "✗ " + e.message; modelStatus.className = "error"; }
+  } });
+
+  const connectionSlot = el("div");
+  function renderConnectionFields() {
+    connectionSlot.innerHTML = "";
+    const service = providerSelect.value;
+    const c = buildConnectionControls(service, byService[service], () => renderWizard(wizardContainer));
+    connectionSlot.appendChild(el("div", { class: "grid2", style: "margin-top:0.5rem" }, [
+      el("label", {}, [document.createTextNode("URL"), c.urlInput]),
+      el("label", {}, [document.createTextNode("API Key"), c.keyInput]),
     ]));
-  } catch (e) { /* non-critical */ }
+    connectionSlot.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [c.testBtn, c.saveBtn, c.status]));
+  }
+  providerSelect.addEventListener("change", renderConnectionFields);
+
+  fs.appendChild(el("div", { class: "grid2" }, [
+    el("label", {}, [document.createTextNode("Provider"), providerSelect]),
+    el("label", {}, [document.createTextNode("Model"), modelInput]),
+  ]));
+  fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveModelBtn, modelStatus]));
+  fs.appendChild(connectionSlot);
+  renderConnectionFields();
+  return fs;
 }
 
 // ---- Proposal helpers ----
@@ -385,6 +537,12 @@ const AI_PROVIDERS = ["ollama", "openai", "gemini", "anthropic"];
 async function renderSettings(container) {
   container.innerHTML = "";
   container.appendChild(el("h2", { text: "Settings" }));
+  container.appendChild(el("div", { class: "row" }, [
+    el("button", { text: "Re-run setup wizard", onclick: async () => {
+      await api("/api/setup/dismissed", { method: "PUT", body: JSON.stringify({ dismissed: false }) });
+      await boot();
+    } }),
+  ]));
   await renderConnections(container);
   await renderAISettings(container);
   await renderKidsRootPath(container);
@@ -402,38 +560,13 @@ async function renderConnections(container) {
   ]);
   const tbody = el("tbody");
   for (const service of CONNECTION_SERVICES) {
-    const existingConn = byService[service];
-    const urlInput = el("input", { type: "text", value: existingConn ? existingConn.url : "", placeholder: "https://..." });
-    const keyPlaceholder = existingConn && existingConn.hasApiKey ? "unchanged (••••" + existingConn.keySuffix + ")" : "api key (if needed)";
-    const keyInput = el("input", { type: "password", placeholder: keyPlaceholder });
-    const status = el("span", { class: "muted" });
-
-    const testBtn = el("button", { text: "Test", onclick: async () => {
-      status.textContent = "testing…";
-      try {
-        const result = await api("/api/connections/test", { method: "POST", body: JSON.stringify({ service, url: urlInput.value, apiKey: keyInput.value }) });
-        status.textContent = result.ok ? "✓ ok" : ("✗ " + result.error);
-        status.className = result.ok ? "muted" : "error";
-      } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
-    } });
-    const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
-      try {
-        await api("/api/connections/" + service, { method: "PUT", body: JSON.stringify({ url: urlInput.value, apiKey: keyInput.value }) });
-        await renderSettings(container);
-      } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
-    } });
-    const deleteBtn = el("button", { class: "danger", text: "Delete", disabled: !existingConn, onclick: async () => {
-      if (!confirm("Remove the " + service + " connection?")) return;
-      try { await api("/api/connections/" + service, { method: "DELETE" }); await renderSettings(container); }
-      catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
-    } });
-
+    const c = buildConnectionControls(service, byService[service], () => renderSettings(container));
     tbody.appendChild(el("tr", {}, [
       el("td", { text: service }),
-      el("td", {}, [urlInput]),
-      el("td", {}, [keyInput]),
-      el("td", {}, [testBtn, saveBtn, deleteBtn]),
-      el("td", {}, [status]),
+      el("td", {}, [c.urlInput]),
+      el("td", {}, [c.keyInput]),
+      el("td", {}, [c.testBtn, c.saveBtn, c.deleteBtn]),
+      el("td", {}, [c.status]),
     ]));
   }
   table.appendChild(tbody);
@@ -479,7 +612,17 @@ async function renderKidsRootPath(container) {
   let current = "";
   try { current = (await api("/api/modes/" + m + "/rename/kids-root-path")).path; } catch (e) {}
   let folders = [];
-  try { folders = await api("/api/modes/" + m + "/root-folders"); } catch (e) { fs.appendChild(fmtErr(e)); }
+  try {
+    folders = await api("/api/modes/" + m + "/root-folders");
+  } catch (e) {
+    // Root folders come from the mode's *arr app — nothing to classify into
+    // yet if it isn't connected. That's a normal, expected state on a fresh
+    // instance, not a failure, so it gets a quiet note instead of the red
+    // error box used for actual unexpected errors.
+    fs.appendChild(el("div", { class: "muted", text: "Connect " + WIZARD_SERVICE_BY_MODE[m] + " above to enable Kids classification." }));
+    container.appendChild(fs);
+    return;
+  }
 
   const enabled = el("input", { type: "checkbox" });
   enabled.checked = !!current;
@@ -504,6 +647,67 @@ async function renderKidsRootPath(container) {
   container.appendChild(fs);
 }
 
+// ---- Login gate ----
+// The very first thing boot() checks — before the connections Setup
+// Wizard, before anything else. An instance with no login yet shows
+// "Create your login"; one with a login but no valid session shows "Log
+// in". Both hide the nav entirely, same as the wizard, so there's no path
+// to a Scan button (or anything else) without getting through this first.
+
+function renderCredentialsGate(container, kind) {
+  container.innerHTML = "";
+  const isSetup = kind === "setup";
+  container.appendChild(el("h2", { text: isSetup ? "Create your Tidyarr login" : "Log in to Tidyarr" }));
+  if (isSetup) {
+    container.appendChild(el("p", { class: "muted", text: "This is the one login that protects this instance — anyone who can reach it can otherwise control every connected service. Pick a username and password now, before connecting anything." }));
+  }
+
+  const usernameInput = el("input", { type: "text", placeholder: "username", autocomplete: "username" });
+  const passwordInput = el("input", { type: "password", placeholder: "password", autocomplete: isSetup ? "new-password" : "current-password" });
+  const confirmInput = isSetup ? el("input", { type: "password", placeholder: "confirm password", autocomplete: "new-password" }) : null;
+  const status = el("div", { class: "error" });
+
+  const fields = [
+    el("label", {}, [document.createTextNode("Username"), usernameInput]),
+    el("label", {}, [document.createTextNode("Password"), passwordInput]),
+  ];
+  if (isSetup) fields.push(el("label", {}, [document.createTextNode("Confirm password"), confirmInput]));
+
+  const submit = async () => {
+    status.textContent = "";
+    if (isSetup && passwordInput.value !== confirmInput.value) {
+      status.textContent = "Passwords don't match.";
+      return;
+    }
+    if (!usernameInput.value || !passwordInput.value) {
+      status.textContent = "Username and password are both required.";
+      return;
+    }
+    try {
+      const res = await fetch(isSetup ? "/api/auth/setup" : "/api/auth/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: usernameInput.value, password: passwordInput.value }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        status.textContent = res.status === 401 ? "Invalid username or password." : (text || ("HTTP " + res.status));
+        return;
+      }
+      await boot();
+    } catch (e) { status.textContent = e.message; }
+  };
+
+  const form = el("form", { onsubmit: (e) => { e.preventDefault(); submit(); } }, [
+    ...fields,
+    el("div", { class: "row", style: "margin-top:0.75rem" }, [
+      el("button", { class: "primary", type: "submit", text: isSetup ? "Create login" : "Log in" }),
+    ]),
+    status,
+  ]);
+  form.style.maxWidth = "20rem";
+  container.appendChild(form);
+}
+
 // ---- Router ----
 
 const RENDERERS = { rename: renderRename, purge: renderPurge, dedup: renderDedup, tag: renderTag, settings: renderSettings };
@@ -516,8 +720,50 @@ async function render() {
   if (renderer) await renderer(view);
 }
 
-renderBanner();
-render();
+function hideNav() {
+  document.getElementById("mode-tabs").style.display = "none";
+  document.getElementById("view-tabs").style.display = "none";
+  document.getElementById("logout-slot").style.display = "none";
+}
+function showNav() {
+  document.getElementById("mode-tabs").style.display = "";
+  document.getElementById("view-tabs").style.display = "";
+  document.getElementById("logout-slot").style.display = "";
+}
+
+// boot is the single entry point for "what should be on screen right now,"
+// re-run after every login/setup/logout/wizard-dismiss transition. Order
+// matters: the login gate comes before the connections Setup Wizard comes
+// before the normal app — each one hides the nav entirely so there's no way
+// to land on a bare Scan button before getting through the ones before it.
+async function boot() {
+  let authStatus = null;
+  try { authStatus = await api("/api/auth/status"); } catch (e) { /* fall through */ }
+
+  if (authStatus && !authStatus.configured) {
+    hideNav();
+    renderCredentialsGate(document.getElementById("view"), "setup");
+    return;
+  }
+  if (authStatus && !authStatus.authenticated) {
+    hideNav();
+    renderCredentialsGate(document.getElementById("view"), "login");
+    return;
+  }
+
+  let setupStatus = null;
+  try { setupStatus = await api("/api/setup/status"); } catch (e) { /* fall through to the normal app if this fails */ }
+
+  if (setupStatus && !setupStatus.dismissed) {
+    hideNav();
+    await renderWizard(document.getElementById("view"));
+    return;
+  }
+  showNav();
+  await render();
+}
+
+boot();
 </script>
 </body>
 </html>

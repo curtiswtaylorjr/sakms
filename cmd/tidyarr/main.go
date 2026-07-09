@@ -13,6 +13,7 @@ import (
 
 	"github.com/curtiswtaylorjr/tidyarr/internal/allowlist"
 	"github.com/curtiswtaylorjr/tidyarr/internal/api"
+	"github.com/curtiswtaylorjr/tidyarr/internal/auth"
 	"github.com/curtiswtaylorjr/tidyarr/internal/config"
 	"github.com/curtiswtaylorjr/tidyarr/internal/connections"
 	"github.com/curtiswtaylorjr/tidyarr/internal/db"
@@ -59,17 +60,30 @@ func run() error {
 	allowStore := allowlist.New(sqlDB)
 	prober := mediainfo.New()
 	settingsStore := settings.New(sqlDB)
+	authStore := auth.New(settingsStore)
 
-	mux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, settingsStore)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	// Every review-workflow route requires a valid session; login/setup/
+	// logout/status live on their own always-public mux instead of an
+	// exemption list on this one (see internal/api.NewAuthMux's doc
+	// comment) — NewMux itself stays exactly as it's always been, unaware
+	// auth exists, so its own large test suite never had to change.
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, settingsStore)
+	protectedAPI := auth.Middleware(secretStore, apiMux)
+
+	top := http.NewServeMux()
+	top.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
+	top.Handle("/api/auth/", api.NewAuthMux(authStore, secretStore))
+	top.Handle("/api/", protectedAPI)
 	// The frontend is mounted last and matches only what no /api/... route
 	// already claimed — Go's ServeMux picks the most specific pattern, so
-	// this never shadows a real API route.
-	mux.Handle("/", web.Handler())
+	// this never shadows a real API route. It's deliberately NOT behind
+	// auth.Middleware: it's static code with no data in it, and the login
+	// screen itself has to load before any session exists to check.
+	top.Handle("/", web.Handler())
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: mux}
+	srv := &http.Server{Addr: cfg.Addr, Handler: top}
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
