@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.25-trixie AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Debian, not Alpine: ffmpeg's Debian package is the more predictable ffprobe
 # build, and CGO is off anyway (modernc.org/sqlite is pure Go), so there's no
 # musl-vs-glibc tradeoff to weigh here.
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \

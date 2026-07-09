@@ -139,8 +139,8 @@ Configuration is via environment variables for now:
 
 ### Docker
 
-A `Dockerfile` builds a Debian-based image (multi-stage: `golang:bookworm` to
-compile, `debian:bookworm-slim` plus `ffmpeg` to run — `ffprobe` needs a real
+A `Dockerfile` builds a Debian-based image (multi-stage: `golang:trixie` to
+compile, `debian:trixie-slim` plus `ffmpeg` to run — `ffprobe` needs a real
 build, not Alpine's, and there's no CGO to make musl-vs-glibc a tradeoff
 either way). The container starts as root only long enough for
 `docker-entrypoint.sh` to `chown` a bind-mounted `/data` to the image's
