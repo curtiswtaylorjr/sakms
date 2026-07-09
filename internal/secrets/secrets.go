@@ -24,8 +24,8 @@ const keySize = 32 // AES-256
 // (mode 0600) if the file doesn't exist yet.
 //
 // The key is only as safe as this file's permissions and wherever it ends
-// up backed up — a sak.db backup without the matching key file is just
-// ciphertext, and a key file backed up separately from sak.db defeats
+// up backed up — a sakms.db backup without the matching key file is just
+// ciphertext, and a key file backed up separately from sakms.db defeats
 // the point. They travel together.
 func LoadOrCreateKey(path string) ([]byte, error) {
 	key, err := os.ReadFile(path)

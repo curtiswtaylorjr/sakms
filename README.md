@@ -124,7 +124,7 @@ Requires Go 1.25+, plus `ffprobe` on `PATH` if you want to exercise Dedup
 workflow runs without it.
 
 ```sh
-go run ./cmd/sak
+go run ./cmd/sakms
 ```
 
 Then open `http://localhost:8080/` for the UI (the API itself lives under
@@ -134,8 +134,8 @@ Configuration is via environment variables for now:
 
 | Variable           | Default   | Purpose                          |
 |---------------------|-----------|-----------------------------------|
-| `SAK_ADDR`      | `:8080`   | HTTP listen address               |
-| `SAK_DATA_DIR`  | `./data`  | Where `sak.db` and `secret.key` live — back both up together, or a backup of one without the other is useless |
+| `SAKMS_ADDR`      | `:8080`   | HTTP listen address               |
+| `SAKMS_DATA_DIR`  | `./data`  | Where `sakms.db` and `secret.key` live — back both up together, or a backup of one without the other is useless |
 
 ### Docker
 
@@ -144,9 +144,9 @@ compile, `debian:trixie-slim` plus `ffmpeg` to run — `ffprobe` needs a real
 build, not Alpine's, and there's no CGO to make musl-vs-glibc a tradeoff
 either way). The container starts as root only long enough for
 `docker-entrypoint.sh` to `chown` a bind-mounted `/data` to the image's
-non-root `sak` user, then drops to it via `gosu` — without that, a plain
+non-root `sakms` user, then drops to it via `gosu` — without that, a plain
 `docker run -v host/path:/data` fails on first boot, since sqlite can't
-create `sak.db` in a directory owned by whatever host user made the
+create `sakms.db` in a directory owned by whatever host user made the
 mount point.
 
 `scripts/docker-dev.sh` wraps the build-run-check loop into one command for

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
 type aiModelResponse struct {

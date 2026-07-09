@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/curtiswtaylorjr/sak/internal/httpx"
+	"github.com/curtiswtaylorjr/sakms/internal/httpx"
 )
 
 // App distinguishes Sonarr, Radarr, and Whisparr for the handful of

@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/curtiswtaylorjr/sak/internal/allowlist"
-	"github.com/curtiswtaylorjr/sak/internal/connections"
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
-	"github.com/curtiswtaylorjr/sak/internal/purge"
-	"github.com/curtiswtaylorjr/sak/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/allowlist"
+	"github.com/curtiswtaylorjr/sakms/internal/connections"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/purge"
+	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
 // purgeScanHandler runs the Purge workflow's propose-phase for {mode}:

@@ -8,8 +8,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/bravesearch"
-	"github.com/curtiswtaylorjr/sak/internal/throttle"
+	"github.com/curtiswtaylorjr/sakms/internal/bravesearch"
+	"github.com/curtiswtaylorjr/sakms/internal/throttle"
 )
 
 type Identifier struct {

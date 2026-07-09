@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/curtiswtaylorjr/sak/internal/bravesearch"
-	"github.com/curtiswtaylorjr/sak/internal/ollama"
-	"github.com/curtiswtaylorjr/sak/internal/servarr"
-	"github.com/curtiswtaylorjr/sak/internal/stashapi"
-	"github.com/curtiswtaylorjr/sak/internal/stashbox"
-	"github.com/curtiswtaylorjr/sak/internal/tpdbrest"
+	"github.com/curtiswtaylorjr/sakms/internal/bravesearch"
+	"github.com/curtiswtaylorjr/sakms/internal/ollama"
+	"github.com/curtiswtaylorjr/sakms/internal/servarr"
+	"github.com/curtiswtaylorjr/sakms/internal/stashapi"
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
+	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
 )
 
 // ConnectionTestRequest is enough to construct a client and make one real,

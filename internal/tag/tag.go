@@ -25,8 +25,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/servarr"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/servarr"
 )
 
 // Vocabulary returns every tag sess's app currently has defined — the

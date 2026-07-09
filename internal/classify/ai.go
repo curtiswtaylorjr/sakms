@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/curtiswtaylorjr/sak/internal/identify"
+	"github.com/curtiswtaylorjr/sakms/internal/identify"
 )
 
 // WithAI asks the configured AI provider whether title/overview describes

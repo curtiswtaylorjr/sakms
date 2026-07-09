@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
 // MatchesAny reports whether tagName exactly matches (case-insensitive) any

@@ -1,4 +1,4 @@
-module github.com/curtiswtaylorjr/sak
+module github.com/curtiswtaylorjr/sakms
 
 go 1.25.7
 

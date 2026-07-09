@@ -10,8 +10,8 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-IMAGE_TAG="${IMAGE_TAG:-sak:dev}"
-CONTAINER_NAME="${CONTAINER_NAME:-sak-dev}"
+IMAGE_TAG="${IMAGE_TAG:-sakms:dev}"
+CONTAINER_NAME="${CONTAINER_NAME:-sakms-dev}"
 HOST_PORT="${HOST_PORT:-8080}"
 DATA_DIR="${DATA_DIR:-$(pwd)/.dockerdata}"
 HEALTH_URL="http://localhost:${HOST_PORT}/healthz"

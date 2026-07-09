@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/curtiswtaylorjr/sak/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
 const (

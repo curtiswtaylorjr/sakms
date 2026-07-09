@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/mediainfo"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
 func writeTestVideoFile(t *testing.T, dir, name string, size int) string {

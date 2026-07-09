@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/curtiswtaylorjr/sak/internal/stashbox"
-	"github.com/curtiswtaylorjr/sak/internal/tpdbrest"
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
+	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
 )
 
 func TestIsFansiteHinted(t *testing.T) {

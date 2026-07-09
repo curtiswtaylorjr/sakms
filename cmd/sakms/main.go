@@ -1,4 +1,4 @@
-// Command sak runs the SAK server.
+// Command sakms runs the SAK server.
 package main
 
 import (
@@ -11,17 +11,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/curtiswtaylorjr/sak/internal/allowlist"
-	"github.com/curtiswtaylorjr/sak/internal/api"
-	"github.com/curtiswtaylorjr/sak/internal/auth"
-	"github.com/curtiswtaylorjr/sak/internal/config"
-	"github.com/curtiswtaylorjr/sak/internal/connections"
-	"github.com/curtiswtaylorjr/sak/internal/db"
-	"github.com/curtiswtaylorjr/sak/internal/mediainfo"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
-	"github.com/curtiswtaylorjr/sak/internal/secrets"
-	"github.com/curtiswtaylorjr/sak/internal/settings"
-	"github.com/curtiswtaylorjr/sak/internal/web"
+	"github.com/curtiswtaylorjr/sakms/internal/allowlist"
+	"github.com/curtiswtaylorjr/sakms/internal/api"
+	"github.com/curtiswtaylorjr/sakms/internal/auth"
+	"github.com/curtiswtaylorjr/sakms/internal/config"
+	"github.com/curtiswtaylorjr/sakms/internal/connections"
+	"github.com/curtiswtaylorjr/sakms/internal/db"
+	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/secrets"
+	"github.com/curtiswtaylorjr/sakms/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/web"
 )
 
 // outboundTimeout bounds every call SAK makes to a configured service
@@ -41,7 +41,7 @@ func run() error {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return err
 	}
-	sqlDB, err := db.Open(filepath.Join(cfg.DataDir, "sak.db"))
+	sqlDB, err := db.Open(filepath.Join(cfg.DataDir, "sakms.db"))
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	log.Printf("sak listening on %s (data dir %s)", cfg.Addr, cfg.DataDir)
+	log.Printf("sakms listening on %s (data dir %s)", cfg.Addr, cfg.DataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

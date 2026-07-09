@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/db"
-	"github.com/curtiswtaylorjr/sak/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/db"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
 )
 
 // newTestStore builds a Store against a real, freshly migrated SQLite file —
@@ -15,7 +15,7 @@ import (
 // this repo.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sak.db"))
+	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sakms.db"))
 	if err != nil {
 		t.Fatalf("opening db: %v", err)
 	}

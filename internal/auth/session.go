@@ -8,7 +8,7 @@ import (
 
 // CookieName is the session cookie the browser carries on every request
 // after a successful login/setup.
-const CookieName = "sak_session"
+const CookieName = "sakms_session"
 
 // sessionTTL is long-lived on purpose: SAK is a single-operator,
 // self-hosted tool where a forced re-login every few hours is friction with

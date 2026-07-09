@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/auth"
-	"github.com/curtiswtaylorjr/sak/internal/db"
-	"github.com/curtiswtaylorjr/sak/internal/secrets"
-	"github.com/curtiswtaylorjr/sak/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/auth"
+	"github.com/curtiswtaylorjr/sakms/internal/db"
+	"github.com/curtiswtaylorjr/sakms/internal/secrets"
+	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
 func testAuthStore(t *testing.T) (*auth.Store, *secrets.Store) {
 	t.Helper()
-	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sak.db"))
+	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sakms.db"))
 	if err != nil {
 		t.Fatalf("opening db: %v", err)
 	}

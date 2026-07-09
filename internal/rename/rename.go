@@ -16,14 +16,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/classify"
-	"github.com/curtiswtaylorjr/sak/internal/config"
-	"github.com/curtiswtaylorjr/sak/internal/identify"
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/place"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
-	"github.com/curtiswtaylorjr/sak/internal/searchterm"
-	"github.com/curtiswtaylorjr/sak/internal/servarr"
+	"github.com/curtiswtaylorjr/sakms/internal/classify"
+	"github.com/curtiswtaylorjr/sakms/internal/config"
+	"github.com/curtiswtaylorjr/sakms/internal/identify"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/place"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/searchterm"
+	"github.com/curtiswtaylorjr/sakms/internal/servarr"
 )
 
 // Scan walks every root folder sess's Servarr app currently reports and

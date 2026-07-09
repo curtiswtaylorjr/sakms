@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/allowlist"
-	"github.com/curtiswtaylorjr/sak/internal/connections"
-	"github.com/curtiswtaylorjr/sak/internal/db"
-	"github.com/curtiswtaylorjr/sak/internal/mediainfo"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
-	"github.com/curtiswtaylorjr/sak/internal/secrets"
-	"github.com/curtiswtaylorjr/sak/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/allowlist"
+	"github.com/curtiswtaylorjr/sakms/internal/connections"
+	"github.com/curtiswtaylorjr/sakms/internal/db"
+	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/secrets"
+	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
 // testProber returns a real *mediainfo.Prober — its Probe method is only
@@ -31,7 +31,7 @@ func testProber(t *testing.T) *mediainfo.Prober {
 // handler tests exercise the real stack, not a mock.
 func testStores(t *testing.T) (*connections.Store, *proposals.Store, *allowlist.Store, *settings.Store) {
 	t.Helper()
-	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sak.db"))
+	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sakms.db"))
 	if err != nil {
 		t.Fatalf("opening db: %v", err)
 	}
@@ -48,7 +48,7 @@ func testStores(t *testing.T) (*connections.Store, *proposals.Store, *allowlist.
 // which itself makes a real HTTP call out to the configured service (here, a
 // second httptest server standing in for a live Radarr) and reports back
 // over JSON. This is the thing actually wiring identify/servarr/ollama/
-// stashapi into cmd/sak is meant to prove works, not just that each
+// stashapi into cmd/sakms is meant to prove works, not just that each
 // package compiles in isolation.
 func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
 	fakeRadarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

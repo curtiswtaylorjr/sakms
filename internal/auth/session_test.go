@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/secrets"
+	"github.com/curtiswtaylorjr/sakms/internal/secrets"
 )
 
 func testEncryptor(t *testing.T) *secrets.Store {

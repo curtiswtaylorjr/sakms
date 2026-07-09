@@ -4,8 +4,8 @@ import (
 	"context"
 	"regexp"
 
-	"github.com/curtiswtaylorjr/sak/internal/stashbox"
-	"github.com/curtiswtaylorjr/sak/internal/tpdbrest"
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
+	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
 )
 
 // fansiteHintRe: FansDB's text search is only worth consulting for fansite

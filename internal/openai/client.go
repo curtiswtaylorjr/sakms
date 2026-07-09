@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/curtiswtaylorjr/sak/internal/httpx"
+	"github.com/curtiswtaylorjr/sakms/internal/httpx"
 )
 
 // Client talks to OpenAI's /chat/completions endpoint. baseURL is caller-

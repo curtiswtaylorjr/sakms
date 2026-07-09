@@ -5,12 +5,12 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/curtiswtaylorjr/sak/internal/auth"
+	"github.com/curtiswtaylorjr/sakms/internal/auth"
 )
 
 // NewAuthMux returns the handful of routes that must stay reachable without
 // a session — setup, login, logout, and status — kept on their OWN mux,
-// deliberately separate from NewMux's business-logic routes. cmd/sak
+// deliberately separate from NewMux's business-logic routes. cmd/sakms
 // wraps NewMux's result in auth.Middleware but mounts this one unwrapped;
 // keeping them apart means that middleware never needs an exemption list,
 // and NewMux's own large existing test suite never has to know auth exists

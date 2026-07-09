@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/curtiswtaylorjr/sak/internal/bravesearch"
-	"github.com/curtiswtaylorjr/sak/internal/ollama"
-	"github.com/curtiswtaylorjr/sak/internal/stashbox"
-	"github.com/curtiswtaylorjr/sak/internal/throttle"
-	"github.com/curtiswtaylorjr/sak/internal/tpdbrest"
+	"github.com/curtiswtaylorjr/sakms/internal/bravesearch"
+	"github.com/curtiswtaylorjr/sakms/internal/ollama"
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
+	"github.com/curtiswtaylorjr/sakms/internal/throttle"
+	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
 )
 
 // testEnv wires up an Identifier with fake servers standing in for every

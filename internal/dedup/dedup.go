@@ -26,14 +26,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/config"
-	"github.com/curtiswtaylorjr/sak/internal/identify"
-	"github.com/curtiswtaylorjr/sak/internal/mediainfo"
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/place"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
-	"github.com/curtiswtaylorjr/sak/internal/searchterm"
-	"github.com/curtiswtaylorjr/sak/internal/servarr"
+	"github.com/curtiswtaylorjr/sakms/internal/config"
+	"github.com/curtiswtaylorjr/sakms/internal/identify"
+	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/place"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/searchterm"
+	"github.com/curtiswtaylorjr/sakms/internal/servarr"
 )
 
 // Prober is the subset of *mediainfo.Prober Scan needs — an interface so
@@ -236,7 +236,7 @@ func scanMovies(ctx context.Context, sess *mode.Session, prober Prober) ([]propo
 // sess.Identify, independent of any Whisparr response) — no crash, no misgroup,
 // no misfile. This is an UNVERIFIED assumption (no live Whisparr here); see the
 // commit body. Deliberately not logged: no internal/* package in this codebase
-// logs directly (only cmd/sak/main.go does).
+// logs directly (only cmd/sakms/main.go does).
 func scanAdult(ctx context.Context, sess *mode.Session, prober Prober) ([]proposals.Proposal, error) {
 	client := sess.Servarr
 

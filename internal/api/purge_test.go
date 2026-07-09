@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
 // fakeRadarrTagsHandler serves just enough of Radarr's API for a Purge Scan

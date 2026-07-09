@@ -10,13 +10,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/identify"
-	"github.com/curtiswtaylorjr/sak/internal/mediainfo"
-	"github.com/curtiswtaylorjr/sak/internal/mode"
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
-	"github.com/curtiswtaylorjr/sak/internal/servarr"
-	"github.com/curtiswtaylorjr/sak/internal/stashbox"
-	"github.com/curtiswtaylorjr/sak/internal/throttle"
+	"github.com/curtiswtaylorjr/sakms/internal/identify"
+	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/servarr"
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
+	"github.com/curtiswtaylorjr/sakms/internal/throttle"
 )
 
 // fakeProber maps a video file path to a canned mediainfo.Probe result, so

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/ollama"
+	"github.com/curtiswtaylorjr/sakms/internal/ollama"
 )
 
 // ParsedFilename is the result of asking the local LLM to extract metadata

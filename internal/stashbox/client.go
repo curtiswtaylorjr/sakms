@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/curtiswtaylorjr/sak/internal/httpx"
+	"github.com/curtiswtaylorjr/sakms/internal/httpx"
 )
 
 // Config parameterizes the client per stash-box instance.

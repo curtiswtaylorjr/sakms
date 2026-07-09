@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/curtiswtaylorjr/sak/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
 // fakeRadarrHandler serves just enough of Radarr's API for a Scan followed
