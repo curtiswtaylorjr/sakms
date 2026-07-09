@@ -14,8 +14,10 @@ package purge
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
@@ -107,4 +109,62 @@ func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal) error 
 		return fmt.Errorf("deleting %q (tracked id %d): %w", p.Title, p.TrackedID, err)
 	}
 	return nil
+}
+
+// ScanLibrary is Purge's Movies-library counterpart to Scan — used only for
+// Movies mode now that Radarr no longer sits between SAK and this mode's
+// item/tag data (see internal/library's package doc). Matches libStore's
+// own local tags against allowlist using the exact same MatchesAny rule.
+func ScanLibrary(ctx context.Context, libStore *library.Store, allowlist []string) ([]proposals.Proposal, error) {
+	items, err := libStore.List(ctx, mode.Movies)
+	if err != nil {
+		return nil, fmt.Errorf("loading library items: %w", err)
+	}
+
+	var out []proposals.Proposal
+	for _, item := range items {
+		tags, err := libStore.Tags(ctx, item.ID)
+		if err != nil {
+			return nil, fmt.Errorf("loading tags for %q: %w", item.Title, err)
+		}
+		var matched []string
+		for _, tag := range tags {
+			matched = append(matched, MatchedEntries(tag, allowlist)...)
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		out = append(out, proposals.Proposal{
+			Mode: mode.Movies, Workflow: proposals.Purge, Status: proposals.Pending,
+			SourceName: item.Title, SourcePath: item.FilePath, RootFolderPath: item.RootFolderPath,
+			Title: item.Title, TMDBID: item.TMDBID, TrackedID: int(item.ID),
+			Reason: fmt.Sprintf("matched allowlist tag(s): %s", strings.Join(matched, ", ")),
+		})
+	}
+	return out, nil
+}
+
+// ApplyLibrary is Purge's Movies-library counterpart to Apply — removes the
+// library item's file directly (no *arr app to ask) and deletes its record
+// from libStore. p must be Pending and carry a TrackedID from ScanLibrary
+// (the library item's own id, following the same field convention Scan
+// already established for the Servarr-backed path).
+func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Proposal) error {
+	if p.Status != proposals.Pending {
+		return fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+	}
+	if p.TrackedID == 0 {
+		return fmt.Errorf("proposal %d has no library item id to delete", p.ID)
+	}
+
+	item, err := libStore.Get(ctx, int64(p.TrackedID))
+	if err != nil {
+		return fmt.Errorf("loading library item %d: %w", p.TrackedID, err)
+	}
+	if item.FilePath != "" {
+		if err := os.Remove(item.FilePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("deleting %q: %w", item.FilePath, err)
+		}
+	}
+	return libStore.Delete(ctx, int64(p.TrackedID))
 }

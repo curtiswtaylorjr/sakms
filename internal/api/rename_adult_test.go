@@ -86,7 +86,7 @@ func TestAdultRenameWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 	}))
 	defer fakeOllama.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	for _, c := range []struct{ service, url string }{
 		{"whisparr", fakeWhisparr.URL},
@@ -102,7 +102,7 @@ func TestAdultRenameWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		t.Fatalf("seeding ollama model: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Scan → one Pending proposal carrying the scene identifiers.

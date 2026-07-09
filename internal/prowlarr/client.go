@@ -71,6 +71,12 @@ type Release struct {
 	DownloadURL string   `json:"downloadUrl"`
 	PublishDate string   `json:"publishDate"`
 	Categories  []int    `json:"categories"`
+	// IndexerFlags is Prowlarr's per-result indexer metadata (e.g.
+	// "freeleech", "internal") — used by release.ScoreCandidate as the one
+	// "reputation" signal this project sources, no additional lookup. Like
+	// the rest of this client's shape, this field is modeled on Prowlarr's
+	// documented API and has NOT been confirmed against a real instance.
+	IndexerFlags []string `json:"indexerFlags"`
 }
 
 // releaseResource is the raw shape Prowlarr's /api/v1/search returns —
@@ -89,6 +95,7 @@ type releaseResource struct {
 	Categories  []struct {
 		ID int `json:"id"`
 	} `json:"categories"`
+	IndexerFlags []string `json:"indexerFlags"`
 }
 
 // Search queries every indexer Prowlarr has configured for query, restricted
@@ -120,15 +127,16 @@ func (c *Client) Search(ctx context.Context, query string, categories []int) ([]
 			cats[j] = cat.ID
 		}
 		out[i] = Release{
-			GUID:        r.GUID,
-			Title:       r.Title,
-			Indexer:     r.Indexer,
-			Protocol:    Protocol(strings.ToLower(r.Protocol)),
-			Size:        r.Size,
-			Seeders:     r.Seeders,
-			DownloadURL: r.DownloadURL,
-			PublishDate: r.PublishDate,
-			Categories:  cats,
+			GUID:         r.GUID,
+			Title:        r.Title,
+			Indexer:      r.Indexer,
+			Protocol:     Protocol(strings.ToLower(r.Protocol)),
+			Size:         r.Size,
+			Seeders:      r.Seeders,
+			DownloadURL:  r.DownloadURL,
+			PublishDate:  r.PublishDate,
+			Categories:   cats,
+			IndexerFlags: r.IndexerFlags,
 		}
 	}
 	return out, nil

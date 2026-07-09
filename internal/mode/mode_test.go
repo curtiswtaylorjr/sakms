@@ -35,22 +35,22 @@ func newTestStores(t *testing.T) (*connections.Store, *settings.Store) {
 	return connections.New(sqlDB, secretStore), settings.New(sqlDB)
 }
 
-func TestBuild_MoviesUsesRadarrConnection(t *testing.T) {
+// TestBuild_Movies_NoServarrConnectionRequired proves Movies builds a
+// working session with ZERO connections configured — SAK owns its own
+// Movies library instead of proxying Radarr, so there's no "radarr isn't
+// configured yet" error to hit anymore (see Build's doc comment).
+func TestBuild_Movies_NoServarrConnectionRequired(t *testing.T) {
 	store, settingsStore := newTestStores(t)
-	ctx := context.Background()
-	if err := store.Upsert(ctx, "radarr", "http://radarr.local:7878", "radarr-key"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	sess, err := Build(ctx, store, settingsStore, &http.Client{Timeout: time.Second}, Movies)
+	sess, err := Build(context.Background(), store, settingsStore, &http.Client{Timeout: time.Second}, Movies)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sess.Mode != Movies {
 		t.Errorf("expected Mode to be Movies, got %v", sess.Mode)
 	}
-	if sess.Servarr.AppType() != servarr.Radarr {
-		t.Errorf("expected the Radarr app type, got %v", sess.Servarr.AppType())
+	if sess.Servarr != nil {
+		t.Errorf("expected a nil Servarr client for Movies, got %+v", sess.Servarr)
 	}
 	if sess.Identify != nil {
 		t.Error("expected Identify to be nil for a Movies session")
@@ -78,8 +78,8 @@ func TestBuild_SeriesUsesSonarrConnection(t *testing.T) {
 
 func TestBuild_MissingConnection(t *testing.T) {
 	store, settingsStore := newTestStores(t)
-	if _, err := Build(context.Background(), store, settingsStore, &http.Client{}, Movies); err == nil {
-		t.Fatal("expected an error when radarr isn't configured yet")
+	if _, err := Build(context.Background(), store, settingsStore, &http.Client{}, Series); err == nil {
+		t.Fatal("expected an error when sonarr isn't configured yet")
 	}
 }
 

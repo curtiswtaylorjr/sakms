@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/rename"
@@ -66,8 +67,10 @@ func putKidsRootPathHandler(settingsStore *settings.Store) http.HandlerFunc {
 
 // renameScanHandler runs the Rename workflow's propose-phase for {mode} and
 // replaces that mode's live Rename queue with the result — the HTTP
-// equivalent of the top bar's Scan button.
-func renameScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store) http.HandlerFunc {
+// equivalent of the top bar's Scan button. Movies dispatches to
+// rename.ScanLibrary (libStore, no Radarr involved); Series/Adult use the
+// existing Servarr-backed rename.Scan, unchanged.
+func renameScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
 		ctx := r.Context()
@@ -78,7 +81,17 @@ func renameScanHandler(httpClient *http.Client, connStore *connections.Store, se
 			return
 		}
 
-		found, err := rename.Scan(ctx, sess)
+		var found []proposals.Proposal
+		if m == mode.Movies {
+			rootPath, rpErr := settingsStore.Get(ctx, moviesLibraryRootFolderKey)
+			if rpErr != nil && !errors.Is(rpErr, settings.ErrNotFound) {
+				http.Error(w, rpErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			found, err = rename.ScanLibrary(ctx, sess, libStore, rootPath)
+		} else {
+			found, err = rename.Scan(ctx, sess)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

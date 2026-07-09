@@ -69,7 +69,7 @@ func buildSetupStatus(ctx context.Context, connStore *connections.Store, allowSt
 	var status setupStatus
 
 	for _, m := range append(append([]mode.Mode{}, wizardModes...), mode.Adult) {
-		ms, err := modeStatusFor(ctx, m, connStore, allowStore)
+		ms, err := modeStatusFor(ctx, m, connStore, allowStore, settingsStore)
 		if err != nil {
 			return setupStatus{}, err
 		}
@@ -102,15 +102,28 @@ func buildSetupStatus(ctx context.Context, connStore *connections.Store, allowSt
 	return status, nil
 }
 
-func modeStatusFor(ctx context.Context, m mode.Mode, connStore *connections.Store, allowStore *allowlist.Store) (modeStatus, error) {
-	service := "radarr"
+// modeStatusFor reports whether m is ready to use. Movies has no *arr
+// connection to check anymore — it's "configured" once its library root
+// folder setting is populated instead (see internal/library's package
+// doc); Series/Adult still check their Sonarr/Whisparr connection,
+// unchanged. The field stays named ArrConfigured for both cases (the
+// wizard's "is this mode ready" signal), even though Movies' check isn't
+// really an *arr connection anymore.
+func modeStatusFor(ctx context.Context, m mode.Mode, connStore *connections.Store, allowStore *allowlist.Store, settingsStore *settings.Store) (modeStatus, error) {
+	var arrConfigured bool
+	var err error
 	switch m {
+	case mode.Movies:
+		rootPath, getErr := settingsStore.Get(ctx, moviesLibraryRootFolderKey)
+		if getErr != nil && !errors.Is(getErr, settings.ErrNotFound) {
+			return modeStatus{}, getErr
+		}
+		arrConfigured = rootPath != ""
 	case mode.Series:
-		service = "sonarr"
+		arrConfigured, err = connectionExists(ctx, connStore, "sonarr")
 	case mode.Adult:
-		service = "whisparr"
+		arrConfigured, err = connectionExists(ctx, connStore, "whisparr")
 	}
-	arrConfigured, err := connectionExists(ctx, connStore, service)
 	if err != nil {
 		return modeStatus{}, err
 	}

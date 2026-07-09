@@ -1,0 +1,247 @@
+package dedup
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/curtiswtaylorjr/sakms/internal/db"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
+	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/proposals"
+	"github.com/curtiswtaylorjr/sakms/internal/tmdb"
+)
+
+func newTestLibraryStore(t *testing.T) *library.Store {
+	t.Helper()
+	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sakms.db"))
+	if err != nil {
+		t.Fatalf("opening db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	return library.New(sqlDB)
+}
+
+func fakeTMDBSearch(t *testing.T, results map[string]string) *tmdb.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		term := r.URL.Query().Get("query")
+		body, ok := results[term]
+		if !ok {
+			t.Fatalf("unexpected search term %q", term)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return tmdb.New(tmdb.Config{BaseURL: srv.URL, APIKey: "test-key"}, srv.Client())
+}
+
+func TestScanLibrary_RequiresTMDBConfigured(t *testing.T) {
+	sess := &mode.Session{Mode: mode.Movies}
+	if _, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), t.TempDir(), &fakeProber{}); err == nil {
+		t.Fatal("expected an error when TMDB isn't configured")
+	}
+}
+
+func TestScanLibrary_RequiresRootFolderPath(t *testing.T) {
+	sess := &mode.Session{Mode: mode.Movies, TMDB: fakeTMDBSearch(t, nil)}
+	if _, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), "", &fakeProber{}); err == nil {
+		t.Fatal("expected an error when no root folder path is configured")
+	}
+}
+
+func TestScanLibrary_TrackedItemPlusOrphan_ProposesWithCorrectWinner(t *testing.T) {
+	dir := t.TempDir()
+	trackedDir := filepath.Join(dir, "Some Movie (2020)")
+	orphanDir := filepath.Join(dir, "Some.Movie.2020.1080p.BluRay.x264-GROUP")
+	trackedFile := writeVideoFile(t, trackedDir, "movie.mkv", 100)
+	orphanFile := writeVideoFile(t, orphanDir, "movie.mkv", 100)
+
+	libStore := newTestLibraryStore(t)
+	tracked, err := libStore.Upsert(context.Background(), library.Item{
+		Mode: mode.Movies, TMDBID: 42, Title: "Some Movie", FilePath: trackedFile, RootFolderPath: dir,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sess := &mode.Session{Mode: mode.Movies, TMDB: fakeTMDBSearch(t, map[string]string{
+		"Some Movie 2020": `{"results":[{"id":42,"title":"Some Movie"}]}`,
+	})}
+	prober := &fakeProber{byPath: map[string]*mediainfo.Probe{
+		trackedFile: {CodecName: "h264", Width: 1280, Height: 720, BitRate: 3000},
+		orphanFile:  {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
+	}}
+
+	got, err := ScanLibrary(context.Background(), sess, libStore, dir, prober)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 duplicate group, got %d: %+v", len(got), got)
+	}
+	p := got[0]
+	if p.Status != proposals.Pending || p.TMDBID != 42 || len(p.Candidates) != 2 {
+		t.Fatalf("unexpected proposal: %+v", p)
+	}
+
+	var winner, loser proposals.Candidate
+	for _, c := range p.Candidates {
+		if c.Winner {
+			winner = c
+		} else {
+			loser = c
+		}
+	}
+	if winner.Path != orphanFile {
+		t.Errorf("expected the higher-resolution orphan to win, got winner=%+v", winner)
+	}
+	if loser.Path != trackedFile || loser.TrackedID != int(tracked.ID) {
+		t.Errorf("expected the tracked file to be the loser, got %+v", loser)
+	}
+}
+
+func TestScanLibrary_SingleNewOrphanIsNotADuplicate(t *testing.T) {
+	dir := t.TempDir()
+	orphanDir := filepath.Join(dir, "New.Movie.2020")
+	writeVideoFile(t, orphanDir, "movie.mkv", 100)
+
+	sess := &mode.Session{Mode: mode.Movies, TMDB: fakeTMDBSearch(t, map[string]string{
+		"New Movie 2020": `{"results":[{"id":99,"title":"New Movie"}]}`,
+	})}
+
+	got, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), dir, &fakeProber{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no duplicate groups for a single new item, got %+v", got)
+	}
+}
+
+func TestApplyLibrary_KeepsWinnerByDefault_DeletesOrphanLoser(t *testing.T) {
+	dir := t.TempDir()
+	loserPath := writeVideoFile(t, dir, "loser.mkv", 10)
+
+	libStore := newTestLibraryStore(t)
+	tracked, err := libStore.Upsert(context.Background(), library.Item{
+		Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: "/winner.mkv", RootFolderPath: dir,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := proposals.Proposal{
+		ID: 1, Status: proposals.Pending, Title: "X", TMDBID: 1,
+		Candidates: []proposals.Candidate{
+			{Label: "winner", Path: "/winner.mkv", TrackedID: int(tracked.ID), Winner: true},
+			{Label: "loser", Path: loserPath},
+		},
+	}
+	id, err := ApplyLibrary(context.Background(), libStore, p, nil, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != tracked.ID {
+		t.Errorf("expected the already-tracked winner's id (%d), got %d", tracked.ID, id)
+	}
+	if _, err := os.Stat(loserPath); !os.IsNotExist(err) {
+		t.Error("expected the losing orphan file to be deleted")
+	}
+}
+
+func TestApplyLibrary_WinnerIsOrphan_DeletesTrackedLoserAndRegistersWinner(t *testing.T) {
+	dir := t.TempDir()
+	trackedFile := writeVideoFile(t, dir, "tracked.mkv", 10)
+	winnerPath := writeVideoFile(t, dir, "winner.mkv", 10)
+
+	libStore := newTestLibraryStore(t)
+	tracked, err := libStore.Upsert(context.Background(), library.Item{
+		Mode: mode.Movies, TMDBID: 42, Title: "Some Movie", FilePath: trackedFile, RootFolderPath: dir,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := proposals.Proposal{
+		ID: 1, Status: proposals.Pending, Title: "Some Movie", TMDBID: 42,
+		RootFolderPath: dir,
+		Candidates: []proposals.Candidate{
+			{Label: "tracked", Path: trackedFile, TrackedID: int(tracked.ID)},
+			{Label: "winner", Path: winnerPath, Winner: true},
+		},
+	}
+	id, err := ApplyLibrary(context.Background(), libStore, p, nil, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id == 0 {
+		t.Error("expected a nonzero library item id for the newly registered winner")
+	}
+	if _, err := os.Stat(trackedFile); !os.IsNotExist(err) {
+		t.Error("expected the losing tracked file to be deleted")
+	}
+	if _, err := libStore.Get(context.Background(), tracked.ID); err != library.ErrNotFound {
+		t.Errorf("expected the losing tracked library item to be deleted, got err=%v", err)
+	}
+
+	item, err := libStore.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item.FilePath != winnerPath || item.TMDBID != 42 {
+		t.Errorf("unexpected registered item: %+v", item)
+	}
+}
+
+func TestApplyLibrary_KeepAll_NoMutation(t *testing.T) {
+	libStore := newTestLibraryStore(t)
+	tracked, err := libStore.Upsert(context.Background(), library.Item{
+		Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: "/a.mkv", RootFolderPath: "/x",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := proposals.Proposal{
+		ID: 1, Status: proposals.Pending,
+		Candidates: []proposals.Candidate{
+			{Label: "a", Path: "/a.mkv", TrackedID: int(tracked.ID)},
+			{Label: "b", Path: "/b.mkv"},
+		},
+	}
+	id, err := ApplyLibrary(context.Background(), libStore, p, nil, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != tracked.ID {
+		t.Errorf("expected keepAll to still report the existing tracked id, got %d", id)
+	}
+	if _, err := libStore.Get(context.Background(), tracked.ID); err != nil {
+		t.Errorf("expected keepAll to leave the library item untouched, got err=%v", err)
+	}
+}
+
+func TestApplyLibrary_RejectsNonPendingProposal(t *testing.T) {
+	libStore := newTestLibraryStore(t)
+	p := proposals.Proposal{
+		Status:     proposals.Applied,
+		Candidates: []proposals.Candidate{{Path: "/a.mkv"}, {Path: "/b.mkv"}},
+	}
+	if _, err := ApplyLibrary(context.Background(), libStore, p, nil, false); err == nil {
+		t.Fatal("expected ApplyLibrary to refuse an already-applied proposal")
+	}
+}
+
+func TestApplyLibrary_RejectsFewerThanTwoCandidates(t *testing.T) {
+	libStore := newTestLibraryStore(t)
+	p := proposals.Proposal{Status: proposals.Pending, Candidates: []proposals.Candidate{{Path: "/a.mkv"}}}
+	if _, err := ApplyLibrary(context.Background(), libStore, p, nil, false); err == nil {
+		t.Fatal("expected ApplyLibrary to refuse a proposal with fewer than 2 candidates")
+	}
+}

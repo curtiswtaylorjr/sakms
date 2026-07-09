@@ -31,7 +31,7 @@ func TestSearchHandler_ScoresAndSortsResults(t *testing.T) {
 		{"guid":"2","title":"Some.Movie.2023.1080p.WEB-DL.x265-GROUP","indexer":"I","protocol":"torrent","size":2,"seeders":2,"downloadUrl":"http://x/2","publishDate":"2023-01-02"}
 	]`)
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -40,7 +40,7 @@ func TestSearchHandler_ScoresAndSortsResults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/search?q=Some+Movie")
@@ -64,8 +64,8 @@ func TestSearchHandler_ScoresAndSortsResults(t *testing.T) {
 }
 
 func TestSearchHandler_RequiresQuery(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/search")
@@ -79,11 +79,11 @@ func TestSearchHandler_RequiresQuery(t *testing.T) {
 }
 
 func TestSearchHandler_ProwlarrNotConfigured(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/search?q=x")
@@ -121,7 +121,7 @@ func TestGrabHandler_Torrent_SendsToQBittorrentAndRecordsGrab(t *testing.T) {
 		gotCategory = r.FormValue("category")
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -130,7 +130,7 @@ func TestGrabHandler_Torrent_SendsToQBittorrentAndRecordsGrab(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(grabRequest{
@@ -173,7 +173,7 @@ func fakeNZBGet(t *testing.T, nzbID int64) *httptest.Server {
 func TestGrabHandler_Usenet_SendsToNZBGetAndRecordsGrab(t *testing.T) {
 	fakeNZB := fakeNZBGet(t, 99)
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -182,7 +182,7 @@ func TestGrabHandler_Usenet_SendsToNZBGetAndRecordsGrab(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(grabRequest{
@@ -207,11 +207,11 @@ func TestGrabHandler_Usenet_SendsToNZBGetAndRecordsGrab(t *testing.T) {
 }
 
 func TestGrabHandler_UnrecognizedProtocol(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(grabRequest{Title: "X", Protocol: "carrier-pigeon", DownloadURL: "http://x", RootFolderPath: "/movies"})
@@ -226,7 +226,7 @@ func TestGrabHandler_UnrecognizedProtocol(t *testing.T) {
 }
 
 func TestListGrabsHandler_ScopedByMode(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if _, err := grabsStore.Create(ctx, grabs.Grab{Mode: mode.Movies, Title: "A Movie", Indexer: "I", Protocol: "torrent", DownloadClient: "qbittorrent", RootFolderPath: "/movies"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -235,7 +235,7 @@ func TestListGrabsHandler_ScopedByMode(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/grabs")
@@ -253,9 +253,10 @@ func TestListGrabsHandler_ScopedByMode(t *testing.T) {
 }
 
 // TestCheckImportHandler_QBittorrentCompleted_PerformsImport exercises the
-// full completed-download -> relocate -> register loop against a real
-// on-disk directory (standing in for qBittorrent's actual download
-// directory) and a fake Radarr, the same rigor as Dedup's end-to-end test.
+// full completed-download -> relocate -> record-in-library loop against a
+// real on-disk directory (standing in for qBittorrent's actual download
+// directory) — no Radarr involved anymore, the same rigor as Dedup's
+// end-to-end test.
 func TestCheckImportHandler_QBittorrentCompleted_PerformsImport(t *testing.T) {
 	dir := t.TempDir()
 	downloadDir := filepath.Join(dir, "downloads", "Some.Movie.2023.1080p.WEB-DL.x264-GROUP")
@@ -269,20 +270,6 @@ func TestCheckImportHandler_QBittorrentCompleted_PerformsImport(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(downloadDir, "movie.mkv"), []byte("fake video"), 0o644); err != nil {
 		t.Fatalf("writing file: %v", err)
 	}
-
-	var registered bool
-	fakeRadarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v3/movie" && r.Method == http.MethodPost:
-			registered = true
-			w.Write([]byte(`{"id":77}`))
-		case r.URL.Path == "/api/v3/command":
-			w.Write([]byte(`{}`))
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer fakeRadarr.Close()
 
 	fakeQB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -298,11 +285,8 @@ func TestCheckImportHandler_QBittorrentCompleted_PerformsImport(t *testing.T) {
 	}))
 	defer fakeQB.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
-	if err := connStore.Upsert(ctx, "radarr", fakeRadarr.URL, "key"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -316,7 +300,7 @@ func TestCheckImportHandler_QBittorrentCompleted_PerformsImport(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/grabs/"+strconv.FormatInt(g.ID, 10)+"/check-import", "application/json", nil)
@@ -334,15 +318,20 @@ func TestCheckImportHandler_QBittorrentCompleted_PerformsImport(t *testing.T) {
 	if updated.Status != grabs.Imported {
 		t.Errorf("expected status Imported, got %q", updated.Status)
 	}
-	if !registered {
-		t.Error("expected the movie to be registered with the fake Radarr")
-	}
 	// Relocate moves the whole contentPath directory (preserving its
 	// basename) into the root folder, the same generic behavior it already
 	// has for a directory-shaped Rename source — so the file lands at
 	// <root>/<download-dir-name>/movie.mkv, not directly at <root>/movie.mkv.
-	if _, err := os.Stat(filepath.Join(moviesRoot, filepath.Base(downloadDir), "movie.mkv")); err != nil {
+	wantPath := filepath.Join(moviesRoot, filepath.Base(downloadDir), "movie.mkv")
+	if _, err := os.Stat(wantPath); err != nil {
 		t.Errorf("expected the file to have been relocated into the root folder: %v", err)
+	}
+	item, err := libStore.GetByTMDBID(ctx, mode.Movies, 42)
+	if err != nil {
+		t.Fatalf("expected the movie to be recorded in the library, got err=%v", err)
+	}
+	if item.Title != "Some Movie" || item.FilePath != wantPath {
+		t.Errorf("unexpected library item: %+v", item)
 	}
 }
 
@@ -359,7 +348,7 @@ func TestCheckImportHandler_StillDownloading_JustUpdatesStatus(t *testing.T) {
 	}))
 	defer fakeQB.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -375,7 +364,7 @@ func TestCheckImportHandler_StillDownloading_JustUpdatesStatus(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/grabs/"+strconv.FormatInt(g.ID, 10)+"/check-import", "application/json", nil)

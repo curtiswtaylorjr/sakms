@@ -28,6 +28,7 @@ import (
 
 	"github.com/curtiswtaylorjr/sakms/internal/config"
 	"github.com/curtiswtaylorjr/sakms/internal/identify"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/place"
@@ -425,4 +426,166 @@ func removeCandidate(ctx context.Context, sess *mode.Session, c proposals.Candid
 		return sess.Servarr.DeleteTracked(ctx, c.TrackedID)
 	}
 	return os.Remove(c.Path)
+}
+
+// ScanLibrary is Dedup's Movies-library counterpart to scanMovies — used
+// only for Movies mode now that Radarr no longer sits between SAK and the
+// filesystem/TMDB (see internal/library's package doc). Identifies every
+// unmapped file (via TMDB search instead of Servarr's Lookup) and groups it,
+// and any already-tracked library item, by TMDB id — the same shape
+// scanMovies already established, just reading/writing internal/library
+// instead of Servarr.
+func ScanLibrary(ctx context.Context, sess *mode.Session, libStore *library.Store, rootFolderPath string, prober Prober) ([]proposals.Proposal, error) {
+	if sess.TMDB == nil {
+		return nil, fmt.Errorf("tmdb isn't configured yet — add it in Settings first")
+	}
+	if rootFolderPath == "" {
+		return nil, fmt.Errorf("no Movies library root folder configured yet — add one in Settings first")
+	}
+
+	tracked, err := libStore.List(ctx, mode.Movies)
+	if err != nil {
+		return nil, fmt.Errorf("loading library items: %w", err)
+	}
+	trackedByTMDB := make(map[int]library.Item, len(tracked))
+	known := make(map[string]bool, len(tracked))
+	for _, t := range tracked {
+		trackedByTMDB[t.TMDBID] = t
+		known[t.FilePath] = true
+		// A tracked movie typically lives one level deeper than the root
+		// folder scan sees (root/Title (Year)/movie.mkv) — mark the
+		// containing directory known too, or ScanRootFolder would still
+		// report that wrapping folder as unmapped.
+		known[filepath.Dir(t.FilePath)] = true
+	}
+
+	type orphanHit struct {
+		name, path, title string
+	}
+	orphansByTMDB := make(map[int][]orphanHit)
+
+	entries, err := library.ScanRootFolder(rootFolderPath, known)
+	if err != nil {
+		return nil, fmt.Errorf("scanning %s: %w", rootFolderPath, err)
+	}
+	for _, entry := range entries {
+		if config.SidecarExts[strings.ToLower(filepath.Ext(entry.Name))] {
+			continue
+		}
+		items, err := sess.TMDB.SearchMovies(ctx, searchterm.FromName(entry.Name))
+		if err != nil || len(items) == 0 {
+			continue // not Dedup's concern — Rename's own ScanLibrary surfaces unmatched items
+		}
+		match := items[0]
+		orphansByTMDB[match.ID] = append(orphansByTMDB[match.ID], orphanHit{name: entry.Name, path: entry.Path, title: match.Title})
+	}
+
+	var out []proposals.Proposal
+	for tmdbID, orphans := range orphansByTMDB {
+		trackedItem, isTracked := trackedByTMDB[tmdbID]
+		if !isTracked && len(orphans) < 2 {
+			continue // a single new, untracked item — nothing to dedup
+		}
+
+		title := orphans[0].title
+		rootPath := ""
+		var candidates []proposals.Candidate
+		if isTracked {
+			if c := probeCandidate(ctx, prober, "tracked", trackedItem.FilePath, int(trackedItem.ID)); c != nil {
+				candidates = append(candidates, *c)
+			}
+			title, rootPath = trackedItem.Title, trackedItem.RootFolderPath
+		}
+		for _, o := range orphans {
+			if c := probeCandidate(ctx, prober, o.name, o.path, 0); c != nil {
+				candidates = append(candidates, *c)
+				if rootPath == "" {
+					rootPath = filepath.Dir(o.path)
+				}
+			}
+		}
+		if len(candidates) < 2 {
+			continue // couldn't probe enough of the group to compare
+		}
+		markWinner(candidates)
+
+		out = append(out, proposals.Proposal{
+			Mode: mode.Movies, Workflow: proposals.Dedup, Status: proposals.Pending,
+			SourceName: title, Title: title, TMDBID: tmdbID, RootFolderPath: rootPath,
+			Candidates: candidates,
+			Reason:     fmt.Sprintf("%d copies identified as %q", len(candidates), title),
+		})
+	}
+	return out, nil
+}
+
+// ApplyLibrary is Dedup's Movies-library counterpart to Apply — resolves p
+// against libStore instead of Servarr: a tracked loser's file is removed
+// and its library record deleted, an untracked orphan loser's file is
+// removed directly, and an untracked winner is recorded via libStore.Upsert
+// (no registration/rescan round trip needed — Upsert itself IS the "now
+// tracked" state).
+func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Proposal, keepIndex *int, keepAll bool) (itemID int64, err error) {
+	if p.Status != proposals.Pending {
+		return 0, fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+	}
+	if len(p.Candidates) < 2 {
+		return 0, fmt.Errorf("proposal %d has fewer than 2 candidates to resolve", p.ID)
+	}
+
+	if keepAll {
+		for _, c := range p.Candidates {
+			if c.TrackedID != 0 {
+				return int64(c.TrackedID), nil
+			}
+		}
+		return 0, nil
+	}
+
+	idx := winnerIndex(p.Candidates)
+	if keepIndex != nil {
+		if *keepIndex < 0 || *keepIndex >= len(p.Candidates) {
+			return 0, fmt.Errorf("proposal %d: keepIndex %d out of range", p.ID, *keepIndex)
+		}
+		idx = *keepIndex
+	}
+	winner := p.Candidates[idx]
+
+	for i, c := range p.Candidates {
+		if i == idx {
+			continue
+		}
+		if err := removeLibraryCandidate(ctx, libStore, c); err != nil {
+			return 0, fmt.Errorf("removing %s: %w", c.Path, err)
+		}
+	}
+
+	if winner.TrackedID != 0 {
+		return int64(winner.TrackedID), nil
+	}
+
+	item, err := libStore.Upsert(ctx, library.Item{
+		Mode: mode.Movies, TMDBID: p.TMDBID, Title: p.Title,
+		FilePath: winner.Path, RootFolderPath: p.RootFolderPath,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("registering surviving copy %q: %w", p.Title, err)
+	}
+	return item.ID, nil
+}
+
+func removeLibraryCandidate(ctx context.Context, libStore *library.Store, c proposals.Candidate) error {
+	if c.TrackedID == 0 {
+		return os.Remove(c.Path)
+	}
+	item, err := libStore.Get(ctx, int64(c.TrackedID))
+	if err != nil {
+		return fmt.Errorf("loading library item %d: %w", c.TrackedID, err)
+	}
+	if item.FilePath != "" {
+		if err := os.Remove(item.FilePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("deleting %q: %w", item.FilePath, err)
+		}
+	}
+	return libStore.Delete(ctx, int64(c.TrackedID))
 }

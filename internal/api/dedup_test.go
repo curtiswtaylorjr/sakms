@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
@@ -43,43 +45,31 @@ func (f *fakeDedupProber) Probe(ctx context.Context, path string) (*mediainfo.Pr
 	return p, nil
 }
 
-// TestDedupWorkflow_ScanThenApply_EndToEnd exercises the full Dedup loop
-// against SAK's real HTTP handlers, a real migrated SQLite database, a
-// fake Radarr, and real on-disk files — same rigor as the Rename and Purge
-// end-to-end tests.
+// TestDedupWorkflow_ScanThenApply_EndToEnd exercises the full Dedup loop for
+// Movies against SAK's real HTTP handlers, a real migrated SQLite database,
+// a fake TMDB, and real on-disk files — no Radarr involved anymore.
 func TestDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 	dir := t.TempDir()
-	trackedDir := filepath.Join(dir, "Movies", "Some Movie (2020)")
-	orphanDir := filepath.Join(dir, "Movies", "Some.Movie.2020.1080p.BluRay.x264-GROUP")
+	trackedDir := filepath.Join(dir, "Some Movie (2020)")
+	orphanDir := filepath.Join(dir, "Some.Movie.2020.1080p.BluRay.x264-GROUP")
 	trackedFile := writeTestVideoFile(t, trackedDir, "movie.mkv", 10)
 	orphanFile := writeTestVideoFile(t, orphanDir, "movie.mkv", 10)
 
-	fakeRadarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v3/rootfolder":
-			w.Write([]byte(`[{"id":1,"path":"` + filepath.Join(dir, "Movies") + `","accessible":true,"freeSpace":1,"unmappedFolders":[
-				{"name":"Some.Movie.2020.1080p.BluRay.x264-GROUP","path":"` + orphanDir + `","relativePath":"Some.Movie.2020.1080p.BluRay.x264-GROUP"}
-			]}]`))
-		case r.URL.Path == "/api/v3/movie" && r.Method == http.MethodGet:
-			w.Write([]byte(`[{"id":9,"title":"Some Movie","path":"` + trackedDir + `","rootFolderPath":"` + filepath.Join(dir, "Movies") + `","tmdbId":42,"qualityProfileId":4}]`))
-		case r.URL.Path == "/api/v3/movie" && r.Method == http.MethodPost:
-			w.Write([]byte(`{"id":55}`))
-		case r.URL.Path == "/api/v3/movie/lookup":
-			w.Write([]byte(`[{"title":"Some Movie","year":2020,"tmdbId":42}]`))
-		case r.URL.Path == "/api/v3/qualityprofile":
-			w.Write([]byte(`[{"id":4,"name":"HD-1080p"}]`))
-		case r.URL.Path == "/api/v3/movie/9" && r.Method == http.MethodDelete:
-			// The losing tracked candidate gets removed.
-		case r.URL.Path == "/api/v3/command":
-			w.Write([]byte(`{}`))
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer fakeRadarr.Close()
+	fakeTMDB := httptest.NewServer(fakeTMDBSearchHandler(t, 42, "Some Movie"))
+	defer fakeTMDB.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	if err := connStore.Upsert(context.Background(), "radarr", fakeRadarr.URL, "test-key"); err != nil {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	ctx := context.Background()
+	if err := connStore.Upsert(ctx, "tmdb", fakeTMDB.URL, "test-key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, moviesLibraryRootFolderKey, dir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tracked, err := libStore.Upsert(ctx, library.Item{
+		Mode: mode.Movies, TMDBID: 42, Title: "Some Movie", FilePath: trackedFile, RootFolderPath: dir,
+	})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -87,7 +77,7 @@ func TestDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		trackedFile: {CodecName: "h264", Width: 1280, Height: 720, BitRate: 3000},
 		orphanFile:  {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	scanResp, err := http.Post(srv.URL+"/api/modes/movies/dedup/scan", "application/json", nil)
@@ -132,7 +122,13 @@ func TestDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 	if applied.Status != proposals.Applied {
 		t.Fatalf("expected the proposal to come back Applied, got %+v", applied)
 	}
-	if _, err := os.Stat(trackedFile); err != nil {
-		t.Errorf("expected the losing tracked candidate's local file to remain untouched (removal goes through Radarr's own DeleteTracked API call, never a direct filesystem delete for a tracked candidate): %v", err)
+	if _, err := os.Stat(trackedFile); !os.IsNotExist(err) {
+		t.Errorf("expected the losing tracked candidate's file to be deleted directly (no *arr app to ask anymore), got: %v", err)
+	}
+	if _, err := libStore.Get(ctx, tracked.ID); err != library.ErrNotFound {
+		t.Errorf("expected the losing tracked candidate's library record to be deleted, got err=%v", err)
+	}
+	if _, err := os.Stat(orphanFile); err != nil {
+		t.Errorf("expected the winning orphan's file to remain in place, got: %v", err)
 	}
 }

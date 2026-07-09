@@ -140,6 +140,21 @@ func normalizeAll(raw []rawResult, mt MediaType) []Item {
 	return out
 }
 
+// SearchMovies searches TMDB's movie catalog by title — the title-lookup
+// Rename/Dedup's Movies-library code path uses instead of Servarr's own
+// Lookup, since eliminating Radarr for Movies means there's no *arr app's
+// TVDB/TMDB search proxy sitting between SAK and TMDB anymore (see
+// internal/library's package doc).
+func (c *Client) SearchMovies(ctx context.Context, query string) ([]Item, error) {
+	q := url.Values{}
+	q.Set("query", query)
+	var resp listResponse
+	if err := c.do(ctx, "/search/movie", q, &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, Movie), nil
+}
+
 type externalIDsResponse struct {
 	TVDBID int `json:"tvdb_id"`
 }

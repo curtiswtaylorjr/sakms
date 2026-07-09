@@ -215,18 +215,21 @@ function buildConnectionControls(service, existingConn, onSaved) {
 }
 
 // ---- Setup Wizard ----
-// Walks through connecting Radarr/Sonarr (required for Movies/Series to do
-// anything at all), Whisparr and an AI provider (both optional — Adult and
-// AI-assisted features are opt-in), then hands off to the normal app. Shown
-// automatically until dismissed (see boot()); reachable afterward from
-// Settings' "Re-run setup wizard" link.
+// Walks through Movies' library root folder and connecting Sonarr (both
+// required for Movies/Series to do anything at all), Whisparr and an AI
+// provider (both optional — Adult and AI-assisted features are opt-in),
+// then hands off to the normal app. Shown automatically until dismissed
+// (see boot()); reachable afterward from Settings' "Re-run setup wizard"
+// link.
 
-const WIZARD_SERVICE_BY_MODE = { movies: "radarr", series: "sonarr", adult: "whisparr" };
+// WIZARD_SERVICE_BY_MODE covers Series/Adult only — Movies has no
+// connection-based step anymore (see buildMoviesLibraryWizardStep).
+const WIZARD_SERVICE_BY_MODE = { series: "sonarr", adult: "whisparr" };
 
 async function renderWizard(container) {
   container.innerHTML = "";
   container.appendChild(el("h2", { text: "Set up SAK" }));
-  container.appendChild(el("p", { class: "muted", text: "Connect the services SAK will review. Movies and Series need their *arr app's URL and API key (found in that app's Settings → General) to do anything at all — Whisparr (Adult) and an AI provider are optional." }));
+  container.appendChild(el("p", { class: "muted", text: "Movies needs a library root folder to do anything at all; Series needs its *arr app's URL and API key (found in that app's Settings → General) — Whisparr (Adult) and an AI provider are optional." }));
 
   let status, connections;
   try {
@@ -238,10 +241,10 @@ async function renderWizard(container) {
   for (const ms of status.modes) modeStatusByMode[ms.mode] = ms;
 
   let step = 1;
-  for (const m of ["movies", "series"]) {
-    const service = WIZARD_SERVICE_BY_MODE[m];
-    const configured = modeStatusByMode[m] && modeStatusByMode[m].arrConfigured;
-    container.appendChild(buildWizardStep(step++, MODE_LABELS[m] + " — connect " + service, false, configured, service, byService[service], container));
+  container.appendChild(await buildMoviesLibraryWizardStep(step++, modeStatusByMode.movies && modeStatusByMode.movies.arrConfigured, container));
+  {
+    const configured = modeStatusByMode.series && modeStatusByMode.series.arrConfigured;
+    container.appendChild(buildWizardStep(step++, "Series — connect sonarr", false, configured, "sonarr", byService.sonarr, container));
   }
   {
     const configured = modeStatusByMode.adult && modeStatusByMode.adult.arrConfigured;
@@ -249,10 +252,11 @@ async function renderWizard(container) {
   }
   container.appendChild(await buildWizardAIStep(step++, byService, container));
 
-  // Movies and Series can't do anything at all without their *arr app, so
-  // "Continue to SAK" stays disabled until both are actually configured
-  // — otherwise dismissing the wizard just lands on the same bare, useless
-  // Scan button the wizard exists to prevent, one step later.
+  // Movies and Series can't do anything at all without a library root
+  // folder / *arr app respectively, so "Continue to SAK" stays disabled
+  // until both are actually configured — otherwise dismissing the wizard
+  // just lands on the same bare, useless Scan button the wizard exists to
+  // prevent, one step later.
   const moviesConfigured = modeStatusByMode.movies && modeStatusByMode.movies.arrConfigured;
   const seriesConfigured = modeStatusByMode.series && modeStatusByMode.series.arrConfigured;
   const canContinue = moviesConfigured && seriesConfigured;
@@ -264,7 +268,7 @@ async function renderWizard(container) {
     } }),
     el("span", { class: canContinue ? "muted" : "error", text: canContinue
       ? "You can revisit any of this later in Settings."
-      : "Connect Radarr (Movies) and Sonarr (Series) above to continue — SAK can't review anything without them." }),
+      : "Set Movies' library root folder and connect Sonarr (Series) above to continue — SAK can't review anything without them." }),
   ]);
   container.appendChild(footer);
 }
@@ -279,6 +283,30 @@ function buildWizardStep(n, title, optional, configured, service, existingConn, 
     el("label", {}, [document.createTextNode("API Key"), c.keyInput]),
   ]));
   fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [c.testBtn, c.saveBtn, c.status]));
+  return fs;
+}
+
+// buildMoviesLibraryWizardStep is Movies' counterpart to buildWizardStep —
+// there's no Radarr connection to test/save anymore (see internal/library's
+// package doc), just a free-typed path SAK will scan/import into directly.
+async function buildMoviesLibraryWizardStep(n, configured, wizardContainer) {
+  let current = "";
+  try { current = (await api("/api/modes/movies/library/root-folder")).path; } catch (e) {}
+
+  const fs = el("fieldset", {}, [
+    el("legend", { text: n + ". Movies — library root folder" + (configured ? " ✓" : "") }),
+  ]);
+  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/Movies", style: "min-width:20rem" });
+  const status = el("span", { class: "muted" });
+  const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
+    try {
+      await api("/api/modes/movies/library/root-folder", { method: "PUT", body: JSON.stringify({ path: pathInput.value }) });
+      status.textContent = "✓ saved"; status.className = "muted";
+      await renderWizard(wizardContainer);
+    } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+  } });
+  fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), pathInput]));
+  fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
   return fs;
 }
 
@@ -418,8 +446,12 @@ async function renderSearch(container) {
   async function grabRelease(release, picked) {
     let rootFolderPath = "";
     try {
-      const folders = await api("/api/modes/" + m + "/root-folders");
-      if (folders.length) rootFolderPath = folders[0].path;
+      if (m === "movies") {
+        rootFolderPath = (await api("/api/modes/movies/library/root-folder")).path;
+      } else {
+        const folders = await api("/api/modes/" + m + "/root-folders");
+        if (folders.length) rootFolderPath = folders[0].path;
+      }
     } catch (e) { /* fall through to the "no root folder" error below */ }
     if (!rootFolderPath) throw new Error("no root folder configured for " + m + " — add one in Settings first");
 
@@ -729,8 +761,12 @@ async function renderTag(container) {
 
 // ---- Settings view ----
 
-const CONNECTION_SERVICES = ["radarr", "sonarr", "whisparr", "prowlarr", "qbittorrent", "nzbget", "tmdb", "ollama", "openai", "gemini", "anthropic", "stashdb", "fansdb", "tpdb", "brave", "stash"];
+// No "radarr" here — Movies owns its own library instead of proxying it
+// (see internal/library's package doc), so there's nothing left to connect.
+const CONNECTION_SERVICES = ["sonarr", "whisparr", "prowlarr", "qbittorrent", "nzbget", "tmdb", "ollama", "openai", "gemini", "anthropic", "stashdb", "fansdb", "tpdb", "brave", "stash"];
 const AI_PROVIDERS = ["ollama", "openai", "gemini", "anthropic"];
+const QUALITY_TIERS = ["low", "medium", "high", "lossless"];
+const MAX_RESOLUTIONS = [0, 480, 720, 1080, 2160];
 
 async function renderSettings(container) {
   container.innerHTML = "";
@@ -743,7 +779,70 @@ async function renderSettings(container) {
   ]));
   await renderConnections(container);
   await renderAISettings(container);
+  await renderMoviesLibrarySettings(container);
+  await renderQualityPrefs(container);
   await renderKidsRootPath(container);
+}
+
+// renderMoviesLibrarySettings is Movies-only — its library root folder,
+// free-typed since there's no *arr app to enumerate folders from anymore.
+async function renderMoviesLibrarySettings(container) {
+  if (state.mode !== "movies") return;
+
+  const fs = el("fieldset", {}, [el("legend", { text: "Movies library" })]);
+  let current = "";
+  try { current = (await api("/api/modes/movies/library/root-folder")).path; } catch (e) {}
+
+  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/Movies", style: "min-width:20rem" });
+  const status = el("span", { class: "muted" });
+  const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
+    try {
+      await api("/api/modes/movies/library/root-folder", { method: "PUT", body: JSON.stringify({ path: pathInput.value }) });
+      status.textContent = "saved"; status.className = "muted";
+    } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+  } });
+
+  fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), pathInput]));
+  fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
+  fs.appendChild(el("div", { class: "muted", text: "Where Rename/Purge/Dedup and Search's Check & Import look for and place Movies files — no Radarr involved." }));
+  container.appendChild(fs);
+}
+
+// renderQualityPrefs backs Search's scoring for whichever mode actually has
+// a Search workflow (Movies, Series — not Adult). Tier is a bitrate/codec
+// preference (source + codec compression), completely independent of the
+// max-resolution cap — see internal/quality's package doc for why these
+// aren't the same setting.
+async function renderQualityPrefs(container) {
+  const m = state.mode;
+  if (m === "adult") return;
+
+  const fs = el("fieldset", {}, [el("legend", { text: "Search quality preferences (" + MODE_LABELS[m] + ")" })]);
+  let tier = "high", maxResolution = 0;
+  try {
+    const prefs = await api("/api/modes/" + m + "/quality-prefs");
+    tier = prefs.tier; maxResolution = prefs.maxResolution;
+  } catch (e) {}
+
+  const tierSelect = el("select", {});
+  for (const t of QUALITY_TIERS) tierSelect.appendChild(el("option", { value: t, text: t, selected: t === tier ? "selected" : null }));
+  const maxResSelect = el("select", {});
+  for (const r of MAX_RESOLUTIONS) maxResSelect.appendChild(el("option", { value: String(r), text: r === 0 ? "no cap" : (r + "p"), selected: r === maxResolution ? "selected" : null }));
+  const status = el("span", { class: "muted" });
+  const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
+    try {
+      await api("/api/modes/" + m + "/quality-prefs", { method: "PUT", body: JSON.stringify({ tier: tierSelect.value, maxResolution: Number(maxResSelect.value) }) });
+      status.textContent = "saved"; status.className = "muted";
+    } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+  } });
+
+  fs.appendChild(el("div", { class: "grid2" }, [
+    el("label", {}, [document.createTextNode("Tier (bitrate/codec)"), el("div", {}, [tierSelect])]),
+    el("label", {}, [document.createTextNode("Maximum resolution"), el("div", {}, [maxResSelect])]),
+  ]));
+  fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
+  fs.appendChild(el("div", { class: "muted", text: "Tier prefers smaller/more-compressed releases (Low) up to the least-compressed remux/Blu-ray (Lossless) — it never changes what resolution is preferred. Maximum resolution softly prefers at-or-below-cap results, falling back to whatever's available if nothing meets it." }));
+  container.appendChild(fs);
 }
 
 async function renderConnections(container) {
@@ -810,6 +909,26 @@ async function renderKidsRootPath(container) {
   const fs = el("fieldset", {}, [el("legend", { text: "Kids classification (" + MODE_LABELS[m] + ")" })]);
   let current = "";
   try { current = (await api("/api/modes/" + m + "/rename/kids-root-path")).path; } catch (e) {}
+
+  // Movies has no *arr app to enumerate root folders from anymore (see
+  // internal/library's package doc) — a free-typed path, same treatment as
+  // the library root folder setting itself, instead of the picker below.
+  if (m === "movies") {
+    const input = el("input", { type: "text", placeholder: "/path/to/Movies (Kids)", style: "min-width:20rem", value: current });
+    const status = el("span", { class: "muted" });
+    const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
+      try {
+        await api("/api/modes/movies/rename/kids-root-path", { method: "PUT", body: JSON.stringify({ path: input.value }) });
+        status.textContent = "saved"; status.className = "muted";
+      } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
+    } });
+    fs.appendChild(el("label", { class: "row" }, [document.createTextNode("Kids root folder path"), input]));
+    fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
+    fs.appendChild(el("div", { class: "muted", text: "Leave blank to turn Kids classification off. Applies to both newly-found files and already-tracked items whose classification has drifted." }));
+    container.appendChild(fs);
+    return;
+  }
+
   let folders = [];
   try {
     folders = await api("/api/modes/" + m + "/root-folders");

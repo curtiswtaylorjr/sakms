@@ -27,7 +27,8 @@ const searchFixture = `[
     "seeders": 42,
     "downloadUrl": "https://indexer.example/download/1.torrent",
     "publishDate": "2023-05-01T00:00:00Z",
-    "categories": [{"id": 2000}, {"id": 2040}]
+    "categories": [{"id": 2000}, {"id": 2040}],
+    "indexerFlags": ["freeleech"]
   },
   {
     "guid": "prowlarr-guid-2",
@@ -61,6 +62,9 @@ func TestSearch_ParsesFixtureAcrossBothProtocols(t *testing.T) {
 	}
 	if releases[0].Protocol != Torrent || releases[0].Seeders != 42 {
 		t.Errorf("unexpected first release: %+v", releases[0])
+	}
+	if len(releases[0].IndexerFlags) != 1 || releases[0].IndexerFlags[0] != "freeleech" {
+		t.Errorf("expected indexerFlags to parse, got %+v", releases[0].IndexerFlags)
 	}
 	if releases[1].Protocol != Usenet {
 		t.Errorf("unexpected second release: %+v", releases[1])

@@ -12,13 +12,13 @@ import (
 )
 
 // TestSetupStatus_ReflectsRealConfiguredState exercises the real read model
-// a future wizard would poll: nothing configured, then a Radarr connection
-// and a Purge allowlist entry for Movies, confirming the endpoint's numbers
-// track the actual connections/allowlist stores rather than a cached
-// snapshot.
+// a future wizard would poll: nothing configured, then Movies' library root
+// folder setting and a Purge allowlist entry for Movies, confirming the
+// endpoint's numbers track the actual settings/allowlist stores rather than
+// a cached snapshot.
 func TestSetupStatus_ReflectsRealConfiguredState(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Before anything is configured.
@@ -51,8 +51,8 @@ func TestSetupStatus_ReflectsRealConfiguredState(t *testing.T) {
 		t.Errorf("expected Movies available but not yet configured, got %+v", movies)
 	}
 
-	// Configure Movies' Radarr connection and an allowlist entry.
-	if err := connStore.Upsert(context.Background(), "radarr", "http://192.168.1.12:7878", "key"); err != nil {
+	// Configure Movies' library root folder and an allowlist entry.
+	if err := settingsStore.Set(context.Background(), moviesLibraryRootFolderKey, "/media/Movies"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := allowStore.Add(context.Background(), mode.Movies, "BDSM"); err != nil {
@@ -67,7 +67,7 @@ func TestSetupStatus_ReflectsRealConfiguredState(t *testing.T) {
 	var status2 setupStatus
 	json.NewDecoder(resp2.Body).Decode(&status2)
 	if !status2.AnyConfigured {
-		t.Fatal("expected AnyConfigured=true once Radarr is configured")
+		t.Fatal("expected AnyConfigured=true once Movies' library root folder is configured")
 	}
 	for _, m := range status2.Modes {
 		if m.Mode == mode.Movies {
@@ -79,7 +79,7 @@ func TestSetupStatus_ReflectsRealConfiguredState(t *testing.T) {
 }
 
 func TestSetupStatus_JellyfinAndOllamaConnectionPresence(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "jellyfin", "http://192.168.1.20:8096", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestSetupStatus_JellyfinAndOllamaConnectionPresence(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/setup/status")
@@ -103,8 +103,8 @@ func TestSetupStatus_JellyfinAndOllamaConnectionPresence(t *testing.T) {
 }
 
 func TestDismissSetup_PersistsAndReflectsInStatus(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(dismissSetupRequest{Dismissed: true})
@@ -131,8 +131,8 @@ func TestDismissSetup_PersistsAndReflectsInStatus(t *testing.T) {
 }
 
 func TestDismissSetup_InvalidBody(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/setup/dismissed", bytes.NewReader([]byte("not json")))

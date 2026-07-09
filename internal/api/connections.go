@@ -22,7 +22,7 @@ import (
 // read-only call against it — the same thing Settings' "Test connection"
 // button does. Nothing here is persisted.
 type ConnectionTestRequest struct {
-	Service  string `json:"service"` // "radarr" | "sonarr" | "whisparr" | "ollama" | "stash" | "stashdb" | "fansdb" | "tpdb" | "brave" | "prowlarr" | "qbittorrent" | "nzbget" | "tmdb"
+	Service  string `json:"service"` // "sonarr" | "whisparr" | "ollama" | "stash" | "stashdb" | "fansdb" | "tpdb" | "brave" | "prowlarr" | "qbittorrent" | "nzbget" | "tmdb"
 	URL      string `json:"url"`
 	Username string `json:"username,omitempty"` // only qbittorrent/nzbget use this
 	APIKey   string `json:"apiKey,omitempty"`
@@ -42,10 +42,11 @@ type ConnectionTestResult struct {
 // query, TPDB's own /scenes endpoint with minimal params, and Brave's actual
 // search endpoint (it has no separate lightweight check, so this is a real,
 // billable query, same as any other Brave call) — never a guessed one.
+// There is deliberately no "radarr" case: Movies owns its own library now
+// instead of proxying Radarr (see internal/library's package doc), so
+// there's nothing left in SAK that would ever test a Radarr connection.
 func TestConnection(ctx context.Context, httpClient *http.Client, req ConnectionTestRequest) ConnectionTestResult {
 	switch req.Service {
-	case "radarr":
-		return testServarr(ctx, httpClient, servarr.Radarr, req)
 	case "sonarr":
 		return testServarr(ctx, httpClient, servarr.Sonarr, req)
 	case "whisparr":

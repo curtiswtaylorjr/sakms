@@ -11,6 +11,7 @@ import (
 
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
 	"github.com/curtiswtaylorjr/sakms/internal/dedup"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/purge"
@@ -55,7 +56,7 @@ type applyProposalRequest struct {
 // proposal's own Workflow field (set at Scan time) decides which package's
 // Apply actually runs — the URL doesn't need to say which, since a proposal
 // ID alone is already unambiguous.
-func applyProposalHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store) http.HandlerFunc {
+func applyProposalHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := parseProposalID(w, r)
 		if !ok {
@@ -75,13 +76,16 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 			return
 		}
 
+		// Movies proposals never need a Servarr session (their Apply path is
+		// entirely libStore-backed — see applyByWorkflow), but mode.Build is
+		// still cheap and harmless to call: it just leaves sess.Servarr nil.
 		sess, err := mode.Build(ctx, connStore, settingsStore, httpClient, p.Mode)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		if err := applyByWorkflow(ctx, propStore, sess, *p, req); err != nil {
+		if err := applyByWorkflow(ctx, propStore, libStore, sess, *p, req); err != nil {
 			if errors.Is(err, errUnknownWorkflow) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			} else {
@@ -103,15 +107,25 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 var errUnknownWorkflow = errors.New("unknown proposal workflow")
 
 // applyByWorkflow dispatches to the right package's Apply and records the
-// outcome. The three workflows have different success shapes — Rename can
-// partially succeed (registered, but the follow-up scan trigger failed) and
-// still counts as applied; Purge's delete either fully succeeds or fully
-// fails; Dedup's Apply already returns the resulting tracked id the same
-// way Rename's does — so each branch marks the queue accordingly rather
-// than forcing all three through one shared success rule.
-func applyByWorkflow(ctx context.Context, propStore *proposals.Store, sess *mode.Session, p proposals.Proposal, req applyProposalRequest) error {
+// outcome. Movies routes each workflow to its libStore-backed *Library
+// counterpart instead (no Radarr involved); Series/Adult use the existing
+// Servarr-backed functions, unchanged. The three workflows have different
+// success shapes — Rename can partially succeed (registered, but the
+// follow-up scan trigger failed) and still counts as applied; Purge's
+// delete either fully succeeds or fully fails; Dedup's Apply already
+// returns the resulting tracked id the same way Rename's does — so each
+// branch marks the queue accordingly rather than forcing all three through
+// one shared success rule.
+func applyByWorkflow(ctx context.Context, propStore *proposals.Store, libStore *library.Store, sess *mode.Session, p proposals.Proposal, req applyProposalRequest) error {
 	switch p.Workflow {
 	case proposals.Rename:
+		if p.Mode == mode.Movies {
+			itemID, err := rename.ApplyLibrary(ctx, libStore, p)
+			if err != nil {
+				return err
+			}
+			return propStore.MarkApplied(ctx, p.ID, int(itemID))
+		}
 		trackedID, err := rename.Apply(ctx, sess, p)
 		if trackedID != 0 {
 			// Registered even if the follow-up scan trigger failed — see
@@ -123,11 +137,24 @@ func applyByWorkflow(ctx context.Context, propStore *proposals.Store, sess *mode
 		}
 		return err
 	case proposals.Purge:
+		if p.Mode == mode.Movies {
+			if err := purge.ApplyLibrary(ctx, libStore, p); err != nil {
+				return err
+			}
+			return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
+		}
 		if err := purge.Apply(ctx, sess, p); err != nil {
 			return err
 		}
 		return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
 	case proposals.Dedup:
+		if p.Mode == mode.Movies {
+			itemID, err := dedup.ApplyLibrary(ctx, libStore, p, req.KeepIndex, req.KeepAll)
+			if err != nil {
+				return err
+			}
+			return propStore.MarkApplied(ctx, p.ID, int(itemID))
+		}
 		trackedID, err := dedup.Apply(ctx, sess, p, req.KeepIndex, req.KeepAll)
 		if err != nil {
 			return err

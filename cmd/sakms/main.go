@@ -18,6 +18,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
 	"github.com/curtiswtaylorjr/sakms/internal/db"
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
@@ -62,6 +63,7 @@ func run() error {
 	prober := mediainfo.New()
 	settingsStore := settings.New(sqlDB)
 	grabsStore := grabs.New(sqlDB)
+	libStore := library.New(sqlDB)
 	authStore := auth.New(settingsStore)
 
 	// Every review-workflow route requires a valid session; login/setup/
@@ -69,7 +71,7 @@ func run() error {
 	// exemption list on this one (see internal/api.NewAuthMux's doc
 	// comment) — NewMux stays unaware auth exists either way, so its own
 	// large test suite never had to change for auth specifically.
-	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, settingsStore, grabsStore)
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, settingsStore, grabsStore, libStore)
 	protectedAPI := auth.Middleware(secretStore, apiMux)
 
 	top := http.NewServeMux()

@@ -1,10 +1,14 @@
 # SAK Media Server
 
-A unified, human-in-the-loop review console for Sonarr, Radarr, and Whisparr.
+A unified, human-in-the-loop review console and media manager for Movies,
+Series, and Adult content. Movies owns its own library directly (no Radarr
+involved); Series still layers on Sonarr and Adult on Whisparr, with the
+same elimination planned for Series in a later stage.
 
-One self-hosted web app, three isolated modes (Movies, Series, Adult), four
-review workflows (Rename, Purge, Dedup, Tag) — every disk or API mutation is
-staged for approval before anything actually happens. No Stash dependency.
+One self-hosted web app, three isolated modes (Movies, Series, Adult), five
+review/management workflows (Search, Rename, Purge, Dedup, Tag) — every disk
+or API mutation is staged for approval before anything actually happens. No
+Stash dependency.
 
 ## Status
 
@@ -106,14 +110,51 @@ not-yet-started piece of the roadmap, kept deliberately separate from this
 milestone. Also out of scope for now: RSS/automatic search, a calendar,
 blocklist/retry-on-failure, and a real quality-profile management UI.
 
+**Movies no longer uses Radarr at all** — SAK owns its own Movies library
+directly (`internal/library`, a SQLite-backed store of `{tmdbId, title,
+file path, root folder}` plus freeform tags), the first step of a longer
+plan to reimplement Radarr's and Sonarr's own functionality rather than
+just reviewing it after the fact (Series/Sonarr elimination is the next
+stage; Series and Adult are completely unaffected by this milestone). The
+practical differences for Movies: there's no more `radarr` connection to
+configure — Settings has a plain **Movies library** root-folder path
+instead (`GET`/`PUT /api/modes/movies/library/root-folder`, `{"path":
+"..."}`, free-typed since there's no *arr app left to enumerate folders
+from); Rename resolves orphans via **TMDB search** instead of Radarr's own
+lookup and records new items straight into the library (no
+register-then-rescan round trip — the record itself IS the tracked state);
+Purge and Dedup match against the library's own tags/TMDB ids instead of
+Radarr's tracked-item list and delete files directly; Tag's vocabulary is
+now local free-form strings (`GET /api/modes/movies/tags` returns
+`{id, label}` pairs where `id` is the label itself, since a local tag has
+no numeric id) instead of Radarr's tag resource. The setup wizard's Movies
+step is a root-folder path instead of a connection test, and `GET
+/api/setup/status`'s per-mode `arrConfigured` flag reports whether that
+path is set rather than whether a Radarr connection exists.
+
+Quality tiers (**Low/Medium/High/Lossless**, `GET`/`PUT
+/api/modes/{mode}/quality-prefs`) drive Search's scoring for both Movies
+and Series — deliberately a bitrate/compression preference (source +
+codec: Low favors smaller WEBRip/x265, Lossless favors an uncompressed
+remux/Blu-ray), never a resolution one. Maximum resolution is its own
+independent setting in the same request (`{"tier": "high", "maxResolution":
+1080}`, 0 = no cap) — a soft preference that reorders results toward
+at-or-below-cap without ever excluding an over-cap result outright, so
+Search never comes back empty just because nothing meets the cap. Search's
+scoring also weighs a torrent's seeder count and a usenet post's age
+(capped, favoring more-established posts) heavily, plus a small bonus for
+Prowlarr's own freeleech/internal indexer flags — the one "reputation"
+signal used, sourced entirely from Prowlarr with no additional lookup.
+
 A working frontend now exists: a single dependency-free HTML/JS page (no
 build step, no framework) embedded into the Go binary and served at `/` —
 Settings (connections, AI provider/model, per-mode Kids root path, per-mode
 Purge allowlist) plus all five workflow views (Search/Rename/Purge/Dedup/Tag)
 for each mode (Search only for Movies/Series, matching the backend), driving
 the exact same API a script would. Functional, not polished — it's for
-exercising the real workflows against a real Radarr/Sonarr/Whisparr/
-Prowlarr/qBittorrent/NZBGet/TMDB instance, not a finished design.
+exercising the real workflows against a real Sonarr/Whisparr/Prowlarr/
+qBittorrent/NZBGet/TMDB instance (Movies needs none of these to be
+reviewed — just a library root folder), not a finished design.
 
 Every install is gated behind three layers, most fundamental first, each
 hiding all navigation until it's satisfied: **login**, then the **connections
@@ -127,12 +168,12 @@ itself is a stateless, AES-GCM-encrypted cookie (same key as connection
 secrets, see below) carrying only an expiry — 30-day TTL, `HttpOnly`,
 `SameSite=Lax`, deliberately not `Secure` since SAK's primary deployment
 is plain HTTP on a LAN, same as Radarr/Sonarr/Whisparr themselves. Once
-logged in, the setup wizard walks through connecting Radarr (Movies) and
-Sonarr (Series) — required, since neither mode can do anything without its
-*arr app — plus Whisparr and an AI provider (both optional); "Continue to
-SAK" stays disabled with an inline explanation until Radarr and Sonarr
-are both actually configured, so dismissing the wizard can never strand a
-user on a bare, useless Scan button.
+logged in, the setup wizard walks through setting Movies' library root
+folder and connecting Sonarr (Series) — required, since neither mode can do
+anything without them — plus Whisparr and an AI provider (both optional);
+"Continue to SAK" stays disabled with an inline explanation until both are
+actually configured, so dismissing the wizard can never strand a user on a
+bare, useless Scan button.
 
 Secrets are encrypted at rest with a locally generated key
 (`<data-dir>/secret.key`, mode 0600) rather than an OS keychain — the
@@ -145,8 +186,11 @@ Sonarr, Radarr, and Whisparr each make matching, dedup, and cleanup
 decisions well on their own, but there's no single place to see what a
 change is *about* to do before it happens, correct a bad match, resolve a
 duplicate by eye, or search for something to purge that isn't already on an
-allowlist — and no shared view across all three libraries. SAK is that
-review layer, not a replacement for any of them.
+allowlist — and no shared view across all three libraries. SAK started as
+that review layer, not a replacement for any of them — Movies has since
+grown into a genuine replacement for Radarr specifically (its own library,
+its own indexer search and grab), while Series and Adult still layer the
+same review workflows on top of Sonarr and Whisparr underneath.
 
 ## Install
 

@@ -117,11 +117,11 @@ func (m Mode) KidsRootPathKey() (key string, ok bool) {
 }
 
 // service reports which connections.Store key and servarr.App back this
-// mode's primary client.
+// mode's primary client. Movies has none — SAK owns its own Movies library
+// now (internal/library) instead of proxying Radarr; Build skips this
+// entirely for Movies rather than calling it.
 func (m Mode) service() (service string, app servarr.App, err error) {
 	switch m {
-	case Movies:
-		return "radarr", servarr.Radarr, nil
 	case Series:
 		return "sonarr", servarr.Sonarr, nil
 	case Adult:
@@ -137,7 +137,11 @@ func (m Mode) service() (service string, app servarr.App, err error) {
 
 // Session holds the live client(s) for one mode.
 type Session struct {
-	Mode    Mode
+	Mode Mode
+	// Servarr is nil for Movies (SAK owns its own Movies library instead of
+	// proxying Radarr — see Build's doc comment); populated for Series
+	// (Sonarr) and Adult (Whisparr). Movies-mode callers must not assume
+	// this is non-nil.
 	Servarr *servarr.Client
 
 	// Identify is the AI-assisted content-identification pipeline, populated
@@ -181,21 +185,31 @@ type Session struct {
 // Build constructs a Session for m using the connection currently configured
 // in store. Returns an error if m isn't supported yet, or if its service has
 // no connection configured (Settings hasn't been filled in for it yet).
+//
+// Movies is the one exception: it has no Servarr connection requirement at
+// all — SAK owns its own Movies library (internal/library) instead of
+// proxying Radarr, so sess.Servarr stays nil for Movies unconditionally.
+// Series and Adult are unaffected; they still require Sonarr/Whisparr
+// exactly as before (Series' own library/Sonarr elimination is a later
+// stage — see the plan this was built from).
 func Build(ctx context.Context, store *connections.Store, settingsStore *settings.Store, httpClient *http.Client, m Mode) (*Session, error) {
-	service, app, err := m.service()
-	if err != nil {
-		return nil, err
-	}
-	conn, err := store.Get(ctx, service)
-	if err != nil {
-		if errors.Is(err, connections.ErrNotFound) {
-			return nil, fmt.Errorf("mode %q: %s isn't configured yet — add it in Settings first", m, service)
-		}
-		return nil, fmt.Errorf("mode %q: loading %s connection: %w", m, service, err)
-	}
-	client := servarr.New(servarr.Config{BaseURL: conn.URL, APIKey: conn.APIKey, App: app}, httpClient)
+	sess := &Session{Mode: m}
 
-	sess := &Session{Mode: m, Servarr: client}
+	if m != Movies {
+		service, app, err := m.service()
+		if err != nil {
+			return nil, err
+		}
+		conn, err := store.Get(ctx, service)
+		if err != nil {
+			if errors.Is(err, connections.ErrNotFound) {
+				return nil, fmt.Errorf("mode %q: %s isn't configured yet — add it in Settings first", m, service)
+			}
+			return nil, fmt.Errorf("mode %q: loading %s connection: %w", m, service, err)
+		}
+		sess.Servarr = servarr.New(servarr.Config{BaseURL: conn.URL, APIKey: conn.APIKey, App: app}, httpClient)
+	}
+
 	aiClient, err := buildAIClient(ctx, store, settingsStore, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("mode %q: building AI client: %w", m, err)

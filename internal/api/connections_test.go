@@ -12,7 +12,10 @@ func testHTTPClient() *http.Client {
 	return &http.Client{Timeout: 5 * time.Second}
 }
 
-func TestTestConnection_Radarr_Success(t *testing.T) {
+// TestTestConnection_Sonarr_Success proves the generic *arr-family
+// connection test path — Movies has no "radarr" case anymore (see
+// TestConnection's doc comment for why).
+func TestTestConnection_Sonarr_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/rootfolder" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -20,15 +23,27 @@ func TestTestConnection_Radarr_Success(t *testing.T) {
 		if r.Header.Get("X-Api-Key") != "test-key" {
 			t.Error("missing X-Api-Key header")
 		}
-		w.Write([]byte(`[{"id":1,"path":"/media/Movies","accessible":true,"freeSpace":123}]`))
+		w.Write([]byte(`[{"id":1,"path":"/media/Series","accessible":true,"freeSpace":123}]`))
 	}))
 	defer srv.Close()
 
 	result := TestConnection(context.Background(), testHTTPClient(), ConnectionTestRequest{
-		Service: "radarr", URL: srv.URL, APIKey: "test-key",
+		Service: "sonarr", URL: srv.URL, APIKey: "test-key",
 	})
 	if !result.OK || result.Error != "" {
 		t.Fatalf("expected success, got %+v", result)
+	}
+}
+
+// TestTestConnection_Radarr_Unsupported confirms "radarr" is no longer a
+// recognized service — a clear, actionable error rather than silently
+// succeeding against a client nothing else in SAK ever builds.
+func TestTestConnection_Radarr_Unsupported(t *testing.T) {
+	result := TestConnection(context.Background(), testHTTPClient(), ConnectionTestRequest{
+		Service: "radarr", URL: "http://example.invalid", APIKey: "test-key",
+	})
+	if result.OK {
+		t.Fatal("expected radarr to be unsupported, got ok=true")
 	}
 }
 

@@ -25,7 +25,7 @@ func TestDiscoverHandler_MoviesUsesMovieMediaType(t *testing.T) {
 		w.Write([]byte(`{"results":[{"id":1,"title":"Some Movie","poster_path":"/x.jpg","vote_average":7.5}]}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -33,7 +33,7 @@ func TestDiscoverHandler_MoviesUsesMovieMediaType(t *testing.T) {
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/discover")
@@ -64,7 +64,7 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 		w.Write([]byte(`{"results":[{"id":2,"name":"Some Show","poster_path":"/y.jpg","vote_average":8.0}]}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -72,7 +72,7 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/discover?category=popular")
@@ -93,11 +93,11 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 }
 
 func TestDiscoverHandler_TMDBNotConfigured(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/discover")
@@ -119,7 +119,7 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 		w.Write([]byte(`{"tvdb_id":12345}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -127,7 +127,7 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/discover/tvdb-id?tmdbId=2")
@@ -148,11 +148,11 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 }
 
 func TestResolveTVDBIDHandler_RequiresTmdbIDParam(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/discover/tvdb-id")

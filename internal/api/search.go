@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,12 +9,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/prowlarr"
 	"github.com/curtiswtaylorjr/sakms/internal/qbittorrent"
+	"github.com/curtiswtaylorjr/sakms/internal/quality"
 	"github.com/curtiswtaylorjr/sakms/internal/release"
 	"github.com/curtiswtaylorjr/sakms/internal/rename"
 	"github.com/curtiswtaylorjr/sakms/internal/servarr"
@@ -45,7 +49,8 @@ func categoriesForSearch(m mode.Mode) []int {
 }
 
 // searchHandler queries Prowlarr for {mode} and scores every result against
-// release.DefaultProfile — a read-only proxy+transform (like
+// that mode's configured quality-prefs (tier + max resolution, defaulting
+// to quality.Default/no cap when unset) — a read-only proxy+transform (like
 // listRootFoldersHandler), nothing staged or persisted.
 func searchHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +78,12 @@ func searchHandler(httpClient *http.Client, connStore *connections.Store, settin
 			return
 		}
 
-		prefs := release.DefaultProfile()
+		prefs, err := searchQualityProfile(ctx, settingsStore, m)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		now := time.Now()
 		out := make([]searchResult, len(releases))
 		for i, rel := range releases {
 			info := release.Parse(rel.Title)
@@ -81,7 +91,10 @@ func searchHandler(httpClient *http.Client, connStore *connections.Store, settin
 				GUID: rel.GUID, Title: rel.Title, Indexer: rel.Indexer,
 				Protocol: string(rel.Protocol), Size: rel.Size, Seeders: rel.Seeders,
 				DownloadURL: rel.DownloadURL, PublishDate: rel.PublishDate,
-				Score: release.Score(info, prefs),
+				Score: release.ScoreCandidate(release.Candidate{
+					Info: info, Protocol: string(rel.Protocol), Seeders: rel.Seeders,
+					PublishDate: rel.PublishDate, IndexerFlags: rel.IndexerFlags,
+				}, prefs, now),
 			}
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
@@ -89,6 +102,32 @@ func searchHandler(httpClient *http.Client, connStore *connections.Store, settin
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(out)
 	}
+}
+
+// searchQualityProfile loads {mode}'s quality-prefs setting (see
+// getQualityPrefsHandler/putQualityPrefsHandler) and maps it to the
+// release.Profile Search scores against, defaulting to quality.Default/no
+// resolution cap when unset.
+func searchQualityProfile(ctx context.Context, settingsStore *settings.Store, m mode.Mode) (release.Profile, error) {
+	tierStr, err := settingsStore.Get(ctx, qualityTierKey(m))
+	if err != nil && !errors.Is(err, settings.ErrNotFound) {
+		return release.Profile{}, err
+	}
+	tier := quality.Tier(tierStr)
+	if tierStr == "" {
+		tier = quality.Default
+	}
+
+	maxResStr, err := settingsStore.Get(ctx, maxResolutionKey(m))
+	if err != nil && !errors.Is(err, settings.ErrNotFound) {
+		return release.Profile{}, err
+	}
+	maxRes := 0
+	if maxResStr != "" {
+		maxRes, _ = strconv.Atoi(maxResStr)
+	}
+
+	return quality.ProfileFor(tier, maxRes), nil
 }
 
 type grabRequest struct {
@@ -236,7 +275,7 @@ func classifyNZBGetState(state string) grabs.Status {
 // a manual, human-triggered refresh (there is no background poller anywhere
 // in this program) — the user clicks it, same as every other mutating
 // action in SAK.
-func checkImportHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, grabsStore *grabs.Store) http.HandlerFunc {
+func checkImportHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -308,20 +347,36 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 		}
 
 		if newStatus == grabs.Completed && contentPath != "" {
-			if _, err := rename.Relocate(contentPath, g.RootFolderPath); err != nil {
+			movedPath, err := rename.Relocate(contentPath, g.RootFolderPath)
+			if err != nil {
 				http.Error(w, fmt.Sprintf("download completed but import failed: %v", err), http.StatusBadGateway)
 				return
 			}
-			if _, err := sess.Servarr.Add(ctx, servarr.AddRequest{
-				Title: g.Title, TVDBID: g.TVDBID, TMDBID: g.TMDBID,
-				QualityProfileID: g.QualityProfileID, RootFolderPath: g.RootFolderPath, Monitored: true,
-			}); err != nil {
-				http.Error(w, fmt.Sprintf("file relocated but registering with %s failed: %v", g.Mode, err), http.StatusBadGateway)
-				return
-			}
-			if err := sess.Servarr.ScanForDownloaded(ctx); err != nil {
-				http.Error(w, fmt.Sprintf("registered but triggering a rescan failed: %v", err), http.StatusBadGateway)
-				return
+			if g.Mode == mode.Movies {
+				videoPath, err := library.ResolveVideoFile(movedPath)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("file relocated but resolving the video file failed: %v", err), http.StatusBadGateway)
+					return
+				}
+				if _, err := libStore.Upsert(ctx, library.Item{
+					Mode: mode.Movies, TMDBID: g.TMDBID, Title: g.Title,
+					FilePath: videoPath, RootFolderPath: g.RootFolderPath,
+				}); err != nil {
+					http.Error(w, fmt.Sprintf("file relocated but recording it in the library failed: %v", err), http.StatusBadGateway)
+					return
+				}
+			} else {
+				if _, err := sess.Servarr.Add(ctx, servarr.AddRequest{
+					Title: g.Title, TVDBID: g.TVDBID, TMDBID: g.TMDBID,
+					QualityProfileID: g.QualityProfileID, RootFolderPath: g.RootFolderPath, Monitored: true,
+				}); err != nil {
+					http.Error(w, fmt.Sprintf("file relocated but registering with %s failed: %v", g.Mode, err), http.StatusBadGateway)
+					return
+				}
+				if err := sess.Servarr.ScanForDownloaded(ctx); err != nil {
+					http.Error(w, fmt.Sprintf("registered but triggering a rescan failed: %v", err), http.StatusBadGateway)
+					return
+				}
 			}
 			newStatus = grabs.Imported
 		}

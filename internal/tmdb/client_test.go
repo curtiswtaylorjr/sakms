@@ -86,6 +86,30 @@ func TestPopular_Movie(t *testing.T) {
 	}
 }
 
+func TestSearchMovies_NormalizesAndSendsQuery(t *testing.T) {
+	var gotPath, gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(movieFixture))
+	})
+
+	items, err := c.SearchMovies(context.Background(), "Some Movie")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/search/movie" {
+		t.Errorf("unexpected path: %s", gotPath)
+	}
+	if gotQuery != "Some Movie" {
+		t.Errorf("expected query param %q, got %q", "Some Movie", gotQuery)
+	}
+	if len(items) != 1 || items[0].Title != "Some Movie" || items[0].MediaType != Movie {
+		t.Errorf("unexpected items: %+v", items)
+	}
+}
+
 func TestExternalIDs_ResolvesTVDBID(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tv/2/external_ids" {

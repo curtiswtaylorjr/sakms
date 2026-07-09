@@ -6,6 +6,7 @@ import (
 
 	"github.com/curtiswtaylorjr/sakms/internal/allowlist"
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/purge"
@@ -15,16 +16,12 @@ import (
 // purgeScanHandler runs the Purge workflow's propose-phase for {mode}:
 // fetches that mode's current allowlist, matches it against every tracked
 // item's tags, and replaces the live Purge queue with whatever matched.
-func purgeScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, allowStore *allowlist.Store) http.HandlerFunc {
+// Movies dispatches to purge.ScanLibrary (libStore, no Radarr involved);
+// Series/Adult use the existing Servarr-backed purge.Scan, unchanged.
+func purgeScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, allowStore *allowlist.Store, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
 		ctx := r.Context()
-
-		sess, err := mode.Build(ctx, connStore, settingsStore, httpClient, m)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
 
 		rules, err := allowStore.List(ctx, m)
 		if err != nil {
@@ -32,7 +29,17 @@ func purgeScanHandler(httpClient *http.Client, connStore *connections.Store, set
 			return
 		}
 
-		found, err := purge.Scan(ctx, sess, rules)
+		var found []proposals.Proposal
+		if m == mode.Movies {
+			found, err = purge.ScanLibrary(ctx, libStore, rules)
+		} else {
+			sess, buildErr := mode.Build(ctx, connStore, settingsStore, httpClient, m)
+			if buildErr != nil {
+				http.Error(w, buildErr.Error(), http.StatusBadRequest)
+				return
+			}
+			found, err = purge.Scan(ctx, sess, rules)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

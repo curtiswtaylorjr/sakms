@@ -19,6 +19,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/classify"
 	"github.com/curtiswtaylorjr/sakms/internal/config"
 	"github.com/curtiswtaylorjr/sakms/internal/identify"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/place"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
@@ -416,4 +417,149 @@ func Relocate(sourcePath, destRoot string) (string, error) {
 		return "", fmt.Errorf("moving %q to %q: %w", sourcePath, unique, err)
 	}
 	return unique, nil
+}
+
+// ScanLibrary is Rename's Movies-library counterpart to Scan — used only
+// for Movies mode, now that Radarr no longer sits between SAK and the
+// filesystem/TMDB (see internal/library's package doc). It walks
+// rootFolderPath (and sess.KidsRootPath, if configured and different) for
+// files libStore doesn't already know about, resolves each via TMDB search
+// instead of Servarr's Lookup, and skips anything whose TMDB id is already
+// in the library.
+//
+// Unlike Scan, this does NOT audit already-tracked items for kids/general
+// drift (reconcileTracked's counterpart): TMDB's search response carries no
+// certification/genre data the way *arr's own Lookup did, and fetching it
+// per already-tracked item on every Scan would be an expensive N+1 against
+// TMDB. This is a deliberate v1 simplification — new orphans are still
+// classified (via AI, using title+overview only, since certification/genre
+// metadata isn't available here without an extra per-item call), just not
+// already-tracked items.
+func ScanLibrary(ctx context.Context, sess *mode.Session, libStore *library.Store, rootFolderPath string) ([]proposals.Proposal, error) {
+	if sess.TMDB == nil {
+		return nil, fmt.Errorf("tmdb isn't configured yet — add it in Settings first")
+	}
+	if rootFolderPath == "" {
+		return nil, fmt.Errorf("no Movies library root folder configured yet — add one in Settings first")
+	}
+
+	existing, err := libStore.List(ctx, mode.Movies)
+	if err != nil {
+		return nil, fmt.Errorf("loading library items: %w", err)
+	}
+	known := make(map[string]bool, len(existing))
+	byTMDB := make(map[int]bool, len(existing))
+	for _, item := range existing {
+		known[item.FilePath] = true
+		// A tracked movie typically lives one level deeper than the root
+		// folder scan sees (root/Title (Year)/movie.mkv) — mark the
+		// containing directory known too, or ScanRootFolder would still
+		// report that wrapping folder as unmapped.
+		known[filepath.Dir(item.FilePath)] = true
+		byTMDB[item.TMDBID] = true
+	}
+
+	roots := []string{rootFolderPath}
+	if sess.KidsRootPath != "" && sess.KidsRootPath != rootFolderPath {
+		roots = append(roots, sess.KidsRootPath)
+	}
+
+	var out []proposals.Proposal
+	for _, root := range roots {
+		entries, err := library.ScanRootFolder(root, known)
+		if err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", root, err)
+		}
+		for _, entry := range entries {
+			if config.SidecarExts[strings.ToLower(filepath.Ext(entry.Name))] {
+				continue
+			}
+			out = append(out, proposeOneLibrary(ctx, sess, byTMDB, rootFolderPath, root, entry))
+		}
+	}
+	return out, nil
+}
+
+func proposeOneLibrary(
+	ctx context.Context, sess *mode.Session, byTMDB map[int]bool,
+	generalRoot, foundRoot string, entry library.UnmappedEntry,
+) proposals.Proposal {
+	p := proposals.Proposal{
+		Mode: mode.Movies, Workflow: proposals.Rename,
+		SourceName: entry.Name, SourcePath: entry.Path, RootFolderPath: foundRoot,
+	}
+
+	term := searchterm.FromName(entry.Name)
+	items, err := sess.TMDB.SearchMovies(ctx, term)
+	if err != nil {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("TMDB search failed for %q: %v", term, err)
+		return p
+	}
+	if len(items) == 0 {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("no TMDB match for %q", term)
+		return p
+	}
+	match := items[0]
+
+	if byTMDB[match.ID] {
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("appears to already be in the library as %q — leaving in place for manual review", match.Title)
+		return p
+	}
+
+	targetRoot := generalRoot
+	switch {
+	case foundRoot == sess.KidsRootPath:
+		// Already sitting under the Kids root — already correctly placed by
+		// whoever put it there, same as proposeOne's rule.
+		targetRoot = sess.KidsRootPath
+	case sess.KidsRootPath != "" && sess.MainstreamAI != nil:
+		if result, err := classify.WithAI(ctx, sess.MainstreamAI, match.Title, match.Overview); err == nil && result.IsKids {
+			targetRoot = sess.KidsRootPath
+		}
+	}
+
+	p.Status = proposals.Pending
+	p.Title = match.Title
+	p.TMDBID = match.ID
+	p.RootFolderPath = targetRoot
+	return p
+}
+
+// ApplyLibrary is Rename's Movies-library counterpart to Apply. p must be
+// Pending. Unlike Apply, there's no reconcile-drift case (ScanLibrary never
+// produces one — see its doc comment), so this only ever handles a new
+// orphan: relocate the file into its target root (if needed), resolve the
+// actual video file (Relocate preserves whatever shape the source had — a
+// directory wrapping the real file, or the file itself), then record it
+// directly in libStore — no registration/rescan round trip needed, since
+// libStore.Upsert itself IS the "now tracked" state, immediately.
+func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Proposal) (itemID int64, err error) {
+	if p.Status != proposals.Pending {
+		return 0, fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+	}
+
+	destPath := p.SourcePath
+	if p.SourcePath != "" && filepath.Dir(p.SourcePath) != p.RootFolderPath {
+		moved, err := Relocate(p.SourcePath, p.RootFolderPath)
+		if err != nil {
+			return 0, fmt.Errorf("relocating %q into %q: %w", p.SourcePath, p.RootFolderPath, err)
+		}
+		destPath = moved
+	}
+	videoPath, err := library.ResolveVideoFile(destPath)
+	if err != nil {
+		return 0, fmt.Errorf("resolving the video file under %q: %w", destPath, err)
+	}
+
+	item, err := libStore.Upsert(ctx, library.Item{
+		Mode: mode.Movies, TMDBID: p.TMDBID, Title: p.Title,
+		FilePath: videoPath, RootFolderPath: p.RootFolderPath,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("recording %q in the library: %w", p.Title, err)
+	}
+	return item.ID, nil
 }

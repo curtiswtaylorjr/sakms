@@ -7,50 +7,50 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"testing"
 
+	"github.com/curtiswtaylorjr/sakms/internal/library"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
 
-// fakeRadarrTagsHandler serves just enough of Radarr's API for a Purge Scan
-// followed by an Apply to succeed end to end: tracked items with tags, a
-// tag catalog to resolve labels, and a DELETE endpoint that records what it
-// was asked to remove.
-func fakeRadarrTagsHandler(t *testing.T, deletedPaths *[]string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v3/movie" && r.Method == http.MethodGet:
-			w.Write([]byte(`[
-				{"id":1,"title":"Vanilla Movie","path":"/media/Movies/Vanilla Movie","rootFolderPath":"/media/Movies","tags":[9]},
-				{"id":2,"title":"Flagged Movie","path":"/media/Movies/Flagged Movie","rootFolderPath":"/media/Movies","tags":[1]}
-			]`))
-		case r.URL.Path == "/api/v3/tag":
-			w.Write([]byte(`[{"id":1,"label":"BDSM"},{"id":9,"label":"family-friendly"}]`))
-		case r.URL.Path == "/api/v3/movie/2" && r.Method == http.MethodDelete:
-			*deletedPaths = append(*deletedPaths, r.URL.String())
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}
-}
-
 // TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd exercises the full
-// Purge loop: add a tag to the allowlist, Scan matches it against a live
-// Radarr's tracked items and tags, and Apply deletes exactly the one
-// approved proposal — hitting SAK's real HTTP handlers and a real
-// migrated SQLite database throughout.
+// Purge loop for Movies: add a tag to the allowlist, Scan matches it against
+// libStore's own tagged items (no Radarr involved anymore), and Apply
+// deletes exactly the one approved proposal — hitting SAK's real HTTP
+// handlers, a real migrated SQLite database, and a real on-disk file.
 func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
-	var deletedPaths []string
-	fakeRadarr := httptest.NewServer(fakeRadarrTagsHandler(t, &deletedPaths))
-	defer fakeRadarr.Close()
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	ctx := context.Background()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	if err := connStore.Upsert(context.Background(), "radarr", fakeRadarr.URL, "test-key"); err != nil {
+	dir := t.TempDir()
+	vanillaPath := dir + "/vanilla.mkv"
+	flaggedPath := dir + "/flagged.mkv"
+	if err := os.WriteFile(vanillaPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := os.WriteFile(flaggedPath, []byte("x"), 0o644); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	vanilla, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 1, Title: "Vanilla Movie", FilePath: vanillaPath, RootFolderPath: dir})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := libStore.AddTag(ctx, vanilla.ID, "family-friendly"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	flagged, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 2, Title: "Flagged Movie", FilePath: flaggedPath, RootFolderPath: dir})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := libStore.AddTag(ctx, flagged.ID, "BDSM"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Add a tag to the allowlist via the API, not directly on the store.
@@ -85,7 +85,7 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 	}
 	var scanned []proposals.Proposal
 	json.NewDecoder(scanResp.Body).Decode(&scanned)
-	if len(scanned) != 1 || scanned[0].Title != "Flagged Movie" || scanned[0].TrackedID != 2 {
+	if len(scanned) != 1 || scanned[0].Title != "Flagged Movie" || scanned[0].TrackedID != int(flagged.ID) {
 		t.Fatalf("unexpected scan result: %+v", scanned)
 	}
 
@@ -114,8 +114,14 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 	if applied.Status != proposals.Applied {
 		t.Fatalf("expected the proposal to come back Applied, got %+v", applied)
 	}
-	if len(deletedPaths) != 1 || deletedPaths[0] != "/api/v3/movie/2?deleteFiles=true" {
-		t.Fatalf("expected exactly one delete call for the approved item, got %v", deletedPaths)
+	if _, err := os.Stat(flaggedPath); !os.IsNotExist(err) {
+		t.Errorf("expected the flagged movie's file to be deleted, stat returned: %v", err)
+	}
+	if _, err := os.Stat(vanillaPath); err != nil {
+		t.Errorf("expected the vanilla movie's file to survive untouched, got: %v", err)
+	}
+	if _, err := libStore.Get(ctx, flagged.ID); err != library.ErrNotFound {
+		t.Errorf("expected the flagged movie's library record to be deleted, got err=%v", err)
 	}
 
 	// Remove the tag again via the API.
@@ -142,8 +148,8 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 }
 
 func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(addAllowlistTagRequest{})
@@ -157,9 +163,28 @@ func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
 	}
 }
 
+// TestPurgeScanHandler_ModeNotConfigured proves Series' Purge Scan still
+// requires a Sonarr connection (unchanged, *arr-backed) — Movies no longer
+// needs any connection at all for Purge (see
+// TestPurgeScanHandler_Movies_NoConnectionNeeded below).
 func TestPurgeScanHandler_ModeNotConfigured(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/modes/series/purge/scan", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when sonarr isn't configured yet, got %d", resp.StatusCode)
+	}
+}
+
+func TestPurgeScanHandler_Movies_NoConnectionNeeded(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/modes/movies/purge/scan", "application/json", nil)
@@ -167,7 +192,7 @@ func TestPurgeScanHandler_ModeNotConfigured(t *testing.T) {
 		t.Fatalf("POST failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 when radarr isn't configured yet, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with no radarr connection at all, got %d", resp.StatusCode)
 	}
 }

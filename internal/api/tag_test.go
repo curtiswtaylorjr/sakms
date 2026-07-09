@@ -6,20 +6,26 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+
+	"github.com/curtiswtaylorjr/sakms/internal/library"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
 )
 
 // TestTagWorkflow_AddThenRemove_EndToEnd exercises the real path a tag chip
 // click takes: assign a tag (creating it upstream since it doesn't exist
 // yet), confirm the vocabulary reflects it, then remove it — hitting
-// SAK's real HTTP handlers and a fake Radarr throughout. Unlike Rename/
-// Purge/Dedup, there's no proposals queue involved: see internal/tag's doc
-// comment for why assigning a tag is an immediate action, not a staged one.
+// SAK's real HTTP handlers and a fake Sonarr throughout. Series (Sonarr)
+// still uses the *arr-backed Tag path unchanged; Movies' own libStore-backed
+// path is covered separately below. Unlike Rename/Purge/Dedup, there's no
+// proposals queue involved: see internal/tag's doc comment for why
+// assigning a tag is an immediate action, not a staged one.
 func TestTagWorkflow_AddThenRemove_EndToEnd(t *testing.T) {
 	tags := []map[string]any{}
 	itemTags := []int{}
 
-	fakeRadarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeSonarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v3/tag" && r.Method == http.MethodGet:
 			json.NewEncoder(w).Encode(tags)
@@ -29,13 +35,13 @@ func TestTagWorkflow_AddThenRemove_EndToEnd(t *testing.T) {
 			newTag := map[string]any{"id": 7, "label": body["label"]}
 			tags = append(tags, newTag)
 			json.NewEncoder(w).Encode(newTag)
-		case r.URL.Path == "/api/v3/movie/9" && r.Method == http.MethodGet:
+		case r.URL.Path == "/api/v3/series/9" && r.Method == http.MethodGet:
 			ids := make([]any, len(itemTags))
 			for i, id := range itemTags {
 				ids[i] = id
 			}
-			json.NewEncoder(w).Encode(map[string]any{"id": 9, "title": "Some Movie", "tags": ids})
-		case r.URL.Path == "/api/v3/movie/9" && r.Method == http.MethodPut:
+			json.NewEncoder(w).Encode(map[string]any{"id": 9, "title": "Some Show", "tags": ids})
+		case r.URL.Path == "/api/v3/series/9" && r.Method == http.MethodPut:
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
 			itemTags = itemTags[:0]
@@ -47,18 +53,18 @@ func TestTagWorkflow_AddThenRemove_EndToEnd(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer fakeRadarr.Close()
+	defer fakeSonarr.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	if err := connStore.Upsert(context.Background(), "radarr", fakeRadarr.URL, "test-key"); err != nil {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "sonarr", fakeSonarr.URL, "test-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Assign a brand-new tag.
 	addBody, _ := json.Marshal(addItemTagRequest{Label: "needs-review"})
-	addResp, err := http.Post(srv.URL+"/api/modes/movies/items/9/tags", "application/json", bytes.NewReader(addBody))
+	addResp, err := http.Post(srv.URL+"/api/modes/series/items/9/tags", "application/json", bytes.NewReader(addBody))
 	if err != nil {
 		t.Fatalf("add tag POST failed: %v", err)
 	}
@@ -71,7 +77,7 @@ func TestTagWorkflow_AddThenRemove_EndToEnd(t *testing.T) {
 	}
 
 	// The vocabulary now reflects the newly created tag.
-	vocabResp, err := http.Get(srv.URL + "/api/modes/movies/tags")
+	vocabResp, err := http.Get(srv.URL + "/api/modes/series/tags")
 	if err != nil {
 		t.Fatalf("list tags GET failed: %v", err)
 	}
@@ -83,7 +89,7 @@ func TestTagWorkflow_AddThenRemove_EndToEnd(t *testing.T) {
 	}
 
 	// Remove it again.
-	delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/modes/movies/items/9/tags/7", nil)
+	delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/modes/series/items/9/tags/7", nil)
 	delResp, err := http.DefaultClient.Do(delReq)
 	if err != nil {
 		t.Fatalf("remove tag DELETE failed: %v", err)
@@ -94,6 +100,62 @@ func TestTagWorkflow_AddThenRemove_EndToEnd(t *testing.T) {
 	}
 	if len(itemTags) != 0 {
 		t.Fatalf("expected the item to have no tags after removal, got %v", itemTags)
+	}
+}
+
+// TestTagWorkflow_Movies_AddThenRemove_EndToEnd is Movies' own libStore-
+// backed counterpart — no Radarr connection configured at all, proving the
+// tag workflow works entirely locally now.
+func TestTagWorkflow_Movies_AddThenRemove_EndToEnd(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	item, err := libStore.Upsert(context.Background(), library.Item{
+		Mode: mode.Movies, TMDBID: 1, Title: "Some Movie", RootFolderPath: "/movies",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	itemPath := "/api/modes/movies/items/" + strconv.FormatInt(item.ID, 10) + "/tags"
+
+	addBody, _ := json.Marshal(addItemTagRequest{Label: "needs-review"})
+	addResp, err := http.Post(srv.URL+itemPath, "application/json", bytes.NewReader(addBody))
+	if err != nil {
+		t.Fatalf("add tag POST failed: %v", err)
+	}
+	addResp.Body.Close()
+	if addResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 from add, got %d", addResp.StatusCode)
+	}
+
+	vocabResp, err := http.Get(srv.URL + "/api/modes/movies/tags")
+	if err != nil {
+		t.Fatalf("list tags GET failed: %v", err)
+	}
+	defer vocabResp.Body.Close()
+	var vocab []libraryTagEntry
+	json.NewDecoder(vocabResp.Body).Decode(&vocab)
+	if len(vocab) != 1 || vocab[0].Label != "needs-review" || vocab[0].ID != "needs-review" {
+		t.Fatalf("expected the vocabulary to include the new tag, got %+v", vocab)
+	}
+
+	delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+itemPath+"/needs-review", nil)
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("remove tag DELETE failed: %v", err)
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 from remove, got %d", delResp.StatusCode)
+	}
+
+	tags, err := libStore.Tags(context.Background(), item.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Fatalf("expected no tags after removal, got %v", tags)
 	}
 }
 
@@ -141,11 +203,11 @@ func TestTagWorkflow_Adult_AddThenRemove_EndToEnd(t *testing.T) {
 	}))
 	defer fakeWhisparr.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "whisparr", fakeWhisparr.URL, "test-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Assign a brand-new tag.
@@ -190,8 +252,8 @@ func TestTagWorkflow_Adult_AddThenRemove_EndToEnd(t *testing.T) {
 }
 
 func TestAddItemTagHandler_RequiresLabel(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(addItemTagRequest{})
@@ -206,8 +268,26 @@ func TestAddItemTagHandler_RequiresLabel(t *testing.T) {
 }
 
 func TestListTagsHandler_ModeNotConfigured(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/series/tags")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when sonarr isn't configured yet, got %d", resp.StatusCode)
+	}
+}
+
+// TestListTagsHandler_Movies_NoConnectionNeeded confirms Movies' vocabulary
+// works with ZERO connections configured — the whole point of eliminating
+// Radarr for this mode.
+func TestListTagsHandler_Movies_NoConnectionNeeded(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/tags")
@@ -215,7 +295,12 @@ func TestListTagsHandler_ModeNotConfigured(t *testing.T) {
 		t.Fatalf("GET failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 when radarr isn't configured yet, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with no radarr connection at all, got %d", resp.StatusCode)
+	}
+	var vocab []libraryTagEntry
+	json.NewDecoder(resp.Body).Decode(&vocab)
+	if len(vocab) != 0 {
+		t.Fatalf("expected an empty vocabulary on a fresh install, got %+v", vocab)
 	}
 }

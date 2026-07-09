@@ -12,6 +12,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
 	"github.com/curtiswtaylorjr/sakms/internal/db"
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
+	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
@@ -27,10 +28,10 @@ func testProber(t *testing.T) *mediainfo.Prober {
 }
 
 // testStores builds real connections.Store, proposals.Store,
-// allowlist.Store, settings.Store, and grabs.Store instances against one
-// freshly migrated temp-file database, the same way each package's own
-// tests do — handler tests exercise the real stack, not a mock.
-func testStores(t *testing.T) (*connections.Store, *proposals.Store, *allowlist.Store, *settings.Store, *grabs.Store) {
+// allowlist.Store, settings.Store, grabs.Store, and library.Store instances
+// against one freshly migrated temp-file database, the same way each
+// package's own tests do — handler tests exercise the real stack, not a mock.
+func testStores(t *testing.T) (*connections.Store, *proposals.Store, *allowlist.Store, *settings.Store, *grabs.Store, *library.Store) {
 	t.Helper()
 	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "sakms.db"))
 	if err != nil {
@@ -41,28 +42,28 @@ func testStores(t *testing.T) (*connections.Store, *proposals.Store, *allowlist.
 	if err != nil {
 		t.Fatalf("building secret store: %v", err)
 	}
-	return connections.New(sqlDB, secretStore), proposals.New(sqlDB), allowlist.New(sqlDB), settings.New(sqlDB), grabs.New(sqlDB)
+	return connections.New(sqlDB, secretStore), proposals.New(sqlDB), allowlist.New(sqlDB), settings.New(sqlDB), grabs.New(sqlDB), library.New(sqlDB)
 }
 
 // TestConnectionsTestHandler_EndToEnd exercises the real path a Settings
 // "Test connection" click takes: an HTTP POST into SAK's own server,
 // which itself makes a real HTTP call out to the configured service (here, a
-// second httptest server standing in for a live Radarr) and reports back
+// second httptest server standing in for a live Sonarr) and reports back
 // over JSON. This is the thing actually wiring identify/servarr/ollama/
 // stashapi into cmd/sakms is meant to prove works, not just that each
 // package compiles in isolation.
 func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
-	fakeRadarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[{"id":1,"path":"/media/Movies","accessible":true,"freeSpace":123}]`))
+	fakeSonarr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"id":1,"path":"/media/Series","accessible":true,"freeSpace":123}]`))
 	}))
-	defer fakeRadarr.Close()
+	defer fakeSonarr.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	sakSrv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	sakSrv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer sakSrv.Close()
 
 	reqBody, _ := json.Marshal(ConnectionTestRequest{
-		Service: "radarr", URL: fakeRadarr.URL, APIKey: "test-key",
+		Service: "sonarr", URL: fakeSonarr.URL, APIKey: "test-key",
 	})
 	resp, err := http.Post(sakSrv.URL+"/api/connections/test", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
@@ -83,8 +84,8 @@ func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
 }
 
 func TestConnectionsTestHandler_MalformedBody(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/connections/test", "application/json", bytes.NewReader([]byte("not json")))
@@ -103,8 +104,8 @@ func TestConnectionsTestHandler_MalformedBody(t *testing.T) {
 // a real migrated SQLite file — not just the connections package in
 // isolation.
 func TestConnectionsCRUD_EndToEnd(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Save a connection.
@@ -157,8 +158,8 @@ func TestConnectionsCRUD_EndToEnd(t *testing.T) {
 }
 
 func TestUpsertConnectionHandler_RequiresURL(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(upsertConnectionRequest{APIKey: "key-with-no-url"})
