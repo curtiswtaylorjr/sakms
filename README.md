@@ -37,7 +37,12 @@ folder — `GET`/`PUT /api/modes/{movies,series}/rename/kids-root-path`, picked
 explicitly from the mode's own real root folders rather than guessed from a
 naming convention; Apply physically relocates the file into that root before
 registering it, since Sonarr/Radarr can only import from where it's actually
-sitting), **Purge** (`POST
+sitting. Classification isn't only applied to new orphans: Scan also audits
+every ALREADY-TRACKED item under the general or Kids root and stages a
+proposal when its classification has drifted from where it currently sits —
+Apply reclassifies those through the *arr app's own root-folder move
+(`moveFiles=true`), never touching the filesystem directly for an item it
+already manages), **Purge** (`POST
 /api/modes/{movies,series,adult}/purge/scan` matches a per-mode tag allowlist,
 managed via `/api/modes/{mode}/purge/allowlist`, against every tracked
 item's native tags — Adult needed no code changes, since Whisparr's tracked

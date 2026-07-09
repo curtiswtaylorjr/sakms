@@ -79,7 +79,64 @@ func Scan(ctx context.Context, sess *mode.Session) ([]proposals.Proposal, error)
 			}
 		}
 	}
+	if sess.Mode != mode.Adult {
+		out = append(out, reconcileTracked(ctx, sess.Mode, sess.MainstreamAI, kidsRootPath, folders, tracked)...)
+	}
 	return out, nil
+}
+
+// reconcileTracked audits every ALREADY-TRACKED item under the general or
+// Kids root for kids/general misplacement — the counterpart to proposeOne's
+// classification, which only ever runs on newly-found orphans. Without this,
+// a tracked item's classification could drift (a re-rated title, a fixed-up
+// genre list) and Rename would never surface it. Only produces proposals
+// when kidsRootPath is actually configured; a no-op otherwise.
+//
+// general→kids is unambiguous (the destination is always kidsRootPath), but
+// kids→general needs to know WHICH other root folder is "general" — only
+// attempted when exactly one non-Kids root folder exists, since guessing
+// among several would be exactly the kind of silent misrouting this project
+// avoids. A multi-general-root setup simply won't get kids→general
+// reconciliation; it still gets general→kids.
+func reconcileTracked(ctx context.Context, m mode.Mode, mainstreamAI identify.AIClient, kidsRootPath string, folders []servarr.RootFolder, tracked []servarr.TrackedItem) []proposals.Proposal {
+	if kidsRootPath == "" {
+		return nil
+	}
+
+	var generalRoot string
+	generalCount := 0
+	for _, f := range folders {
+		if f.Path != kidsRootPath {
+			generalRoot = f.Path
+			generalCount++
+		}
+	}
+	unambiguousGeneral := generalCount == 1
+
+	var out []proposals.Proposal
+	for _, t := range tracked {
+		cls := classifyKids(ctx, mainstreamAI, servarr.LookupResult{
+			Title: t.Title, Certification: t.Certification, Genres: t.Genres, Overview: t.Overview,
+		})
+
+		var wantPath string
+		switch {
+		case cls.IsKids && t.RootFolderPath != kidsRootPath:
+			wantPath = kidsRootPath
+		case !cls.IsKids && t.RootFolderPath == kidsRootPath && unambiguousGeneral:
+			wantPath = generalRoot
+		default:
+			continue // already correctly placed
+		}
+
+		out = append(out, proposals.Proposal{
+			Mode: m, Workflow: proposals.Rename, Status: proposals.Pending,
+			SourceName: t.Title, SourcePath: t.Path, RootFolderPath: wantPath,
+			Title: t.Title, TVDBID: t.TVDBID, TMDBID: t.TMDBID, TrackedID: t.ID,
+			Reason: fmt.Sprintf("currently in %s, classified kids=%v (%s) — should move to %s", t.RootFolderPath, cls.IsKids, cls.Reason, wantPath),
+		})
+	}
+	return out
 }
 
 func proposeOne(
@@ -248,13 +305,19 @@ func classifyAdultMatch(res *identify.MatchResult, err error) (status proposals.
 // disk under p.RootFolderPath. p must be Pending — Apply refuses anything
 // else (already applied, dismissed, or unmatched with nothing to register).
 //
-// If p was classified into a different root than it was originally found
-// under (see classifyKids in Scan), the file is physically relocated into
-// that root FIRST — Sonarr/Radarr can only import a file that's already
-// sitting under the root folder it's being registered against. This is the
-// one place Rename ever touches the filesystem directly (mirroring Dedup's
-// existing os.Remove precedent for the same reason: Tidyarr runs with direct
-// local access to the same paths the *arr apps report).
+// A nonzero p.TrackedID means p came from reconcileTracked, not proposeOne —
+// the item is already tracked and just needs to move root folders, which
+// Radarr/Sonarr's own UpdateRootFolder (moveFiles=true) handles entirely on
+// its own side; Tidyarr never touches that file directly.
+//
+// Otherwise (a new orphan), if p was classified into a different root than
+// it was originally found under (see classifyKids in Scan), the file is
+// physically relocated into that root FIRST — Sonarr/Radarr can only import
+// a file that's already sitting under the root folder it's being registered
+// against. This is the one place Rename ever touches the filesystem
+// directly (mirroring Dedup's existing os.Remove precedent for the same
+// reason: Tidyarr runs with direct local access to the same paths the *arr
+// apps report).
 //
 // If Add succeeds but the follow-up scan trigger fails, trackedID is still
 // returned alongside the error: the item is genuinely registered at that
@@ -264,6 +327,13 @@ func classifyAdultMatch(res *identify.MatchResult, err error) (status proposals.
 func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal) (trackedID int, err error) {
 	if p.Status != proposals.Pending {
 		return 0, fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+	}
+
+	if p.TrackedID != 0 {
+		if err := sess.Servarr.UpdateRootFolder(ctx, p.TrackedID, p.RootFolderPath); err != nil {
+			return 0, fmt.Errorf("reclassifying %q: %w", p.Title, err)
+		}
+		return p.TrackedID, nil
 	}
 
 	// Structural safety guard at the mutation boundary: a Whisparr scene needs

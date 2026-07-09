@@ -843,3 +843,156 @@ func TestApply_NoRelocateWhenRootFolderPathMatchesSource(t *testing.T) {
 		t.Fatalf("expected no relocate attempt (and so no error) when the root already matches, got: %v", err)
 	}
 }
+
+// TestScan_ReconcilesGeneralToKidsForTrackedItem proves the counterpart to
+// proposeOne's classification: an already-tracked item's classification can
+// drift (a re-rated title, a fixed-up genre list), and Scan must surface
+// that even though the item was never an orphan.
+func TestScan_ReconcilesGeneralToKidsForTrackedItem(t *testing.T) {
+	f := &fakeRadarr{
+		rootFolders: `[
+			{"id":1,"path":"/media/Movies","accessible":true,"freeSpace":1,"unmappedFolders":[]},
+			{"id":2,"path":"/media/Movies (Kids)","accessible":true,"freeSpace":1,"unmappedFolders":[]}
+		]`,
+		tracked: `[
+			{"id":50,"title":"Old Kids Movie","path":"/media/Movies/Old Kids Movie","rootFolderPath":"/media/Movies","tmdbId":50,"certification":"G"}
+		]`,
+		profiles: `[{"id":4,"name":"HD"}]`,
+		lookups:  map[string]string{},
+	}
+	sess := newTestSession(t, servarr.Radarr, f.handler(t))
+	sess.KidsRootPath = "/media/Movies (Kids)"
+
+	got, err := Scan(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 reconcile proposal, got %d: %+v", len(got), got)
+	}
+	p := got[0]
+	if p.Status != proposals.Pending || p.TrackedID != 50 || p.RootFolderPath != "/media/Movies (Kids)" {
+		t.Fatalf("expected a reconcile proposal moving id=50 to the Kids root, got %+v", p)
+	}
+	if !strings.Contains(p.Reason, "should move to /media/Movies (Kids)") {
+		t.Errorf("expected an explanatory reason, got %q", p.Reason)
+	}
+}
+
+// TestScan_ReconcilesKidsToGeneralWhenUnambiguous proves the reverse
+// direction works when there's exactly one candidate general root to send
+// the item back to.
+func TestScan_ReconcilesKidsToGeneralWhenUnambiguous(t *testing.T) {
+	f := &fakeRadarr{
+		rootFolders: `[
+			{"id":1,"path":"/media/Movies","accessible":true,"freeSpace":1,"unmappedFolders":[]},
+			{"id":2,"path":"/media/Movies (Kids)","accessible":true,"freeSpace":1,"unmappedFolders":[]}
+		]`,
+		tracked: `[
+			{"id":60,"title":"Actually Adult Movie","path":"/media/Movies (Kids)/Actually Adult Movie","rootFolderPath":"/media/Movies (Kids)","tmdbId":60,"certification":"R"}
+		]`,
+		profiles: `[{"id":4,"name":"HD"}]`,
+		lookups:  map[string]string{},
+	}
+	sess := newTestSession(t, servarr.Radarr, f.handler(t))
+	sess.KidsRootPath = "/media/Movies (Kids)"
+
+	got, err := Scan(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].TrackedID != 60 || got[0].RootFolderPath != "/media/Movies" {
+		t.Fatalf("expected a reconcile proposal moving id=60 back to the general root, got %+v", got)
+	}
+}
+
+// TestScan_NoKidsToGeneralReconcileWhenAmbiguous confirms an ambiguous
+// (more than one candidate) general root disables ONLY the kids→general
+// direction — general→kids is unaffected since its destination is never
+// ambiguous.
+func TestScan_NoKidsToGeneralReconcileWhenAmbiguous(t *testing.T) {
+	f := &fakeRadarr{
+		rootFolders: `[
+			{"id":1,"path":"/media/Movies","accessible":true,"freeSpace":1,"unmappedFolders":[]},
+			{"id":2,"path":"/media/Movies2","accessible":true,"freeSpace":1,"unmappedFolders":[]},
+			{"id":3,"path":"/media/Movies (Kids)","accessible":true,"freeSpace":1,"unmappedFolders":[]}
+		]`,
+		tracked: `[
+			{"id":60,"title":"Actually Adult Movie","path":"/media/Movies (Kids)/x","rootFolderPath":"/media/Movies (Kids)","tmdbId":60,"certification":"R"},
+			{"id":70,"title":"Should Be Kids","path":"/media/Movies/y","rootFolderPath":"/media/Movies","tmdbId":70,"certification":"G"}
+		]`,
+		profiles: `[{"id":4,"name":"HD"}]`,
+		lookups:  map[string]string{},
+	}
+	sess := newTestSession(t, servarr.Radarr, f.handler(t))
+	sess.KidsRootPath = "/media/Movies (Kids)"
+
+	got, err := Scan(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].TrackedID != 70 || got[0].RootFolderPath != "/media/Movies (Kids)" {
+		t.Fatalf("expected only the unambiguous general->kids reconcile, got %+v", got)
+	}
+}
+
+// TestScan_NoReconcileWhenKidsPathNotConfigured confirms reconcileTracked is
+// a complete no-op for the default (unconfigured) case.
+func TestScan_NoReconcileWhenKidsPathNotConfigured(t *testing.T) {
+	f := &fakeRadarr{
+		rootFolders: `[{"id":1,"path":"/media/Movies","accessible":true,"freeSpace":1,"unmappedFolders":[]}]`,
+		tracked: `[
+			{"id":50,"title":"Old Kids Movie","path":"/media/Movies/Old Kids Movie","rootFolderPath":"/media/Movies","tmdbId":50,"certification":"G"}
+		]`,
+		profiles: `[{"id":4,"name":"HD"}]`,
+		lookups:  map[string]string{},
+	}
+	sess := newTestSession(t, servarr.Radarr, f.handler(t))
+
+	got, err := Scan(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no reconcile proposals without a configured Kids path, got %+v", got)
+	}
+}
+
+// TestApply_ReconcileCallsUpdateRootFolder proves a nonzero TrackedID routes
+// Apply through UpdateRootFolder instead of Add — Radarr/Sonarr's own
+// moveFiles=true handles the physical move, so this proposal shape never
+// touches the filesystem directly.
+func TestApply_ReconcileCallsUpdateRootFolder(t *testing.T) {
+	var gotMoveFiles string
+	var putBody map[string]any
+	sess := newTestSession(t, servarr.Radarr, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/50":
+			w.Write([]byte(`{"id":50,"title":"Old Kids Movie","rootFolderPath":"/media/Movies","tmdbId":50}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/movie/50":
+			gotMoveFiles = r.URL.Query().Get("moveFiles")
+			json.NewDecoder(r.Body).Decode(&putBody)
+			w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	p := proposals.Proposal{
+		ID: 1, Status: proposals.Pending, Title: "Old Kids Movie", TMDBID: 50,
+		TrackedID: 50, RootFolderPath: "/media/Movies (Kids)",
+	}
+	id, err := Apply(context.Background(), sess, p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != 50 {
+		t.Errorf("expected the proposal's own TrackedID (50) back, got %d", id)
+	}
+	if gotMoveFiles != "true" {
+		t.Errorf("expected moveFiles=true, got %q", gotMoveFiles)
+	}
+	if putBody["rootFolderPath"] != "/media/Movies (Kids)" {
+		t.Errorf("expected the PUT to carry the new root folder, got %+v", putBody)
+	}
+}
