@@ -143,13 +143,18 @@ func applyByWorkflow(ctx context.Context, settingsStore *settings.Store, propSto
 			}
 			return propStore.MarkApplied(ctx, p.ID, int(episodeID))
 		}
-		trackedID, err := rename.Apply(ctx, sess, p)
+		trackedID, fingerprintSubmitted, err := rename.Apply(ctx, sess, p)
 		if trackedID != 0 {
 			// Registered even if the follow-up scan trigger failed — see
 			// rename.Apply's doc comment. Record it as applied either way so
 			// the queue doesn't lose track of an item that's now real.
 			if markErr := propStore.MarkApplied(ctx, p.ID, trackedID); markErr != nil {
 				return markErr
+			}
+			if fingerprintSubmitted {
+				if markErr := propStore.MarkFingerprintSubmitted(ctx, p.ID); markErr != nil {
+					return markErr
+				}
 			}
 		}
 		return err
@@ -226,6 +231,49 @@ func submitDraftHandler(httpClient *http.Client, connStore *connections.Store, s
 			return
 		}
 		if err := propStore.MarkDraftSubmitted(ctx, id, draftID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		updated, err := propStore.Get(ctx, id)
+		if err != nil {
+			proposalNotFoundOr500(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(updated)
+	}
+}
+
+// submitFingerprintHandler re-attempts give-back for an already-Applied
+// Adult proposal whose phash wasn't ready yet at Apply time — a separate,
+// explicitly human-triggered retry action (see rename.SubmitFingerprintRetry's
+// doc comment for why this isn't automatic).
+func submitFingerprintHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseProposalID(w, r)
+		if !ok {
+			return
+		}
+		ctx := r.Context()
+
+		p, err := propStore.Get(ctx, id)
+		if err != nil {
+			proposalNotFoundOr500(w, err)
+			return
+		}
+
+		sess, err := mode.Build(ctx, connStore, settingsStore, httpClient, p.Mode)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := rename.SubmitFingerprintRetry(ctx, sess, *p); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if err := propStore.MarkFingerprintSubmitted(ctx, id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

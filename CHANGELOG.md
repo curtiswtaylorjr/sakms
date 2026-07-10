@@ -243,3 +243,56 @@ not the vague "transcoding" scope mismatch it looked like in isolation.
 User also requested this changelog and `docs/ROADMAP.md` be created and
 kept up going forward, given the volume of undocumented decisions
 accumulating in conversation alone.
+
+## 2026-07-10 — Adult phash-first identification restoration shipped
+
+Implemented effort #1 from the previous entry: phash is now Adult's
+**primary** identification signal, restoring (and improving on) the prior
+CLI's behavior.
+
+- **`mode.Session.Stash *stashapi.Client`** (new field): populated only when
+  a `"stash"` connection exists; nil otherwise (fully additive, every other
+  mode/path unaffected).
+- **`identify.Identifier.LookupFingerprints`**: batched (25 phashes/request)
+  StashDB→FansDB→TPDB-GraphQL fingerprint cascade — the real 3-stage
+  cascade, not the old CLI's stale 4-stage comment (see previous entry). A
+  box that errors or isn't configured is skipped, not fatal; the cascade
+  falls through stage by stage using the *original* candidate order, not a
+  shrinking one.
+- **`proposals.Proposal`** gained `PHash`, `DurationSeconds`, `GiveBackBox`,
+  `GiveBackSceneID`, `FingerprintSubmittedAt` (migration `0016`).
+  `GiveBackBox`/`GiveBackSceneID` are captured directly from the
+  identification match, not reconstructed from `ForeignID` later — a real
+  ambiguity would otherwise bite here: `MatchResult.WhisparrForeignID()`
+  returns the *same* raw UUID string for both a StashDB and a FansDB match
+  (only TPDB gets a distinguishing `"tpdbId:"` prefix), so `ForeignID` alone
+  can never say which community box a match came from.
+- **`rename.Scan`** now routes Adult candidates through a new
+  `scanAdultPhashFirst` orchestrator whenever `sess.Stash != nil`: batch-load
+  every candidate's phash from Stash, force-generate (targeted Stash rescan,
+  `scanGeneratePhashes: true`) for anything still missing one, run the
+  fingerprint cascade, and fall back to the existing AI/text pipeline
+  (`proposeOneAdult`) only for candidates the cascade still can't resolve.
+  A cascade hit skips the AI/text pipeline entirely. Fails open to the
+  legacy per-item pipeline if Stash itself is unreachable — Adult
+  identification never blocks on Stash's availability.
+- **Give-back moved to Apply-time**, not Scan-time as in the old CLI:
+  `rename.Apply` now submits a matched proposal's fingerprint back to its
+  origin community box right after registration succeeds (best-effort —
+  failure never turns an otherwise-successful Apply into an error), since
+  Scan only ever proposes in this project; submitting to a community
+  database off an unapproved proposal would violate staged-for-approval.
+  New exported `rename.SubmitFingerprintRetry` covers the case Stash's own
+  phash generation is asynchronous and may still be missing at Apply time —
+  a separate, human-triggered retry (mirroring `SubmitDraft`'s precedent),
+  wired to `POST /api/proposals/{id}/submit-fingerprint` and a new "Give
+  back fingerprint" button on Applied Adult Rename proposals with an
+  unsubmitted give-back target.
+
+Verified via `go build/vet/test -race` across the whole module (all green),
+including new fake-Stash/fake-stash-box test coverage for: a cascade hit
+(AI pipeline never runs), a cascade miss (falls through correctly), a
+missing phash getting force-generated mid-scan and then resolving, Stash
+being unreachable (fails open), the give-back-box/scene-id capture
+correctness case above, Apply's give-back submission (both when it fires
+and when it correctly doesn't), and the retry endpoint end-to-end.

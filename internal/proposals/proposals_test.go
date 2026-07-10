@@ -191,6 +191,77 @@ func TestReplacePending_PersistsStudioAndDate(t *testing.T) {
 	}
 }
 
+func TestReplacePending_PersistsFingerprintFields(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	saved, err := s.ReplacePending(ctx, mode.Adult, Rename, []Proposal{
+		{
+			Status: Pending, SourceName: "Some Scene", SourcePath: "/media/Adult/Some Scene",
+			RootFolderPath: "/media/Adult", Title: "Some Scene", ForeignID: "abc-123",
+			PHash: "deadbeef", DurationSeconds: 1800, GiveBackBox: "stashdb", GiveBackSceneID: "abc-123",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if saved[0].PHash != "deadbeef" || saved[0].DurationSeconds != 1800 ||
+		saved[0].GiveBackBox != "stashdb" || saved[0].GiveBackSceneID != "abc-123" {
+		t.Fatalf("expected fingerprint fields to survive the insert, got %+v", saved[0])
+	}
+	if saved[0].FingerprintSubmittedAt != "" {
+		t.Fatalf("expected no fingerprint submission yet, got %+v", saved[0])
+	}
+
+	got, err := s.Get(ctx, saved[0].ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.PHash != "deadbeef" || got.DurationSeconds != 1800 ||
+		got.GiveBackBox != "stashdb" || got.GiveBackSceneID != "abc-123" {
+		t.Fatalf("expected fingerprint fields to round-trip from storage, got %+v", got)
+	}
+
+	list, err := s.List(ctx, mode.Adult, Rename)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 1 || list[0].PHash != "deadbeef" {
+		t.Fatalf("expected fingerprint fields to round-trip via List too, got %+v", list)
+	}
+}
+
+func TestMarkFingerprintSubmitted_PersistsTimestamp(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	saved, err := s.ReplacePending(ctx, mode.Adult, Rename, []Proposal{
+		{Status: Pending, SourceName: "Some Scene", Title: "Some Scene", GiveBackBox: "stashdb", GiveBackSceneID: "abc-123"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := s.MarkFingerprintSubmitted(ctx, saved[0].ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := s.Get(ctx, saved[0].ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.FingerprintSubmittedAt == "" {
+		t.Fatal("expected FingerprintSubmittedAt to be set")
+	}
+}
+
+func TestMarkFingerprintSubmitted_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.MarkFingerprintSubmitted(context.Background(), 999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestMarkDraftSubmitted_PersistsDraftID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

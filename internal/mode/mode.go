@@ -25,6 +25,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/qbittorrent"
 	"github.com/curtiswtaylorjr/sakms/internal/servarr"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/stashapi"
 	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
 	"github.com/curtiswtaylorjr/sakms/internal/throttle"
 	"github.com/curtiswtaylorjr/sakms/internal/tmdb"
@@ -178,6 +179,15 @@ type Session struct {
 	// TMDB backs the Discover browse view — same "global, tolerant" rule as
 	// Prowlarr/QBittorrent/NZBGet above.
 	TMDB *tmdb.Client
+
+	// Stash is the LOCAL Stash instance's own GraphQL client (internal/stashapi
+	// — distinct from the stash-box protocol used for StashDB/FansDB/TPDB),
+	// populated ONLY for Adult mode and ONLY when a "stash" connection is
+	// configured; nil otherwise. Used for phash-first identification (Stash
+	// computes/holds the phash; SAK never computes one itself). Purely
+	// additive: Rename's Adult Scan falls back to the AI/text pipeline
+	// unchanged when this is nil. Consumers must nil-check before use.
+	Stash *stashapi.Client
 }
 
 // Build constructs a Session for m using the connection currently configured
@@ -225,6 +235,12 @@ func Build(ctx context.Context, store *connections.Store, settingsStore *setting
 			return nil, fmt.Errorf("mode %q: building identifier: %w", m, err)
 		}
 		sess.Identify = id
+
+		stash, err := buildStashClient(ctx, store, httpClient)
+		if err != nil {
+			return nil, fmt.Errorf("mode %q: building stash client: %w", m, err)
+		}
+		sess.Stash = stash
 	}
 
 	if err := buildSearchPipeline(ctx, store, httpClient, sess); err != nil {
@@ -266,6 +282,22 @@ func buildSearchPipeline(ctx context.Context, store *connections.Store, httpClie
 	}
 
 	return nil
+}
+
+// buildStashClient wires the local Stash instance's own GraphQL client from
+// the "stash" connection key — already recognized and testable via
+// internal/api/connections.go's testStash, just never read back into a live
+// session before now. Tolerant: nil, nil if unconfigured, same as every
+// other optional client in this file.
+func buildStashClient(ctx context.Context, store *connections.Store, httpClient *http.Client) (*stashapi.Client, error) {
+	conn, err := optionalConn(ctx, store, "stash")
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil {
+		return nil, nil
+	}
+	return stashapi.New(stashapi.Config{URL: conn.URL, APIKey: conn.APIKey}, httpClient), nil
 }
 
 // buildAIClient assembles the one AI client every AI-assisted feature shares

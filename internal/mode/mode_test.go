@@ -146,6 +146,47 @@ func TestBuild_AdultOnlyWhisparr_IdentifyNil(t *testing.T) {
 	}
 }
 
+// TestBuild_AdultNoStashConnection_SessionStashNil confirms Stash stays nil
+// (not an error) when no "stash" connection is configured — phash-first
+// identification is purely additive, so this must never block Adult from
+// building otherwise.
+func TestBuild_AdultNoStashConnection_SessionStashNil(t *testing.T) {
+	store, settingsStore := newTestStores(t)
+	ctx := context.Background()
+	if err := store.Upsert(ctx, "whisparr", "http://whisparr.local:6969", "whisparr-key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sess, err := Build(ctx, store, settingsStore, &http.Client{Timeout: time.Second}, Adult)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sess.Stash != nil {
+		t.Error("expected Stash to be nil when no stash connection is configured")
+	}
+}
+
+// TestBuild_AdultStashConnectionConfigured_PopulatesSessionStash confirms a
+// configured "stash" connection populates sess.Stash.
+func TestBuild_AdultStashConnectionConfigured_PopulatesSessionStash(t *testing.T) {
+	store, settingsStore := newTestStores(t)
+	ctx := context.Background()
+	if err := store.Upsert(ctx, "whisparr", "http://whisparr.local:6969", "whisparr-key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := store.Upsert(ctx, "stash", "http://stash.local:9999/graphql", "stash-key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sess, err := Build(ctx, store, settingsStore, &http.Client{Timeout: time.Second}, Adult)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sess.Stash == nil {
+		t.Error("expected Stash to be populated when a stash connection is configured")
+	}
+}
+
 // TestBuild_AdultSettingsStoreError_Propagates guards against buildIdentifier
 // collapsing a REAL settings-store failure into the same "not configured, no
 // error" outcome as an unset model. A real error must propagate (per

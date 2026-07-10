@@ -13,38 +13,6 @@ briefly here.
 
 ## In progress
 
-### Adult identification: restore phash-first cascade
-Restoring the prior CLI's (`stash-whisparr-sort`) design: phash is the
-primary identification signal for Adult content, StashDB→FansDB→TPDB-GraphQL
-fingerprint cascade first, AI/text search fallback only for files without a
-phash yet (with a force-generate step that nudges the user's own Stash
-instance to compute one before falling back). Full design finalized
-2026-07-10 — see `CHANGELOG.md`'s entry of the same date for the
-verification trail (what exists as dead code today, the 3-stage-not-4-stage
-correction, the give-back-moves-to-Apply-time adaptation). Implementation
-not yet started.
-
-Key new pieces: `mode.Session.Stash *stashapi.Client` (reuses the
-already-recognized, already-testable `"stash"` connection key — no
-connections-store schema change needed), `identify.Identifier.LookupFingerprints`
-(new cascade primitive), `rename.scanAdultPhashFirst` (new Scan-time
-orchestrator, falls back to today's unchanged per-item AI pipeline when no
-Stash connection exists — purely additive), give-back moved to Apply-time
-(`rename.Apply` calls `submitFingerprintGiveBack`), plus a new
-human-triggered `SubmitFingerprintRetry` action (mirrors the existing
-"Give back" draft-submission button) for cases where Stash didn't have a
-phash yet when the proposal was applied.
-
-**Open judgment call, not yet resolved**: does the force-generate phase (a
-targeted Stash rescan triggered during Rename's *Scan*, before any human has
-approved anything) fit "Scan never mutates" — since it's a real outbound
-write, just to an already-configured external tool Stash, not to SAK's own
-proposals/library state? Recommended default: yes, it fits (Scan already
-reads from Whisparr/Prowlarr/TMDB — this is the same shape, a bounded,
-idempotent housekeeping call, not a proposal/registration mutation) — but
-this needs explicit sign-off before implementation, since it is genuinely a
-read of CLAUDE.md's staged-for-approval principle, not a fact.
-
 ### Movies/Series phash-based Dedup (deferred, not yet designed in detail)
 The other half of "phash as the defacto standard across all media." Unlike
 Adult, there's no Stash instance for Movies/Series to lean on — SAK would

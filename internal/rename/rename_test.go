@@ -3,6 +3,7 @@ package rename
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/ollama"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/servarr"
+	"github.com/curtiswtaylorjr/sakms/internal/stashapi"
 	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
 )
 
@@ -324,7 +326,7 @@ func TestApply_RegistersAndTriggersDownloadedScan(t *testing.T) {
 		ID: 1, Status: proposals.Pending, Title: "A Beautiful Mind", TMDBID: 453,
 		QualityProfileID: 4, RootFolderPath: "/media/Movies",
 	}
-	id, err := Apply(context.Background(), sess, p)
+	id, _, err := Apply(context.Background(), sess, p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -345,7 +347,7 @@ func TestApply_RejectsNonPendingProposal(t *testing.T) {
 	})
 
 	for _, status := range []proposals.Status{proposals.Applied, proposals.Dismissed, proposals.Unmatched} {
-		if _, err := Apply(context.Background(), sess, proposals.Proposal{Status: status}); err == nil {
+		if _, _, err := Apply(context.Background(), sess, proposals.Proposal{Status: status}); err == nil {
 			t.Errorf("expected Apply to refuse a %q proposal", status)
 		}
 	}
@@ -377,7 +379,7 @@ func TestApply_RegistersWhisparrSceneWithForeignID(t *testing.T) {
 		ForeignID: "abc-uuid", ItemType: "scene",
 		QualityProfileID: 4, RootFolderPath: "/media/Adult",
 	}
-	id, err := Apply(context.Background(), sess, p)
+	id, _, err := Apply(context.Background(), sess, p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -411,7 +413,7 @@ func TestApply_RefusesWhisparrProposalWithoutIdentifier(t *testing.T) {
 			sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) {
 				t.Fatalf("guard must refuse before any HTTP call, but got %s %s", r.Method, r.URL.Path)
 			})
-			if _, err := Apply(context.Background(), sess, tc.p); err == nil {
+			if _, _, err := Apply(context.Background(), sess, tc.p); err == nil {
 				t.Fatal("expected Apply to refuse a Whisparr proposal missing a scene identifier")
 			}
 		})
@@ -749,7 +751,7 @@ func TestApply_RelocatesFileIntoTargetRootWhenDifferentFromSource(t *testing.T) 
 		ID: 1, Status: proposals.Pending, Title: "Kids Movie", TMDBID: 111,
 		QualityProfileID: 4, SourcePath: sourcePath, RootFolderPath: destRoot,
 	}
-	id, err := Apply(context.Background(), sess, p)
+	id, _, err := Apply(context.Background(), sess, p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -806,7 +808,7 @@ func TestApply_RelocateAvoidsFilenameCollision(t *testing.T) {
 		ID: 1, Status: proposals.Pending, Title: "Movie", TMDBID: 1,
 		QualityProfileID: 4, SourcePath: sourcePath, RootFolderPath: destRoot,
 	}
-	if _, err := Apply(context.Background(), sess, p); err != nil {
+	if _, _, err := Apply(context.Background(), sess, p); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -839,7 +841,7 @@ func TestApply_NoRelocateWhenRootFolderPathMatchesSource(t *testing.T) {
 		ID: 1, Status: proposals.Pending, Title: "Movie", TMDBID: 1, QualityProfileID: 4,
 		SourcePath: "/this/path/does/not/exist/Movie.mkv", RootFolderPath: "/this/path/does/not/exist",
 	}
-	if _, err := Apply(context.Background(), sess, p); err != nil {
+	if _, _, err := Apply(context.Background(), sess, p); err != nil {
 		t.Fatalf("expected no relocate attempt (and so no error) when the root already matches, got: %v", err)
 	}
 }
@@ -982,7 +984,7 @@ func TestApply_ReconcileCallsUpdateRootFolder(t *testing.T) {
 		ID: 1, Status: proposals.Pending, Title: "Old Kids Movie", TMDBID: 50,
 		TrackedID: 50, RootFolderPath: "/media/Movies (Kids)",
 	}
-	id, err := Apply(context.Background(), sess, p)
+	id, _, err := Apply(context.Background(), sess, p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -994,5 +996,185 @@ func TestApply_ReconcileCallsUpdateRootFolder(t *testing.T) {
 	}
 	if putBody["rootFolderPath"] != "/media/Movies (Kids)" {
 		t.Errorf("expected the PUT to carry the new root folder, got %+v", putBody)
+	}
+}
+
+// TestBuildAdultProposal_CapturesGiveBackBoxAndSceneID_SeparatelyFromForeignID
+// is the single most important correctness regression test for the give-back
+// restoration: WhisparrForeignID() returns the SAME raw uuid string for a
+// fansdb match as it would for a stashdb match (only tpdb gets a distinct
+// "tpdbId:" prefix) — so GiveBackBox/GiveBackSceneID must be captured
+// directly from the MatchResult, never reconstructed from ForeignID alone.
+func TestBuildAdultProposal_CapturesGiveBackBoxAndSceneID_SeparatelyFromForeignID(t *testing.T) {
+	res := &identify.MatchResult{Box: "fansdb", SceneID: "shared-uuid", Type: "scene", Title: "T", Studio: "S", Date: "2020"}
+	p := buildAdultProposal(mode.Adult,
+		servarr.RootFolder{Path: "/media/Adult"},
+		servarr.UnmappedFolder{Name: "f.mp4", Path: "/media/Adult/f.mp4"},
+		res, nil, nil, nil)
+	if p.ForeignID != "shared-uuid" {
+		t.Fatalf("expected ForeignID %q, got %q", "shared-uuid", p.ForeignID)
+	}
+	if p.GiveBackBox != "fansdb" || p.GiveBackSceneID != "shared-uuid" {
+		t.Fatalf("expected GiveBackBox=fansdb/GiveBackSceneID=shared-uuid distinct from ForeignID, got box=%q scene=%q", p.GiveBackBox, p.GiveBackSceneID)
+	}
+}
+
+// newFakeGiveBackBox stands in for one stash-box's submitFingerprint
+// mutation, capturing whatever input it was called with into *gotInput
+// (left nil if never called).
+func newFakeGiveBackBox(t *testing.T, gotInput *map[string]any) *stashbox.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		*gotInput = req.Variables.Input
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"submitFingerprint":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	return stashbox.New(stashbox.Config{Endpoint: srv.URL, APIKey: "k", HasVoteField: true}, srv.Client())
+}
+
+func TestApply_Adult_SubmitsFingerprintGiveBack_WhenPHashAndDurationKnown(t *testing.T) {
+	gotInput := map[string]any{}
+	stashdb := newFakeGiveBackBox(t, &gotInput)
+
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
+			w.Write([]byte(`{"id":77}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+			w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	sess.Identify = &identify.Identifier{GiveBack: identify.NewGiveBack(map[string]*stashbox.Client{"stashdb": stashdb})}
+
+	p := proposals.Proposal{
+		ID: 1, Status: proposals.Pending, Title: "Some Scene",
+		ForeignID: "abc-uuid", ItemType: "scene",
+		QualityProfileID: 4, RootFolderPath: "/media/Adult",
+		GiveBackBox: "stashdb", GiveBackSceneID: "abc-uuid", PHash: "hash1", DurationSeconds: 1800,
+	}
+	_, submitted, err := Apply(context.Background(), sess, p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !submitted {
+		t.Fatal("expected Apply to report a successful fingerprint give-back")
+	}
+	fp, _ := gotInput["fingerprint"].(map[string]any)
+	if gotInput["scene_id"] != "abc-uuid" || fp["hash"] != "hash1" {
+		t.Errorf("expected the proposal's phash to be submitted for its scene, got %+v", gotInput)
+	}
+}
+
+func TestApply_Adult_NoGiveBack_WhenPHashUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("must never call give-back when the proposal has no phash")
+	}))
+	defer srv.Close()
+	stashdb := stashbox.New(stashbox.Config{Endpoint: srv.URL, APIKey: "k", HasVoteField: true}, srv.Client())
+
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
+			w.Write([]byte(`{"id":77}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+			w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	sess.Identify = &identify.Identifier{GiveBack: identify.NewGiveBack(map[string]*stashbox.Client{"stashdb": stashdb})}
+
+	p := proposals.Proposal{
+		ID: 1, Status: proposals.Pending, Title: "Some Scene",
+		ForeignID: "abc-uuid", ItemType: "scene",
+		QualityProfileID: 4, RootFolderPath: "/media/Adult",
+	}
+	_, submitted, err := Apply(context.Background(), sess, p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if submitted {
+		t.Fatal("expected no give-back to be attempted without a phash")
+	}
+}
+
+func TestSubmitFingerprintRetry_Success(t *testing.T) {
+	stash := newFakeStash(t, &fakeStash{files: map[string]*stashapi.StashFile{
+		"/media/Adult/scene1.mp4": {PHash: "hash1", Duration: 1800},
+	}})
+	gotInput := map[string]any{}
+	stashdb := newFakeGiveBackBox(t, &gotInput)
+
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("must never call the *arr app")
+	})
+	sess.Stash = stash
+	sess.Identify = &identify.Identifier{GiveBack: identify.NewGiveBack(map[string]*stashbox.Client{"stashdb": stashdb})}
+
+	p := proposals.Proposal{
+		ID: 1, Workflow: proposals.Rename, Status: proposals.Applied,
+		SourcePath: "/media/Adult/scene1.mp4", GiveBackBox: "stashdb", GiveBackSceneID: "abc-uuid",
+	}
+	if err := SubmitFingerprintRetry(context.Background(), sess, p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fp, _ := gotInput["fingerprint"].(map[string]any)
+	if gotInput["scene_id"] != "abc-uuid" || fp["hash"] != "hash1" {
+		t.Errorf("expected the freshly-read phash to be submitted, got %+v", gotInput)
+	}
+}
+
+func TestSubmitFingerprintRetry_AlreadySubmitted_Rejected(t *testing.T) {
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) { t.Fatal("must not call the *arr app") })
+	p := proposals.Proposal{
+		ID: 1, Workflow: proposals.Rename, Status: proposals.Applied,
+		GiveBackBox: "stashdb", GiveBackSceneID: "x", FingerprintSubmittedAt: "2024-01-01T00:00:00Z",
+	}
+	if err := SubmitFingerprintRetry(context.Background(), sess, p); err == nil {
+		t.Fatal("expected an error for an already-submitted fingerprint")
+	}
+}
+
+func TestSubmitFingerprintRetry_NotApplied_Rejected(t *testing.T) {
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) { t.Fatal("must not call the *arr app") })
+	p := proposals.Proposal{ID: 1, Workflow: proposals.Rename, Status: proposals.Pending, GiveBackBox: "stashdb", GiveBackSceneID: "x"}
+	if err := SubmitFingerprintRetry(context.Background(), sess, p); err == nil {
+		t.Fatal("expected an error for a non-Applied proposal")
+	}
+}
+
+func TestSubmitFingerprintRetry_NoGiveBackTarget_Rejected(t *testing.T) {
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) { t.Fatal("must not call the *arr app") })
+	sess.Stash = newFakeStash(t, &fakeStash{})
+	sess.Identify = &identify.Identifier{GiveBack: identify.NewGiveBack(nil)}
+	p := proposals.Proposal{ID: 1, Workflow: proposals.Rename, Status: proposals.Applied}
+	if err := SubmitFingerprintRetry(context.Background(), sess, p); err == nil {
+		t.Fatal("expected an error when the proposal has no give-back target")
+	}
+}
+
+func TestSubmitFingerprintRetry_StashStillHasNoPHash_Errors(t *testing.T) {
+	stash := newFakeStash(t, &fakeStash{files: map[string]*stashapi.StashFile{
+		"/media/Adult/scene1.mp4": {}, // still no phash
+	}})
+	sess := newTestSession(t, servarr.Whisparr, func(w http.ResponseWriter, r *http.Request) { t.Fatal("must not call the *arr app") })
+	sess.Stash = stash
+	sess.Identify = &identify.Identifier{GiveBack: identify.NewGiveBack(map[string]*stashbox.Client{"stashdb": nil})}
+
+	p := proposals.Proposal{
+		ID: 1, Workflow: proposals.Rename, Status: proposals.Applied,
+		SourcePath: "/media/Adult/scene1.mp4", GiveBackBox: "stashdb", GiveBackSceneID: "abc-uuid",
+	}
+	if err := SubmitFingerprintRetry(context.Background(), sess, p); err == nil {
+		t.Fatal("expected an error when Stash still has no phash")
 	}
 }

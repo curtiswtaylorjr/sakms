@@ -103,8 +103,29 @@ type Proposal struct {
 	// once, never cleared, so a proposal is never submitted as a draft twice.
 	DraftID          string `json:"draftId,omitempty"`
 	DraftSubmittedAt string `json:"draftSubmittedAt,omitempty"`
-	CreatedAt        string `json:"createdAt"`
-	AppliedAt        string `json:"appliedAt,omitempty"`
+	// PHash and DurationSeconds are read from the LOCAL Stash instance's own
+	// already-computed metadata at Scan time (Adult only — never computed by
+	// SAK itself, see mode.Session.Stash's doc comment), regardless of
+	// whether the fingerprint cascade or the AI/text pipeline actually
+	// resolved the proposal. Both empty/zero when no Stash connection was
+	// configured at Scan time, or Stash simply had no phash yet for this file.
+	PHash           string `json:"phash,omitempty"`
+	DurationSeconds int    `json:"durationSeconds,omitempty"`
+	// GiveBackBox/GiveBackSceneID identify which community stash-box (if any)
+	// this proposal matched an EXISTING scene in — captured directly from the
+	// identify.MatchResult's own Box/SceneID at Scan time, NOT derived from
+	// ForeignID: WhisparrForeignID() returns the same raw UUID string for
+	// both a stashdb and a fansdb match, so ForeignID alone can't
+	// disambiguate which box a fingerprint should be given back to.
+	GiveBackBox     string `json:"giveBackBox,omitempty"`
+	GiveBackSceneID string `json:"giveBackSceneId,omitempty"`
+	// FingerprintSubmittedAt records a successful fingerprint give-back
+	// (either automatically at Apply time or via a later manual retry) — set
+	// once, never cleared, same "never submit twice" guard as DraftID/
+	// DraftSubmittedAt.
+	FingerprintSubmittedAt string `json:"fingerprintSubmittedAt,omitempty"`
+	CreatedAt              string `json:"createdAt"`
+	AppliedAt              string `json:"appliedAt,omitempty"`
 }
 
 type Store struct {
@@ -144,12 +165,14 @@ func (s *Store) ReplacePending(ctx context.Context, m mode.Mode, wf Workflow, fr
 			INSERT INTO proposals (
 				mode, workflow, status, source_name, source_path, root_folder_path,
 				title, tvdb_id, tmdb_id, season_number, episode_number, year, quality_profile_id, reason, tracked_id,
-				foreign_id, item_type, candidates_json, studio, scene_date
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				foreign_id, item_type, candidates_json, studio, scene_date,
+				phash, duration_seconds, give_back_box, give_back_scene_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			RETURNING id, created_at
 		`, string(p.Mode), string(p.Workflow), string(p.Status), p.SourceName, p.SourcePath, p.RootFolderPath,
 			p.Title, p.TVDBID, p.TMDBID, p.SeasonNumber, p.EpisodeNumber, p.Year, p.QualityProfileID, p.Reason, p.TrackedID,
-			p.ForeignID, p.ItemType, string(candidatesJSON), p.Studio, p.Date)
+			p.ForeignID, p.ItemType, string(candidatesJSON), p.Studio, p.Date,
+			p.PHash, p.DurationSeconds, p.GiveBackBox, p.GiveBackSceneID)
 		if err := row.Scan(&p.ID, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("inserting proposal for %q: %w", p.SourceName, err)
 		}
@@ -169,6 +192,7 @@ func (s *Store) List(ctx context.Context, m mode.Mode, wf Workflow) ([]Proposal,
 		       title, tvdb_id, tmdb_id, season_number, episode_number, year, quality_profile_id, reason, tracked_id,
 		       foreign_id, item_type, candidates_json, studio, scene_date,
 		       draft_id, COALESCE(draft_submitted_at, ''),
+		       phash, duration_seconds, give_back_box, give_back_scene_id, COALESCE(fingerprint_submitted_at, ''),
 		       created_at, COALESCE(applied_at, '')
 		FROM proposals WHERE mode = ? AND workflow = ? ORDER BY id DESC
 	`, string(m), string(wf))
@@ -199,6 +223,7 @@ func (s *Store) Get(ctx context.Context, id int64) (*Proposal, error) {
 		       title, tvdb_id, tmdb_id, season_number, episode_number, year, quality_profile_id, reason, tracked_id,
 		       foreign_id, item_type, candidates_json, studio, scene_date,
 		       draft_id, COALESCE(draft_submitted_at, ''),
+		       phash, duration_seconds, give_back_box, give_back_scene_id, COALESCE(fingerprint_submitted_at, ''),
 		       created_at, COALESCE(applied_at, '')
 		FROM proposals WHERE id = ?
 	`, id)
@@ -252,6 +277,20 @@ func (s *Store) MarkDraftSubmitted(ctx context.Context, id int64, draftID string
 	return checkAffected(res, id)
 }
 
+// MarkFingerprintSubmitted records a successful phash give-back for proposal
+// id (either an automatic attempt at Apply time or a later manual retry).
+// Does not change Status.
+func (s *Store) MarkFingerprintSubmitted(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE proposals SET fingerprint_submitted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		WHERE id = ?
+	`, id)
+	if err != nil {
+		return fmt.Errorf("marking proposal %d fingerprint-submitted: %w", id, err)
+	}
+	return checkAffected(res, id)
+}
+
 func checkAffected(res sql.Result, id int64) error {
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -274,6 +313,7 @@ func scanProposal(row rowScanner) (Proposal, error) {
 		&p.Title, &p.TVDBID, &p.TMDBID, &p.SeasonNumber, &p.EpisodeNumber, &p.Year, &p.QualityProfileID, &p.Reason, &p.TrackedID,
 		&p.ForeignID, &p.ItemType, &candidatesJSON, &p.Studio, &p.Date,
 		&p.DraftID, &p.DraftSubmittedAt,
+		&p.PHash, &p.DurationSeconds, &p.GiveBackBox, &p.GiveBackSceneID, &p.FingerprintSubmittedAt,
 		&p.CreatedAt, &p.AppliedAt); err != nil {
 		return Proposal{}, err
 	}

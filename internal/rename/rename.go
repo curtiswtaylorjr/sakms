@@ -86,17 +86,27 @@ func Scan(ctx context.Context, sess *mode.Session) ([]proposals.Proposal, error)
 	}
 
 	var out []proposals.Proposal
+	var adultCandidates []adultCandidate
 	for _, root := range folders {
 		for _, uf := range root.UnmappedFolders {
 			if config.SidecarExts[strings.ToLower(filepath.Ext(uf.Name))] {
 				continue
 			}
-			if sess.Mode == mode.Adult {
+			switch {
+			case sess.Mode == mode.Adult && sess.Stash != nil:
+				// Batched through the phash-first pipeline below rather than
+				// resolved here one at a time — it needs every candidate's path
+				// up front to do a single batched Stash lookup.
+				adultCandidates = append(adultCandidates, adultCandidate{root: root, uf: uf})
+			case sess.Mode == mode.Adult:
 				out = append(out, proposeOneAdult(ctx, sess.Identify, sess.Mode, root, uf, tracked, profiles))
-			} else {
+			default:
 				out = append(out, proposeOne(ctx, client, sess.Mode, sess.MainstreamAI, kidsRootPath, root, uf, tracked, profiles))
 			}
 		}
+	}
+	if len(adultCandidates) > 0 {
+		out = append(out, scanAdultPhashFirst(ctx, sess, adultCandidates, tracked, profiles)...)
 	}
 	if sess.Mode != mode.Adult {
 		out = append(out, reconcileTracked(ctx, sess.Mode, sess.MainstreamAI, kidsRootPath, folders, tracked)...)
@@ -283,17 +293,37 @@ func proposeOneAdult(
 	root servarr.RootFolder, uf servarr.UnmappedFolder,
 	tracked []servarr.TrackedItem, profiles []servarr.QualityProfile,
 ) proposals.Proposal {
+	res, err := ident.Identify(ctx, uf.Name, filepath.Base(root.Path))
+	return buildAdultProposal(m, root, uf, res, err, tracked, profiles)
+}
+
+// buildAdultProposal assembles a Proposal from an already-resolved (or
+// failed) identification result. Factored out of proposeOneAdult so
+// scanAdultPhashFirst's fingerprint-cascade hits can build a Proposal the
+// same way without paying for a second ident.Identify call — both callers
+// are the same Adult/Whisparr pipeline, so this is ordinary same-package
+// logic extraction, not the "different backend, needs its own sibling
+// function" case CLAUDE.md warns against.
+func buildAdultProposal(
+	m mode.Mode, root servarr.RootFolder, uf servarr.UnmappedFolder,
+	res *identify.MatchResult, err error,
+	tracked []servarr.TrackedItem, profiles []servarr.QualityProfile,
+) proposals.Proposal {
 	p := proposals.Proposal{
 		Mode: m, Workflow: proposals.Rename,
 		SourceName: uf.Name, SourcePath: uf.Path, RootFolderPath: root.Path,
 	}
-	res, err := ident.Identify(ctx, uf.Name, filepath.Base(root.Path))
 	p.Status, p.Reason, p.Title, p.ForeignID, p.ItemType = classifyAdultMatch(res, err)
 	if res != nil {
 		// Captured regardless of match outcome: an Unmatched (web-identified-only)
 		// proposal still needs Studio/Date for SubmitDraft to give the scene back
 		// to the community databases.
 		p.Studio, p.Date = res.Studio, res.Date
+		// GiveBackBox/GiveBackSceneID are captured separately from ForeignID:
+		// WhisparrForeignID() returns the SAME raw UUID string for both a
+		// stashdb and a fansdb match, so ForeignID alone can't tell give-back
+		// which community box to submit a fingerprint to later.
+		p.GiveBackBox, p.GiveBackSceneID = res.Box, res.SceneID
 	}
 	if p.Status == proposals.Pending {
 		p.QualityProfileID = servarr.DefaultQualityProfileID(tracked, root.Path, profiles)
@@ -343,16 +373,26 @@ func classifyAdultMatch(res *identify.MatchResult, err error) (status proposals.
 // point, so the caller should still record it as applied rather than losing
 // track of it — the scan trigger can be retried independently (e.g. the
 // app's own periodic scan will pick it up eventually regardless).
-func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal) (trackedID int, err error) {
+//
+// fingerprintSubmitted reports whether an Adult proposal's phash was
+// successfully given back to its origin community box (see
+// submitFingerprintGiveBack) — give-back only ever runs here, after a human
+// has approved Apply, never during Scan (see the design spec's
+// staged-for-approval principle; the original CLI gave back during its scan
+// pass, which this project deliberately does not reproduce). It's
+// best-effort and never turns an otherwise-successful Apply into an error —
+// the caller uses it only to decide whether to record
+// p.FingerprintSubmittedAt.
+func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal) (trackedID int, fingerprintSubmitted bool, err error) {
 	if p.Status != proposals.Pending {
-		return 0, fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
+		return 0, false, fmt.Errorf("proposal %d is %q, not pending — nothing to apply", p.ID, p.Status)
 	}
 
 	if p.TrackedID != 0 {
 		if err := sess.Servarr.UpdateRootFolder(ctx, p.TrackedID, p.RootFolderPath); err != nil {
-			return 0, fmt.Errorf("reclassifying %q: %w", p.Title, err)
+			return 0, false, fmt.Errorf("reclassifying %q: %w", p.Title, err)
 		}
-		return p.TrackedID, nil
+		return p.TrackedID, false, nil
 	}
 
 	// Structural safety guard at the mutation boundary: a Whisparr scene needs
@@ -361,12 +401,12 @@ func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal) (track
 	// rather than trusting Scan-convention — even a hand-crafted or future-buggy
 	// Adult proposal can never be registered without a real scene identifier.
 	if sess.Servarr.AppType() == servarr.Whisparr && (p.ForeignID == "" || p.ItemType == "") {
-		return 0, fmt.Errorf("proposal %d has no scene identifier — refusing to register it as a mis-typed movie", p.ID)
+		return 0, false, fmt.Errorf("proposal %d has no scene identifier — refusing to register it as a mis-typed movie", p.ID)
 	}
 
 	if p.SourcePath != "" && filepath.Dir(p.SourcePath) != p.RootFolderPath {
 		if _, err := Relocate(p.SourcePath, p.RootFolderPath); err != nil {
-			return 0, fmt.Errorf("relocating %q into %q: %w", p.SourcePath, p.RootFolderPath, err)
+			return 0, false, fmt.Errorf("relocating %q into %q: %w", p.SourcePath, p.RootFolderPath, err)
 		}
 	}
 
@@ -376,13 +416,70 @@ func Apply(ctx context.Context, sess *mode.Session, p proposals.Proposal) (track
 		QualityProfileID: p.QualityProfileID, RootFolderPath: p.RootFolderPath, Monitored: true,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("registering %q: %w", p.Title, err)
+		return 0, false, fmt.Errorf("registering %q: %w", p.Title, err)
 	}
 
 	if err := sess.Servarr.ScanForDownloaded(ctx); err != nil {
-		return id, fmt.Errorf("registered as id=%d but triggering the downloaded-files scan failed: %w", id, err)
+		return id, false, fmt.Errorf("registered as id=%d but triggering the downloaded-files scan failed: %w", id, err)
 	}
-	return id, nil
+	return id, submitFingerprintGiveBack(ctx, sess, p), nil
+}
+
+// submitFingerprintGiveBack submits p's phash back to whichever community box
+// it was first fingerprint-matched against (see buildAdultProposal's
+// GiveBackBox/GiveBackSceneID capture). A no-op, not an error, whenever p
+// wasn't a phash-cascade hit (GiveBackBox/GiveBackSceneID/PHash unset), give-back
+// isn't configured, or the submission itself fails — the item is already
+// genuinely registered by the time this runs, so a give-back failure must
+// never surface as an Apply error. ok reports whether it actually succeeded.
+func submitFingerprintGiveBack(ctx context.Context, sess *mode.Session, p proposals.Proposal) (ok bool) {
+	if p.GiveBackBox == "" || p.GiveBackSceneID == "" || p.PHash == "" || p.DurationSeconds <= 0 {
+		return false
+	}
+	if sess.Identify == nil || sess.Identify.GiveBack == nil {
+		return false
+	}
+	err := sess.Identify.GiveBack.SubmitFingerprint(ctx, p.GiveBackBox, p.GiveBackSceneID, p.PHash, p.DurationSeconds)
+	return err == nil
+}
+
+// SubmitFingerprintRetry re-attempts give-back for an already-Applied Adult
+// proposal that had no phash yet at Apply time (Stash's own phash generation
+// runs asynchronously and can finish well after Apply already ran) — a
+// separate, human-triggered action, matching SubmitDraft's precedent of never
+// firing an outbound mutation without an explicit decision. Re-reads
+// p.SourcePath's CURRENT phash/duration from Stash fresh rather than trusting
+// whatever (possibly still-empty) snapshot the proposal carries from Scan
+// time, since a fresh read is exactly the point of retrying.
+func SubmitFingerprintRetry(ctx context.Context, sess *mode.Session, p proposals.Proposal) error {
+	if p.Workflow != proposals.Rename {
+		return fmt.Errorf("proposal %d is a %q proposal, not rename — cannot submit a fingerprint", p.ID, p.Workflow)
+	}
+	if p.Status != proposals.Applied {
+		return fmt.Errorf("proposal %d is %q, not applied — nothing to give back yet", p.ID, p.Status)
+	}
+	if p.FingerprintSubmittedAt != "" {
+		return fmt.Errorf("proposal %d already has a submitted fingerprint — refusing to submit a duplicate", p.ID)
+	}
+	if p.GiveBackBox == "" || p.GiveBackSceneID == "" {
+		return fmt.Errorf("proposal %d has no give-back target — nothing to submit a fingerprint to", p.ID)
+	}
+	if sess.Stash == nil {
+		return fmt.Errorf("stash isn't configured — add a connection in Settings")
+	}
+	if sess.Identify == nil || sess.Identify.GiveBack == nil {
+		return fmt.Errorf("give-back isn't configured — add a StashDB, FansDB, or TPDB connection in Settings")
+	}
+
+	file, err := sess.Stash.FindSceneInfoByPath(ctx, p.SourcePath)
+	if err != nil {
+		return fmt.Errorf("checking %q for a phash: %w", p.SourcePath, err)
+	}
+	if file == nil || file.PHash == "" {
+		return fmt.Errorf("stash still has no phash for %q yet", p.SourcePath)
+	}
+
+	return sess.Identify.GiveBack.SubmitFingerprint(ctx, p.GiveBackBox, p.GiveBackSceneID, file.PHash, int(file.Duration))
 }
 
 // SubmitDraft gives an Adult proposal's identification back to the community
