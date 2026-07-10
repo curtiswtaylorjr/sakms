@@ -450,3 +450,54 @@ tests, and Series `phash-threshold` API round-trip/validation. The
 `internal/phash` integration tier already proved `Hash` mode-agnostically, so
 it needed no new work — only that the module still passes under `-tags
 integration`.
+
+## 2026-07-10 — Mission clarified: SAK is the sole backend, Jellyfin/Stash are players; Whisparr and Stash's organizational role will both be eliminated
+
+Before scoping Adult phash-based Dedup (the natural next slice after Movies
+and Series), asked the user to confirm what "the phash must match what
+StashDB expects" actually required — the answer reframed the whole
+direction, so recorded here before any code.
+
+**Investigation first.** Researched what algorithm StashDB/FansDB's
+stash-box network actually indexes under `PHASH`: a **single 64-bit** DCT
+hash of a **25-frame collage** (goimagehash-style PerceptionHash), computed
+by the user's local Stash instance. Confirmed this is **incompatible** with
+`internal/phash` (Movies/Series' algorithm: `ajdnik/imghash` PHash over 5
+separately-hashed frames, a 320-bit composite) — different library, frame
+composition, and bit-length; not just differently tuned. Full research
+(cited sources) preserved in `.omc/autopilot/spec-phash-dedup-adult.md`.
+
+**Then the mission question.** The investigation's first-pass recommendation
+was "Adult Dedup should read Stash's already-computed phash read-only, no
+new hashing infra" — cheap and correct *if* Adult keeps depending on a live
+Stash instance forever. Asking the user to confirm that assumption surfaced
+that it's wrong: **the actual goal is that SAK becomes the sole backend for
+file management — metadata, renaming, file placement, and deduplication —
+across all three modes, with Jellyfin and Stash reduced to pure downstream
+media players with zero organizational authority.** This is the same
+displacement already done to Radarr (Movies) and Sonarr (Series), now
+named explicitly as a mission principle rather than left implicit, and
+extended: **Whisparr will eventually be eliminated for Adult too** (Adult
+gets its own library-owned path, same pattern), and Stash's role as
+Adult's identification bridge goes with it.
+
+**What this changes for phash specifically.** Since Stash the *app* is
+going away as a dependency, "match what StashDB expects" isn't about
+reading Stash's live value — it's about SAK computing its **own** hash in
+the same `PHASH` format the stash-box network (StashDB/FansDB/TPDB) already
+indexes, so SAK can do fingerprint-based identification and Dedup similarity
+gating **directly** against those community databases, without a local
+Stash instance bridging it. One SAK-owned hasher, three eventual consumers:
+Adult identification (replacing `rename`'s current Stash-read dependency),
+Adult Dedup's similarity gate, and a filename-embedded phash for fast
+rescans if Adult ever gets its own renaming feature (mirroring Movies'
+Stage 2c naming work). This is a new, separate frame-decode path — NOT a
+change to `internal/phash`, which stays exactly as shipped for Movies/Series
+(they never needed StashDB compatibility and still don't).
+
+**Recorded, not yet built.** `CLAUDE.md`'s Mission and Scope sections and
+`docs/ROADMAP.md`'s phash entry were updated to capture this; the original
+Adult-phash-dedup spec doc is marked superseded (its StashDB-algorithm
+research stays accurate and reusable, only its recommendation changed). No
+code shipped this entry — Whisparr elimination and the new hasher both need
+their own Phase 0/1 design pass, not yet started.

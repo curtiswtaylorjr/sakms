@@ -26,16 +26,33 @@ some reconciliation pass. This is the concrete, checkable bar every
 workflow (Rename, Purge, Dedup, Tag, Search/grab) is ultimately in service
 of.
 
-## Scope: opportunistic, not a fixed roadmap
+**SAK is the sole backend for file management — metadata, renaming, file
+placement, and deduplication — across all three modes. Jellyfin and Stash
+are downstream media players with zero organizational authority.**
+(Decided 2026-07-10.) This is the same displacement already done to
+Radarr/Sonarr, stated as a first-class mission principle rather than left
+implicit: a player app may read and present SAK's library, but it never
+decides what's tracked, where a file lives, what a duplicate is, or what
+a file is named. If a player's own convention is useful (e.g. Jellyfin's
+naming scheme, adopted as SAK's own default preset), SAK adopts the
+*convention*, not a *dependency* on the app that documented it.
 
-There is **no committed target list** of what SAK will eventually absorb.
+## Scope: opportunistic in general, settled for the *arr apps
+
 Radarr is eliminated for Movies (done); Sonarr is eliminated for Series,
-including Series Dedup (done). Whether Jellyfin, Stash, Bazarr, Tdarr, or
-anything else ever gets absorbed is an open question, decided app-by-app
-as the pain of running it separately becomes concrete — not decided in
-advance by a roadmap. When a new consolidation opportunity comes up,
-engage with it on its own merits; don't cite (or invent) a fixed
-end-state that includes or excludes it a priori.
+including Series Dedup (done); **Whisparr will eventually be eliminated
+for Adult too** (decided 2026-07-10, not yet started) — same pattern,
+Adult gets its own library-owned Rename/Purge/Dedup/Tag path instead of
+depending on Whisparr. Beyond the three `*arr` apps, there is still **no
+committed target list**: whether Bazarr, Tdarr, or anything else ever
+gets absorbed is an open question, decided app-by-app as the pain of
+running it separately becomes concrete. Jellyfin and Stash specifically
+are **not** being absorbed as services (SAK does not become a media
+player) — see the Mission section above: their *organizational* role is
+what's being eliminated, not the apps themselves as viewers. When a new
+consolidation opportunity comes up, engage with it on its own merits;
+don't cite (or invent) a fixed end-state that includes or excludes it a
+priori.
 
 ## Automation: manual by default, scheduling earns its way back in
 
@@ -118,11 +135,29 @@ above, so don't drop them for convenience:
   duplicate groups with a loose single-episode duplicate naturally, since
   a pack is broken into individual files
   (`library.ResolveEpisodeVideoFiles`) before grouping happens.
-- **Adult (Whisparr)**: untouched, not in any near-term plan.
-- **Jellyfin**: not integrated as a service, but its documented naming
-  convention is now SAK's own default (see below) — no live Jellyfin
-  connection exists or is planned; whether one ever gets added is still
-  genuinely undecided (see Scope above).
+- **Adult (Whisparr + Stash)**: still fully dependent on both today — Whisparr
+  for the library/API surface (`internal/servarr`), Stash for identification
+  (`mode.Session.Stash`, phash-first `rename.scanAdultPhashFirst`, both read
+  a phash Stash already computed, SAK never computes one). Both dependencies
+  are slated for elimination (see Mission/Scope above), mirroring
+  Movies/Sonarr — not yet started. The concrete shape decided so far: SAK
+  will build its own frame-decode + StashDB-compatible phash hasher (the
+  `PHASH` algorithm StashDB/FansDB's stash-box network indexes — 25-frame
+  collage, 64-bit, a *different* algorithm from `internal/phash`'s
+  Movies/Series one, which stays as-is and unrelated) so SAK can identify
+  and dedupe Adult content by talking to StashDB/FansDB/TPDB directly,
+  without needing a live local Stash instance as a bridge. One hash,
+  multiple consumers (identification, Dedup, and a future filename-embedded
+  phash for fast rescans if Adult gets its own renaming feature). See
+  `docs/ROADMAP.md`'s phash entry and `.omc/autopilot/spec-phash-dedup-adult.md`
+  (superseded recommendation, kept for its StashDB-algorithm research) for
+  detail. Whisparr elimination itself (Adult owning its own library the way
+  Movies/Series do) has no design yet.
+- **Jellyfin**: not integrated as a service — no live connection exists or
+  is planned, and per the Mission section above this is now settled, not
+  "genuinely undecided": Jellyfin stays a downstream player. Its documented
+  naming convention is adopted as SAK's own default preset (see below)
+  precisely because that's a convention, not a dependency.
 - **Naming, scanning, and Season-0 (Stage 2c)**:
   - `library.ScanRootFolder` is now recursive (`filepath.WalkDir`,
     `internal/library/library.go`) — a directory is reported whole only if

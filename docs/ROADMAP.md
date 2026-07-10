@@ -38,10 +38,34 @@ threshold are reused verbatim, and the API handler is un-gated to pass
 handling (flattened per-episode upstream of grouping).
 
 **Still open (next slices):**
-- **Adult phash refinement.** Extend the same
-  refine-within-identifier-grouping approach to Adult's Servarr-backed
-  `scanAdult` (foreignID grouping). Deferred, not designed at the
-  file/function level yet.
+- **Adult phash refinement — direction changed 2026-07-10, do not build the
+  original plan.** An investigation (`.omc/autopilot/spec-phash-dedup-adult.md`)
+  originally recommended Adult Dedup read Stash's already-computed phash
+  read-only (no new hashing infra) — that recommendation is **superseded**.
+  The actual mission (see `CLAUDE.md` Mission/Scope, decided 2026-07-10): SAK
+  is eliminating its *dependency* on a live Stash instance for Adult
+  entirely, the same way Radarr/Sonarr were eliminated for Movies/Series.
+  So Adult Dedup's phash gate should NOT read Stash's live value — it should
+  use a **SAK-owned, StashDB-compatible phash hasher** SAK builds for itself:
+  the `PHASH` algorithm StashDB/FansDB's stash-box network actually indexes
+  (25-frame collage, goimagehash-style PerceptionHash, 64-bit — verified via
+  research, cited in the spec doc; a *different, incompatible* algorithm from
+  `internal/phash`'s Movies/Series one, which is unaffected and stays as-is).
+  This hasher is a shared capability, not Dedup-specific: it also replaces
+  Rename's current Stash-read dependency for phash-first identification, and
+  positions SAK to talk to StashDB/FansDB/TPDB directly for fingerprint
+  lookups without a local Stash bridging it. Not yet designed at the
+  file/function level — needs its own Phase 0/1 pass (a new frame-decode
+  path producing the 25-frame/64-bit format, likely sibling to
+  `internal/phash` rather than a modification of it). The spec doc's
+  StashDB-algorithm research (§1) is still accurate and directly reusable;
+  only its §3 recommendation is superseded.
+- **Whisparr elimination for Adult.** Adult gets its own library-owned
+  Rename/Purge/Dedup/Tag path, same pattern as Movies/Sonarr. Decided
+  2026-07-10 (`CLAUDE.md` Scope), no design yet — this is a substantial
+  slice (Adult's own `library.Item`-equivalent schema, its own Search/grab,
+  migrating off `internal/servarr`'s Whisparr client for the app-level path
+  while keeping `internal/servarr` itself, same precedent as Radarr/Sonarr).
 - **phash-PRIMARY grouping (TMDB-less).** The larger ambition from the original
   entry: making phash the *primary* duplicate signal that groups files with no
   shared identifier at all — replacing identifier-based grouping rather than
