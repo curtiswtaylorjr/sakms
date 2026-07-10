@@ -112,12 +112,21 @@ give-back) is documented in the CHANGELOG entry of the same date.
 and the `"stash"` connection type + `testStash` are RETAINED and
 repurposed — not dead code — for the next item below.
 
+**Shipped (2026-07-10): player-rescan-notify — all 5 slices landed.** SAK
+now notifies the mode's configured downstream player (Jellyfin for
+Movies/Series, Stash for Adult — hardcoded scoping, no toggle) with the
+exact changed path(s) after every file-relocate event: Rename/Purge/Dedup's
+Apply functions (9 call sites, Slices 3-4) and grab-import's `checkImportHandler`
+(the 10th, added post-Critic as Slice 5). `internal/jellyfin` is a new
+minimal client (`"jellyfin"` connection type); `sess.Stash` — retained from
+the give-back retirement above — is finally read again via a new
+phash-free `RescanPaths`. `Session.NotifyPlayers` is best-effort and
+log-only: a player being down never fails SAK's own Apply/import, which has
+already committed by the time notify runs. See the CHANGELOG entries dated
+2026-07-10 (5 entries, one per slice) for the full design/test detail per
+slice. Spec at `.omc/autopilot/spec-player-rescan-trigger.md`.
+
 **Still open (next slices):**
-- **player-rescan-notify.** SAK triggers a targeted Stash rescan whenever it
-  updates a file (rename/relocate/replace) so the downstream player's index
-  stays fresh. Spec at `.omc/autopilot/spec-player-rescan-trigger.md`. This
-  is what the retained Stash client (`sess.Stash`/`buildStashClient`) is now
-  for. Not yet started.
 - **Whisparr elimination for Adult.** Adult gets its own library-owned
   Rename/Purge/Dedup/Tag path, same pattern as Movies/Sonarr. Decided
   2026-07-10 (`CLAUDE.md` Scope), no design yet — this is a substantial

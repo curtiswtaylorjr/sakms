@@ -976,3 +976,73 @@ both the rename and dedup happy paths).
 
 Verified via `go build/vet/test -race` across the whole module (all green,
 including `-tags integration`).
+
+## 2026-07-10 — Notify configured player on grab-import: search.go (Slice 5 of player-rescan-notify, added post-Critic)
+
+The Critic flagged that `internal/api/search.go`'s `checkImportHandler` — a
+completed download landing in the library via `rename.Relocate` — is a
+file-relocate event of the exact same category as the 9 call sites already
+wired in Slices 3/4, but fell outside the spec's literal 9-row table (it's
+grab-import, not one of Rename/Purge/Dedup's Apply functions). User
+confirmed: add it now as a 5th notify site rather than deferring it.
+
+Investigation confirmed at execution time (not settled during planning):
+`checkImportHandler`'s `sess` comes from `mode.Build(ctx, …, g.Mode)` —
+the identical codepath `applyByWorkflow` already uses — so `sess.Jellyfin`/
+`sess.Stash` are populated with the same hardcoded per-mode scoping as
+every other call site; no divergent session-building exists here. Grab-import
+reaches Adult too, via the `switch g.Mode`'s `default` branch (only Movies
+and Series get explicit cases) — Whisparr registration + scan-trigger, same
+as today, now followed by a Stash notify.
+
+The investigation also surfaced a nuance the plan's literal "notify with
+`movedPath`" description didn't anticipate: `rename.Relocate` moves
+`contentPath`'s whole tree, so its return value can be a wrapping
+*directory* (proven by the pre-existing
+`TestCheckImportHandler_QBittorrentCompleted_PerformsImport` test, whose
+download completes as a directory). Sending a directory to Jellyfin's
+exact-path `Library/Media/Updated` endpoint would defeat the point of the
+notify. This is the same "actual file, not the wrapping directory"
+discipline Slice 3's row 1 already established for `rename.ApplyLibrary`
+(`library.ResolveVideoFile`), so it's applied the same way here: Movies
+notifies with the resolved `videoPath` (post-`library.ResolveVideoFile`);
+Series notifies with one Created `PathChange` per resolved episode file
+that's actually upserted (unparsed/untracked files, which `continue` out of
+the loop, are correctly excluded); Adult (the `default` branch) notifies
+with `movedPath` directly, since no per-file resolution happens in that
+branch at all — Whisparr owns file placement — and Stash's `RescanPaths`
+scans directory trees fine, unlike Jellyfin's exact-file-path contract.
+
+`sess.NotifyPlayers` is called once per import, after the per-mode switch's
+library/Servarr writes succeed — not immediately after `Relocate`, as the
+plan's literal wording suggested — because the exact notify path only
+exists post-resolution (Movies/Series) or post-registration in spirit
+(Adult, matching the existing branch shape). A deliberate scope decision:
+unlike Slice 4's Critic fix #3 (Adult rename's `changes` captured
+unconditionally, even across a later `Add`/`ScanForDownloaded` failure),
+this handler makes no attempt to notify on a partial failure — every branch
+still `http.Error`s and returns immediately on any error, exactly as
+before this slice, and `checkImportHandler` has no `MarkApplied`-despite-
+error partial-success state the way `applyByWorkflow` does to build on. If
+Relocate itself fails, nothing is committed and nothing is emitted,
+matching the plan's stated contract exactly.
+
+Tests (`internal/api`, reusing Slice 3/4's `fakeJellyfin`/`fakeStash`/
+`fakeAdultServarr` harnesses against the real HTTP dispatch): a completed
+Movies grab-import notifies Jellyfin with exactly one Created `PathChange`
+for the resolved video file (not the wrapping download directory); a failed
+`Relocate` (source vanished) produces zero notify calls and a non-200
+response; a fake Jellyfin 500 still leaves the grab reporting `Imported`
+with a 200 (best-effort, Guardrail #1's counterpart for this call site);
+and a completed Adult grab-import (through the `default` switch branch)
+notifies Stash with a phash-free `RescanPaths` of `movedPath` and zero
+`metadataClean` calls, proving both that this codepath applies to Adult and
+that the Created-only shape holds (no old path to mark Deleted — a
+grab-import is always a brand-new file, never a move of something
+previously tracked).
+
+Verified via `go build/vet/test -race` across the whole module (all green).
+
+This is the last planned slice of player-rescan-notify — all 5 call-site
+categories (Rename/Purge/Dedup × Movies/Series/Adult, plus grab-import) are
+now wired.

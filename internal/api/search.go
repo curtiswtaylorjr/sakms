@@ -371,6 +371,17 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 				http.Error(w, fmt.Sprintf("download completed but import failed: %v", err), http.StatusBadGateway)
 				return
 			}
+			// changes accumulates the exact file(s) this import created, fed
+			// to sess.NotifyPlayers once below (Jellyfin=Movies/Series,
+			// Stash=Adult — hardcoded scoping via mode.Build's nil-ness,
+			// same as every other call site). movedPath itself can be a
+			// wrapping directory (Relocate moves contentPath's whole tree),
+			// so Movies/Series notify with the resolved video file path(s) —
+			// same "actual path, not the directory" discipline as rename.go's
+			// row 1/2 — while Adult (no per-file resolution happens in this
+			// codepath; Whisparr owns file placement, and Stash's RescanPaths
+			// scans directory trees fine) notifies with movedPath directly.
+			var changes []mode.PathChange
 			switch g.Mode {
 			case mode.Movies:
 				videoPath, err := library.ResolveVideoFile(movedPath)
@@ -385,6 +396,7 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 					http.Error(w, fmt.Sprintf("file relocated but recording it in the library failed: %v", err), http.StatusBadGateway)
 					return
 				}
+				changes = []mode.PathChange{{Path: videoPath, Kind: mode.Created}}
 			case mode.Series:
 				videoPaths, err := library.ResolveEpisodeVideoFiles(movedPath)
 				if err != nil {
@@ -420,6 +432,7 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 						http.Error(w, fmt.Sprintf("file relocated but recording episode s%de%d failed: %v", season, episode, err), http.StatusBadGateway)
 						return
 					}
+					changes = append(changes, mode.PathChange{Path: videoPath, Kind: mode.Created})
 				}
 			default:
 				if _, err := sess.Servarr.Add(ctx, servarr.AddRequest{
@@ -433,7 +446,9 @@ func checkImportHandler(httpClient *http.Client, connStore *connections.Store, s
 					http.Error(w, fmt.Sprintf("registered but triggering a rescan failed: %v", err), http.StatusBadGateway)
 					return
 				}
+				changes = []mode.PathChange{{Path: movedPath, Kind: mode.Created}}
 			}
+			sess.NotifyPlayers(ctx, changes)
 			newStatus = grabs.Imported
 		}
 
