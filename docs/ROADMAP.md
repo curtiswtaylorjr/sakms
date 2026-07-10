@@ -13,18 +13,41 @@ briefly here.
 
 ## In progress
 
-### Movies/Series phash-based Dedup (deferred, not yet designed in detail)
+### phash-based Dedup — Movies refinement shipped; Series/Adult and phash-primary grouping still open
 The other half of "phash as the defacto standard across all media." Unlike
-Adult, there's no Stash instance for Movies/Series to lean on — SAK would
-have to compute perceptual hashes itself for the first time in either
-codebase (real frame-decode work). Decided so far: CPU baseline by default,
-GPU (QuickSync/NVENC) as an opt-in speedup for frame decoding; comparison
-scoped (not full-library all-pairs) to start; applies to all three modes
-(Movies, Series, and Adult once the above lands) as the PRIMARY duplicate
-signal, replacing today's identifier-based grouping (TMDB id / season-episode
-/ foreignID) rather than just supplementing it. Not yet scoped at the
-file/function level — do that once the Adult restoration above ships and
-validates the general approach.
+Adult, there's no Stash instance for Movies/Series to lean on — SAK computes
+perceptual hashes itself (real frame-decode work via ffmpeg).
+
+**Shipped (2026-07-10):** the first slice — Movies-only, CPU-only, phash as a
+**refinement WITHIN** the existing same-TMDB grouping. `internal/phash`
+(injected-ffmpeg-runner `Hasher`, scheme-tagged composite over 5 sampled
+frames), a file-identity-keyed cache (migration `0017`), a per-mode tunable
+threshold (`GET`/`PUT /api/modes/{mode}/phash-threshold`, default 10), and
+`dedup.ScanLibrary` dropping any same-TMDB candidate outside the threshold of
+the group's reference. Validated with a build-tagged real-ffmpeg integration
+test + a full-flow walkthrough (see the CHANGELOG entry of the same date for
+the measured Hamming numbers). Ships imghash's released **PHash**, not PDQ —
+see "PDQ is still pending" below.
+
+**Still open (next slices):**
+- **Series and Adult phash refinement.** Extend the same
+  refine-within-identifier-grouping approach to `ScanLibrarySeries` (group key
+  `(show, season, episode)`) and to Adult's Servarr-backed `scanAdult`
+  (foreignID grouping). Deferred from this slice, not designed at the
+  file/function level yet.
+- **phash-PRIMARY grouping (TMDB-less).** The larger ambition from the original
+  entry: making phash the *primary* duplicate signal that groups files with no
+  shared identifier at all — replacing identifier-based grouping rather than
+  refining it. This needs a full-library comparison strategy (the current slice
+  is scoped to same-identifier groups, which comes for free; primary grouping
+  is not). Not started.
+- **GPU frame decoding.** CPU baseline shipped; GPU (QuickSync/NVENC) as an
+  opt-in speedup for frame decoding is still just a decided-in-principle idea.
+- **PDQ is still pending an imghash tagged release.** The algorithm is isolated
+  behind `internal/phash/algo.go` as a one-file swap point, but imghash's
+  latest tag (v1.1.0) has no PDQ — it lives only on the unreleased `main`
+  branch, and pinning a deletion-gating signal to untagged upstream was
+  rejected. Swap PHash→PDQ once imghash tags a release containing it.
 
 ---
 
@@ -136,8 +159,8 @@ lowest priority.
 - **Hardware acceleration for transcoding/thumbnails** — dropped as a scope
   mismatch: SAK doesn't transcode or generate thumbnails, so there was
   nothing for it to accelerate. (GPU accel is back in scope, but narrowly,
-  for phash frame-decoding — see "Movies/Series phash-based Dedup" above,
-  a different and more concrete driver.)
+  for phash frame-decoding — see the "phash-based Dedup" in-progress entry
+  above, a different and more concrete driver.)
 - **Full OIDC/SAML client** — dropped in favor of forward-auth header
   support (see Cheap wins above) — a proxy in front of SAK already solves
   this for most people in this situation, and a full client is a bigger

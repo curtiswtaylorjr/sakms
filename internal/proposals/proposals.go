@@ -53,6 +53,15 @@ type Candidate struct {
 	Resolution int    `json:"resolution"`
 	Codec      string `json:"codec"`
 	BitRate    int64  `json:"bitRate"`
+	// PHash is this candidate's SAK-computed perceptual hash (Movies Dedup
+	// only), scheme-tagged (see internal/phash). Surfaced for display/audit —
+	// the same-TMDB group was already refined by phash similarity at Scan time,
+	// so nothing consumes this on Apply. Empty for non-Movies-library Dedup
+	// candidates (Adult/Series/Servarr paths don't compute it). Zero migration:
+	// Candidates persist as the candidates_json blob, so a new field just
+	// serializes. Distinct from Proposal.PHash, which is Adult's Stash-READ
+	// hash, never SAK-computed.
+	PHash string `json:"phash,omitempty"`
 	// Winner is precomputed at Scan time via place.QualityKey — Apply uses
 	// it as the default "auto-resolve by quality" choice when the caller
 	// doesn't explicitly pick a candidate to keep.

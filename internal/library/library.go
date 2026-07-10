@@ -46,8 +46,19 @@ type Item struct {
 	Year           int       `json:"year,omitempty"`
 	FilePath       string    `json:"filePath"`
 	RootFolderPath string    `json:"rootFolderPath"`
-	CreatedAt      string    `json:"createdAt"`
-	UpdatedAt      string    `json:"updatedAt"`
+	// PHash is the SAK-computed perceptual hash of this item's video file,
+	// cached so Dedup decodes each tracked file once rather than every Scan.
+	// PHashFileSize/PHashFileMTime are the file-identity key it's valid for:
+	// the cache is trusted only if the current file's os.Stat size+mtime still
+	// match, which detects a replaced/re-encoded file at the same path. Empty/
+	// zero means "not computed yet" — recomputed lazily on the next Dedup Scan.
+	// The phash string is scheme-tagged (see internal/phash), so a value cached
+	// under an older algorithm/frame-count is self-invalidating on comparison.
+	PHash          string `json:"phash,omitempty"`
+	PHashFileSize  int64  `json:"phashFileSize,omitempty"`
+	PHashFileMTime string `json:"phashFileMtime,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 type Store struct {
@@ -65,16 +76,19 @@ func New(db *sql.DB) *Store {
 // place rather than erroring or duplicating.
 func (s *Store) Upsert(ctx context.Context, item Item) (Item, error) {
 	row := s.db.QueryRowContext(ctx, `
-		INSERT INTO library_items (mode, tmdb_id, title, year, file_path, root_folder_path)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO library_items (mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(mode, tmdb_id) DO UPDATE SET
 			title = excluded.title,
 			year = excluded.year,
 			file_path = excluded.file_path,
 			root_folder_path = excluded.root_folder_path,
+			phash = excluded.phash,
+			phash_file_size = excluded.phash_file_size,
+			phash_file_mtime = excluded.phash_file_mtime,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		RETURNING id, created_at, updated_at
-	`, string(item.Mode), item.TMDBID, item.Title, item.Year, item.FilePath, item.RootFolderPath)
+	`, string(item.Mode), item.TMDBID, item.Title, item.Year, item.FilePath, item.RootFolderPath, item.PHash, item.PHashFileSize, item.PHashFileMTime)
 
 	if err := row.Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return Item{}, fmt.Errorf("upserting library item %q: %w", item.Title, err)
@@ -82,10 +96,29 @@ func (s *Store) Upsert(ctx context.Context, item Item) (Item, error) {
 	return item, nil
 }
 
+// UpdatePHash writes a freshly-computed perceptual hash and its file-identity
+// key (size + mtime) onto an existing tracked item, without rewriting the rest
+// of the row — the targeted write Dedup's Scan uses to cache a tracked item's
+// hash mid-scan (orphans have no row yet; their surviving winner's hash is
+// persisted via Upsert in ApplyLibrary). Updating an id that doesn't exist is
+// not an error, matching Delete's convention.
+func (s *Store) UpdatePHash(ctx context.Context, id int64, phash string, fileSize int64, fileMTime string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE library_items
+		SET phash = ?, phash_file_size = ?, phash_file_mtime = ?,
+		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		WHERE id = ?
+	`, phash, fileSize, fileMTime, id)
+	if err != nil {
+		return fmt.Errorf("updating phash for library item %d: %w", id, err)
+	}
+	return nil
+}
+
 // List returns every item tracked for m, ordered by title.
 func (s *Store) List(ctx context.Context, m mode.Mode) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, created_at, updated_at
+		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, created_at, updated_at
 		FROM library_items WHERE mode = ? ORDER BY title
 	`, string(m))
 	if err != nil {
@@ -107,7 +140,7 @@ func (s *Store) List(ctx context.Context, m mode.Mode) ([]Item, error) {
 // Get returns a single item by ID.
 func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, created_at, updated_at
+		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, created_at, updated_at
 		FROM library_items WHERE id = ?
 	`, id)
 	item, err := scanItem(row)
@@ -125,7 +158,7 @@ func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
 // TVDB/TMDB-keyed TrackedItem list.
 func (s *Store) GetByTMDBID(ctx context.Context, m mode.Mode, tmdbID int) (*Item, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, created_at, updated_at
+		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, created_at, updated_at
 		FROM library_items WHERE mode = ? AND tmdb_id = ?
 	`, string(m), tmdbID)
 	item, err := scanItem(row)
@@ -236,7 +269,9 @@ func scanItem(row rowScanner) (Item, error) {
 	var item Item
 	var m string
 	err := row.Scan(&item.ID, &m, &item.TMDBID, &item.Title, &item.Year,
-		&item.FilePath, &item.RootFolderPath, &item.CreatedAt, &item.UpdatedAt)
+		&item.FilePath, &item.RootFolderPath,
+		&item.PHash, &item.PHashFileSize, &item.PHashFileMTime,
+		&item.CreatedAt, &item.UpdatedAt)
 	item.Mode = mode.Mode(m)
 	return item, err
 }

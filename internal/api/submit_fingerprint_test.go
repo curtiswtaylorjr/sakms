@@ -108,7 +108,7 @@ func TestSubmitFingerprintHandler_GivesAppliedProposalBackAfterStashGetsAPHash(t
 		t.Fatalf("marking proposal applied: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/proposals/"+strconv.FormatInt(saved[0].ID, 10)+"/submit-fingerprint", "application/json", nil)
@@ -151,7 +151,7 @@ func TestSubmitFingerprintHandler_RejectsPendingProposal(t *testing.T) {
 		t.Fatalf("seeding proposal: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/proposals/"+strconv.FormatInt(saved[0].ID, 10)+"/submit-fingerprint", "application/json", nil)

@@ -80,7 +80,7 @@ func TestAdultDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		fileSD: {CodecName: "h264", Width: 1280, Height: 720, BitRate: 3000},
 		fileHD: {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Scan → one Dedup proposal carrying the scene identifier + 2 candidates.

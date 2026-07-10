@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/curtiswtaylorjr/sakms/internal/allowlist"
@@ -25,6 +27,24 @@ import (
 func testProber(t *testing.T) *mediainfo.Prober {
 	t.Helper()
 	return mediainfo.New()
+}
+
+// constantPHasher hashes every path to the same valid scheme-tagged string,
+// so the end-to-end Movies dedup scan's phash refinement keeps every same-TMDB
+// candidate (identical hashes are within any threshold) without a real ffmpeg
+// binary or video content. It satisfies dedup.PHasher.
+type constantPHasher struct{}
+
+func (constantPHasher) Hash(ctx context.Context, path string) (string, error) {
+	return "phash64/5f:" + strings.Repeat("0", 80), nil // 40 zero bytes = 5 frames × 8
+}
+
+// testPHasher returns a fake perceptual hasher for NewMux — mirrors testProber,
+// so a handler test never shells out to ffmpeg. Only the Movies dedup scan
+// actually consults it; every other route ignores it.
+func testPHasher(t *testing.T) constantPHasher {
+	t.Helper()
+	return constantPHasher{}
 }
 
 // testStores builds real connections.Store, proposals.Store,
@@ -59,7 +79,7 @@ func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
 	defer fakeSonarr.Close()
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	sakSrv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	sakSrv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer sakSrv.Close()
 
 	reqBody, _ := json.Marshal(ConnectionTestRequest{
@@ -85,7 +105,7 @@ func TestConnectionsTestHandler_EndToEnd(t *testing.T) {
 
 func TestConnectionsTestHandler_MalformedBody(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/connections/test", "application/json", bytes.NewReader([]byte("not json")))
@@ -105,7 +125,7 @@ func TestConnectionsTestHandler_MalformedBody(t *testing.T) {
 // isolation.
 func TestConnectionsCRUD_EndToEnd(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Save a connection.
@@ -159,7 +179,7 @@ func TestConnectionsCRUD_EndToEnd(t *testing.T) {
 
 func TestUpsertConnectionHandler_RequiresURL(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(upsertConnectionRequest{APIKey: "key-with-no-url"})

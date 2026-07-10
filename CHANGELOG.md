@@ -296,3 +296,95 @@ missing phash getting force-generated mid-scan and then resolving, Stash
 being unreachable (fails open), the give-back-box/scene-id capture
 correctness case above, Apply's give-back submission (both when it fires
 and when it correctly doesn't), and the retry endpoint end-to-end.
+
+## 2026-07-10 — phash-refined Movies Dedup
+
+Movies Dedup no longer auto-dedupes every file sharing a TMDB id. Within
+each same-TMDB group it now computes a CPU perceptual hash over several
+sampled frames of each candidate and only treats two files as duplicates if
+their hashes are also within a Hamming-distance threshold — a strictly MORE
+conservative change: same-TMDB-but-perceptually-different files (a wrong
+TMDB match, a different cut, an extras file) are kept, not removed. Series
+and Adult Dedup are unchanged (deferred — see the ROADMAP entry).
+
+This is the first Movies/Series slice of "phash as the defacto standard
+across all media"; unlike Adult (which leans on Stash's own phashes), SAK
+computes the hash itself here for the first time, decoding real frames.
+
+**Algorithm — shipped Option B (released PHash), not PDQ.** Spec decision #3
+named `ajdnik/imghash`'s **PDQ**. During planning that was verified against
+ground truth and found unshippable as stated: imghash's latest *tagged*
+release (v1.1.0) contains no PDQ — its PDQ lives only on the unreleased
+`main` branch. Pinning a *deletion-gating* dedup signal to untagged upstream
+cuts against the project's conservative posture, so the human confirmed
+**Option B**: ship on imghash v1.1.0's released `PHash` (64 bits/frame) with
+the algorithm isolated behind `internal/phash/algo.go` as a single swap
+point — moving to PDQ once imghash tags a release containing it changes only
+that one file plus the `Scheme` constant, nothing downstream (hashes are
+compared as scheme-tagged byte composites by Hamming distance regardless of
+which algorithm produced them).
+
+- **New `internal/phash`**: an injected-runner `Hasher` mirroring
+  `internal/mediainfo`'s ffprobe test seam. The real runner shells out to
+  `ffprobe` once for duration, then `ffmpeg` for N (=5) evenly-spaced
+  *interior* frames (deliberately avoiding head/tail intros, black frames,
+  and credits), hashes each via imghash, and concatenates them into one
+  scheme-tagged (`phash64/5f:<hex>`) composite. ffmpeg was already installed
+  in the image for ffprobe; this is its first frame-decode use. The
+  algorithm is constructed inside `Hash` (not `New`) so a future
+  error-returning PDQ constructor stays isolated to `algo.go`. Hamming
+  distance is a plain popcount, deliberately not imghash's own
+  `similarity.Hamming` (whose raw-bits-vs-normalized return semantics
+  couldn't be confirmed from its docs).
+- **`library_items` gains a cached phash keyed to file identity** (path +
+  size + mtime) so a tracked item is decoded once, not every Scan (migration
+  `0017`, mirroring `0016`'s ALTER TABLE ADD COLUMN pattern; all
+  `NOT NULL DEFAULT`, safe on a populated table — existing rows get an empty
+  phash = "compute on next Scan"). `library.Store` gains `UpdatePHash` for
+  the mid-scan write-back. The scheme tag embedded in the stored value makes
+  a hash cached under an old algorithm/frame-count self-invalidating via
+  `SimilarityWithin` (returns not-similar, never a silent wrong distance).
+- **`dedup.ScanLibrary`** refines each TMDB group by phash before
+  `markWinner`: it hashes each candidate (reusing the tracked item's cached
+  hash when file identity + scheme still match — the decode-once win), picks
+  the tracked item as the reference (else the first candidate), and drops any
+  candidate outside the threshold. A group refined below 2 survivors produces
+  **no proposal** (keep-both). An uncomputable candidate is dropped, matching
+  `probeCandidate`'s existing tolerant posture.
+- **Per-mode tunable threshold** via `GET`/`PUT
+  /api/modes/{mode}/phash-threshold` (default 10 average Hamming bits/frame),
+  mirroring the naming-preset settings pattern; PUT validates 0–64.
+- **`proposals.Candidate` carries its phash** for display/audit (zero
+  migration — candidates persist as `candidates_json`).
+
+**Bug found and fixed during validation (verified, not assumed).** The
+Phase-4 review caught a real panic: when *every* candidate in a group failed
+to hash (e.g. ffmpeg missing or all files corrupt), `attachPHashes` returned
+a 0-length slice and `refineByPHash` indexed `candidates[0]` unconditionally
+→ index-out-of-range crash mid-Scan. Fixed with a `len < 2` guard at the top
+of `refineByPHash` (return as-is; the caller's own `len < 2` check makes the
+no-proposal call) plus a regression test
+(`TestScanLibrary_PHashAllCandidatesUncomputable`) that drives the
+whole-group-uncomputable path and asserts no panic + no proposal.
+
+Verified via `go build/vet/test -race` across the whole module (all green),
+both without and **with** `-tags integration`. Coverage includes the
+`internal/phash` unit tier (fake runner, canned PNGs: determinism,
+wrong-frame-count, runner-error, undecodable-frame, `SimilarityWithin`
+scheme/length safety), a synthetic-image calibration test guarding the
+default's separation *margin*, the `internal/dedup` refinement tier (keeps a
+near-identical pair, drops a divergent orphan to no-proposal, tracked-item-
+as-reference, cache-reuse-avoids-rehash, the panic regression above), and a
+build-tagged real-ffmpeg integration test that generates tiny `testsrc`/
+`testsrc2` lavfi clips and drives the real `Hash`. Its measured numbers
+(this machine): the same clip re-decoded hashes **identically** (0 bits),
+while `testsrc` vs `testsrc2` differ by **153/320 bits** — far outside the
+50-bit composite budget the default (10/frame) allows. A separate full-flow
+walkthrough (real ffmpeg + real ffprobe through `dedup.ScanLibrary`, fake
+TMDB since synthetic clips can't match live TMDB) measured a re-encoded
+near-duplicate at **6** average Hamming bits/frame (kept) and a genuinely
+different same-TMDB clip at **31** (dropped): exactly one proposal holding
+the tracked copy + its near-duplicate, with the perceptually-different file
+correctly left out. The default of 10 sits cleanly between the two on real
+ffmpeg-decoded frames — but it remains a *starting* default and a per-mode
+tunable, not a value proven correct for arbitrary real-world movie frames.

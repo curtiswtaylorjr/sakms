@@ -31,7 +31,7 @@ func TestListTracked_Adult_ReturnsItemsFromTheRealApp(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/tracked")
@@ -53,7 +53,7 @@ func TestListTracked_Adult_ReturnsItemsFromTheRealApp(t *testing.T) {
 
 func TestListTracked_Adult_MissingConnection(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/tracked")
@@ -80,7 +80,7 @@ func TestListTracked_Movies_ReturnsLibraryItemsWithLabelTags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/tracked")
@@ -114,7 +114,7 @@ func TestListTracked_Series_ReturnsLibrarySeriesWithLabelTags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/tracked")

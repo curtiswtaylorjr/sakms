@@ -20,6 +20,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/phash"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
@@ -61,6 +62,7 @@ func run() error {
 	propStore := proposals.New(sqlDB)
 	allowStore := allowlist.New(sqlDB)
 	prober := mediainfo.New()
+	hasher := phash.New()
 	settingsStore := settings.New(sqlDB)
 	grabsStore := grabs.New(sqlDB)
 	libStore := library.New(sqlDB)
@@ -71,7 +73,7 @@ func run() error {
 	// exemption list on this one (see internal/api.NewAuthMux's doc
 	// comment) — NewMux stays unaware auth exists either way, so its own
 	// large test suite never had to change for auth specifically.
-	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, settingsStore, grabsStore, libStore)
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, settingsStore, grabsStore, libStore)
 	protectedAPI := auth.Middleware(secretStore, apiMux)
 
 	top := http.NewServeMux()

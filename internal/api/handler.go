@@ -22,14 +22,17 @@ import (
 // then "Save" flow. propStore backs every workflow's review queue (Rename,
 // Purge, Dedup); allowStore backs Purge's per-mode tag allowlist; prober
 // backs Dedup's direct ffprobe reads (a real *mediainfo.Prober in
-// production, anything satisfying dedup.Prober in tests); settingsStore
+// production, anything satisfying dedup.Prober in tests); hasher backs Movies
+// Dedup's perceptual-hash refinement the same way (a real *phash.Hasher in
+// production, a fake satisfying dedup.PHasher in tests, so the end-to-end
+// dedup test never shells out to ffmpeg); settingsStore
 // backs the setup wizard's dismissed flag; grabsStore backs Search's grab
 // tracking (a separate concept from propStore's Scan-stage-Apply queue —
 // see internal/grabs' package doc for why); libStore backs Movies' own
 // library (root folder contents, tags) now that Radarr no longer does —
 // every Rename/Purge/Dedup/Tag handler below dispatches to a Movies-library
 // code path or the existing *arr-backed one depending on {mode}.
-func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store) *http.ServeMux {
+func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/connections/test", connectionsTestHandler(httpClient))
 	mux.HandleFunc("GET /api/connections", listConnectionsHandler(connStore))
@@ -44,6 +47,8 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("PUT /api/modes/{mode}/quality-prefs", putQualityPrefsHandler(settingsStore))
 	mux.HandleFunc("GET /api/modes/{mode}/naming-preset", getNamingPresetHandler(settingsStore))
 	mux.HandleFunc("PUT /api/modes/{mode}/naming-preset", putNamingPresetHandler(settingsStore))
+	mux.HandleFunc("GET /api/modes/{mode}/phash-threshold", getPHashThresholdHandler(settingsStore))
+	mux.HandleFunc("PUT /api/modes/{mode}/phash-threshold", putPHashThresholdHandler(settingsStore))
 
 	// One-time Sonarr library importer (see internal/sonarrimport) — Series
 	// only, not mode-generic, since Movies never had a Sonarr library to
@@ -61,7 +66,7 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("POST /api/modes/{mode}/purge/allowlist", addAllowlistTagHandler(allowStore))
 	mux.HandleFunc("DELETE /api/modes/{mode}/purge/allowlist/{tag}", removeAllowlistTagHandler(allowStore))
 
-	mux.HandleFunc("POST /api/modes/{mode}/dedup/scan", dedupScanHandler(httpClient, connStore, settingsStore, propStore, prober, libStore))
+	mux.HandleFunc("POST /api/modes/{mode}/dedup/scan", dedupScanHandler(httpClient, connStore, settingsStore, propStore, prober, hasher, libStore))
 	mux.HandleFunc("GET /api/modes/{mode}/dedup/proposals", listProposalsHandler(propStore, proposals.Dedup))
 
 	// Discover is a read-only proxy against TMDB (trending/popular titles,

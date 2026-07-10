@@ -28,7 +28,7 @@ func TestListRootFolders_Adult_ReturnsPathsFromTheRealApp(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/root-folders")
@@ -53,7 +53,7 @@ func TestListRootFolders_Adult_ReturnsPathsFromTheRealApp(t *testing.T) {
 // ask anymore (see GET /api/modes/{mode}/library/root-folder instead).
 func TestListRootFolders_NotApplicableToMoviesOrSeries(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	for _, m := range []string{"movies", "series"} {

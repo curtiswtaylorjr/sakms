@@ -84,6 +84,36 @@ func TestReplacePending_PersistsCandidates(t *testing.T) {
 	}
 }
 
+// TestReplacePending_PersistsCandidatePHash proves the SAK-computed per-file
+// perceptual hash (Movies Dedup) survives the candidates_json round-trip — a
+// zero-migration field carried only inside the JSON blob, distinct from
+// Proposal.PHash (Adult's Stash-read hash, a real column).
+func TestReplacePending_PersistsCandidatePHash(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	saved, err := s.ReplacePending(ctx, mode.Movies, Dedup, []Proposal{
+		{
+			Status: Pending, SourceName: "Movie A", Title: "Movie A", TMDBID: 1,
+			Candidates: []Candidate{
+				{Label: "tracked", Path: "/media/Movies/Movie A/a.mkv", TrackedID: 9, PHash: "phash64/5f:aa11"},
+				{Label: "Movie.A.1080p", Path: "/media/Movies/Movie.A.1080p/b.mkv", PHash: "phash64/5f:aa12", Winner: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := s.Get(ctx, saved[0].ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Candidates) != 2 || got.Candidates[0].PHash != "phash64/5f:aa11" || got.Candidates[1].PHash != "phash64/5f:aa12" {
+		t.Fatalf("expected candidate phashes to round-trip from candidates_json, got %+v", got.Candidates)
+	}
+}
+
 func TestReplacePending_EmptyCandidatesForNonDedupWorkflows(t *testing.T) {
 	s := newTestStore(t)
 	saved, err := s.ReplacePending(context.Background(), mode.Movies, Rename, []Proposal{

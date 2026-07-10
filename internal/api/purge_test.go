@@ -50,7 +50,7 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	// Add a tag to the allowlist via the API, not directly on the store.
@@ -149,7 +149,7 @@ func TestPurgeWorkflow_AllowlistThenScanThenApply_EndToEnd(t *testing.T) {
 
 func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(addAllowlistTagRequest{})
@@ -169,7 +169,7 @@ func TestAddAllowlistTagHandler_RequiresTag(t *testing.T) {
 // TestPurgeScanHandler_NoConnectionNeeded below).
 func TestPurgeScanHandler_ModeNotConfigured(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/modes/adult/purge/scan", "application/json", nil)
@@ -184,7 +184,7 @@ func TestPurgeScanHandler_ModeNotConfigured(t *testing.T) {
 
 func TestPurgeScanHandler_NoConnectionNeeded(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), settingsStore, grabsStore, libStore))
 	defer srv.Close()
 
 	for _, m := range []string{"movies", "series"} {

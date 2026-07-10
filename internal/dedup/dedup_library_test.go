@@ -44,14 +44,14 @@ func fakeTMDBSearch(t *testing.T, results map[string]string) *tmdb.Client {
 
 func TestScanLibrary_RequiresTMDBConfigured(t *testing.T) {
 	sess := &mode.Session{Mode: mode.Movies}
-	if _, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), t.TempDir(), &fakeProber{}); err == nil {
+	if _, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), t.TempDir(), &fakeProber{}, &fakePHasher{}, 10); err == nil {
 		t.Fatal("expected an error when TMDB isn't configured")
 	}
 }
 
 func TestScanLibrary_RequiresRootFolderPath(t *testing.T) {
 	sess := &mode.Session{Mode: mode.Movies, TMDB: fakeTMDBSearch(t, nil)}
-	if _, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), "", &fakeProber{}); err == nil {
+	if _, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), "", &fakeProber{}, &fakePHasher{}, 10); err == nil {
 		t.Fatal("expected an error when no root folder path is configured")
 	}
 }
@@ -79,7 +79,7 @@ func TestScanLibrary_TrackedItemPlusOrphan_ProposesWithCorrectWinner(t *testing.
 		orphanFile:  {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
 
-	got, err := ScanLibrary(context.Background(), sess, libStore, dir, prober)
+	got, err := ScanLibrary(context.Background(), sess, libStore, dir, prober, matchingPHasher(trackedFile, orphanFile), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestScanLibrary_DiscoversDuplicateFileAlongsideAlreadyTrackedItem(t *testin
 		orphanFile:  {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
 
-	got, err := ScanLibrary(context.Background(), sess, libStore, dir, prober)
+	got, err := ScanLibrary(context.Background(), sess, libStore, dir, prober, matchingPHasher(trackedFile, orphanFile), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestScanLibrary_SingleNewOrphanIsNotADuplicate(t *testing.T) {
 		"New Movie 2020": `{"results":[{"id":99,"title":"New Movie"}]}`,
 	})}
 
-	got, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), dir, &fakeProber{})
+	got, err := ScanLibrary(context.Background(), sess, newTestLibraryStore(t), dir, &fakeProber{}, &fakePHasher{}, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

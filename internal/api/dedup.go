@@ -23,7 +23,7 @@ import (
 // Movies/Series dispatch to dedup.ScanLibrary/ScanLibrarySeries (libStore,
 // no *arr app involved); Adult uses the existing Servarr-backed
 // dedup.Scan, unchanged.
-func dedupScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, prober dedup.Prober, libStore *library.Store) http.HandlerFunc {
+func dedupScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, prober dedup.Prober, hasher dedup.PHasher, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
 		ctx := r.Context()
@@ -42,7 +42,12 @@ func dedupScanHandler(httpClient *http.Client, connStore *connections.Store, set
 				return
 			}
 			if m == mode.Movies {
-				found, err = dedup.ScanLibrary(ctx, sess, libStore, rootPath, prober)
+				threshold, tErr := resolvePHashThreshold(ctx, settingsStore, m)
+				if tErr != nil {
+					http.Error(w, tErr.Error(), http.StatusInternalServerError)
+					return
+				}
+				found, err = dedup.ScanLibrary(ctx, sess, libStore, rootPath, prober, hasher, threshold)
 			} else {
 				found, err = dedup.ScanLibrarySeries(ctx, sess, libStore, rootPath, prober)
 			}

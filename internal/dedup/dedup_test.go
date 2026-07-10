@@ -33,6 +33,40 @@ func (f *fakeProber) Probe(ctx context.Context, path string) (*mediainfo.Probe, 
 	return p, nil
 }
 
+// fakePHasher maps a video path to a canned scheme-tagged hash and records how
+// many times each path was hashed, so a test can assert the cache avoided a
+// re-hash. Mirrors fakeProber — ScanLibrary's phash refinement is faked without
+// a real ffmpeg binary or video content. A path with no canned hash returns an
+// error, mimicking an undecodable/short file (attachPHashes then drops it).
+type fakePHasher struct {
+	byPath map[string]string
+	calls  map[string]int
+}
+
+func (f *fakePHasher) Hash(ctx context.Context, path string) (string, error) {
+	if f.calls == nil {
+		f.calls = map[string]int{}
+	}
+	f.calls[path]++
+	h, ok := f.byPath[path]
+	if !ok {
+		return "", os.ErrNotExist
+	}
+	return h, nil
+}
+
+// matchingPHasher returns a fakePHasher that hashes every given path to the
+// same value, so ScanLibrary's phash refinement keeps the whole group
+// (identical hashes are within any threshold).
+func matchingPHasher(paths ...string) *fakePHasher {
+	sameHash := "phash64/5f:" + strings.Repeat("0", 80) // 40 zero bytes = 5 frames × 8
+	byPath := map[string]string{}
+	for _, p := range paths {
+		byPath[p] = sameHash
+	}
+	return &fakePHasher{byPath: byPath}
+}
+
 func newTestSession(t *testing.T, app servarr.App, handler http.HandlerFunc) *mode.Session {
 	t.Helper()
 	srv := httptest.NewServer(handler)

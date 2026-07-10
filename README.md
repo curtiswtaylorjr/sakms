@@ -72,6 +72,14 @@ already-tracked item sharing the same identifier — TMDB ID for Movies,
 `(show TMDB id, season, episode)` for Series, the resolved scene's
 foreignID for Adult — ffprobes every candidate directly, and stages a
 proposal per duplicate group with a precomputed quality winner. For
+Movies, sharing a TMDB id is necessary but no longer sufficient: within
+each same-TMDB group SAK also computes a CPU perceptual hash over several
+sampled frames of each candidate and only treats two files as duplicates
+if their hashes are within a Hamming-distance threshold (tunable per mode
+via `GET`/`PUT /api/modes/{mode}/phash-threshold`, default 10) — so
+same-TMDB files that look different (a wrong match, a different cut, an
+extras file) are kept, not auto-deduped. Series and Adult still group by
+identifier alone. For
 Series, "the tracked copy" for a duplicate group is simply the one
 `library.Episode` row for that exact season/episode — the schema's own
 uniqueness constraint on that triple rules out ambiguity — and a
@@ -238,9 +246,13 @@ installs — see the design spec for details once it's linked here.
 
 ## Development
 
-Requires Go 1.25+, plus `ffprobe` on `PATH` if you want to exercise Dedup
-(it ffprobes real files directly — see `internal/mediainfo`). Every other
-workflow runs without it.
+Requires Go 1.25+, plus `ffprobe` and `ffmpeg` on `PATH` if you want to
+exercise Dedup (it ffprobes real files directly — see `internal/mediainfo`
+— and, for Movies, decodes sampled frames with `ffmpeg` for the perceptual
+hash, see `internal/phash`). Every other workflow runs without them; the
+`internal/phash` unit tests fake the ffmpeg runner, and its build-tagged
+real-ffmpeg integration test (`go test ./internal/phash/ -tags integration`)
+skips cleanly when `ffmpeg`/`ffprobe` are absent.
 
 ```sh
 go run ./cmd/sakms

@@ -34,12 +34,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/curtiswtaylorjr/sakms/internal/config"
 	"github.com/curtiswtaylorjr/sakms/internal/identify"
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/phash"
 	"github.com/curtiswtaylorjr/sakms/internal/place"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/searchterm"
@@ -50,6 +52,101 @@ import (
 // tests can inject a fake without a real ffprobe binary or media file.
 type Prober interface {
 	Probe(ctx context.Context, path string) (*mediainfo.Probe, error)
+}
+
+// PHasher is the subset of *phash.Hasher ScanLibrary needs — an interface so
+// tests can inject a fake without a real ffmpeg binary or video file, exactly
+// as Prober does for ffprobe. Movies-library Dedup only; the Servarr-backed
+// Scan and Series' ScanLibrarySeries don't compute perceptual hashes.
+type PHasher interface {
+	Hash(ctx context.Context, path string) (string, error)
+}
+
+// fileIdentity returns the size and a UTC RFC3339Nano mtime string used as the
+// phash cache key — a cached hash is valid only while a file's current
+// size+mtime still match what was stored, detecting a replaced/re-encoded file
+// at the same path. Written and compared only here, so the mtime string format
+// is internally consistent between the cache write and the later cache check.
+func fileIdentity(path string) (size int64, mtime string, err error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, "", err
+	}
+	return fi.Size(), fi.ModTime().UTC().Format(time.RFC3339Nano), nil
+}
+
+// attachPHashes computes a perceptual hash for each candidate and returns only
+// those it could hash, each with PHash set. The tracked candidate reuses its
+// cached library hash when the file's identity (size+mtime) AND the hash's
+// scheme still match — the decode-once win — otherwise it, like every orphan,
+// is hashed fresh, and a freshly computed tracked hash is written back via
+// UpdatePHash. A candidate whose hash can't be computed is dropped, matching
+// probeCandidate's tolerant "report whatever could be measured" posture. A
+// UpdatePHash failure is a best-effort cache miss (dedup has no logger — see
+// the package doc): it only costs a recompute next Scan, never a failed Scan.
+func attachPHashes(ctx context.Context, hasher PHasher, libStore *library.Store, candidates []proposals.Candidate, tracked *library.Item) []proposals.Candidate {
+	out := make([]proposals.Candidate, 0, len(candidates))
+	for _, c := range candidates {
+		if c.TrackedID != 0 && tracked != nil && tracked.PHash != "" &&
+			strings.HasPrefix(tracked.PHash, phash.Scheme+":") {
+			if size, mtime, err := fileIdentity(c.Path); err == nil &&
+				size == tracked.PHashFileSize && mtime == tracked.PHashFileMTime {
+				c.PHash = tracked.PHash
+				out = append(out, c)
+				continue
+			}
+		}
+		h, err := hasher.Hash(ctx, c.Path)
+		if err != nil {
+			continue // uncomputable — drop this candidate, same tolerance as probeCandidate
+		}
+		c.PHash = h
+		if c.TrackedID != 0 {
+			if size, mtime, statErr := fileIdentity(c.Path); statErr == nil {
+				_ = libStore.UpdatePHash(ctx, int64(c.TrackedID), h, size, mtime)
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// refineByPHash keeps only the candidates perceptually similar to a reference:
+// the tracked candidate if the group has one, else the first candidate. A
+// candidate whose hash is outside perFrameThreshold average Hamming bits/frame
+// of the reference is removed from the GROUP — it stays on disk untouched.
+// This is the strictly-more-conservative "keep both" behavior: files sharing a
+// TMDB id but looking different (a wrong match, a different cut, an extras
+// file) are not treated as duplicates. The reference itself is always kept,
+// and input order is preserved so markWinner/the proposal see the same shape.
+func refineByPHash(candidates []proposals.Candidate, frames, perFrameThreshold int) []proposals.Candidate {
+	if len(candidates) < 2 {
+		// Nothing to refine — 0 survivors (every candidate was uncomputable,
+		// e.g. ffmpeg missing or every file corrupt) or 1 survivor. Return as-is
+		// so the caller's own len<2 check (ScanLibrary) makes the no-proposal
+		// call; indexing candidates[0] below would panic on the 0 case.
+		return candidates
+	}
+	refIdx := 0
+	for i, c := range candidates {
+		if c.TrackedID != 0 {
+			refIdx = i
+			break
+		}
+	}
+	ref := candidates[refIdx]
+	out := make([]proposals.Candidate, 0, len(candidates))
+	for i, c := range candidates {
+		if i == refIdx {
+			out = append(out, c)
+			continue
+		}
+		within, err := phash.SimilarityWithin(ref.PHash, c.PHash, frames, perFrameThreshold)
+		if err == nil && within {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 var videoExts = map[string]bool{
@@ -449,7 +546,7 @@ func removeCandidate(ctx context.Context, sess *mode.Session, c proposals.Candid
 // and any already-tracked library item, by TMDB id — the same shape
 // scanMovies already established, just reading/writing internal/library
 // instead of Servarr.
-func ScanLibrary(ctx context.Context, sess *mode.Session, libStore *library.Store, rootFolderPath string, prober Prober) ([]proposals.Proposal, error) {
+func ScanLibrary(ctx context.Context, sess *mode.Session, libStore *library.Store, rootFolderPath string, prober Prober, hasher PHasher, perFrameThreshold int) ([]proposals.Proposal, error) {
 	if sess.TMDB == nil {
 		return nil, fmt.Errorf("tmdb isn't configured yet — add it in Settings first")
 	}
@@ -520,6 +617,22 @@ func ScanLibrary(ctx context.Context, sess *mode.Session, libStore *library.Stor
 		if len(candidates) < 2 {
 			continue // couldn't probe enough of the group to compare
 		}
+
+		// Refine the same-TMDB group by perceptual similarity: hash each
+		// candidate (reusing a tracked item's cached hash when its file is
+		// unchanged), then drop any candidate outside the threshold of the
+		// group's reference. A group refined below 2 survivors is not a
+		// duplicate — the strictly-more-conservative keep-both behavior.
+		var trackedPtr *library.Item
+		if isTracked {
+			ti := trackedItem
+			trackedPtr = &ti
+		}
+		candidates = attachPHashes(ctx, hasher, libStore, candidates, trackedPtr)
+		candidates = refineByPHash(candidates, phash.Frames, perFrameThreshold)
+		if len(candidates) < 2 {
+			continue // perceptually dissimilar — keep both, no proposal
+		}
 		markWinner(candidates)
 
 		out = append(out, proposals.Proposal{
@@ -577,9 +690,15 @@ func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Prop
 		return int64(winner.TrackedID), nil
 	}
 
+	// Persist the winner's phash + file identity so the next Scan finds it
+	// cached and skips re-decoding this file. winner.PHash was computed at Scan
+	// time (attachPHashes) and rode through candidates_json; a stat failure
+	// just leaves the identity empty, self-invalidating on the next Scan.
+	winnerSize, winnerMTime, _ := fileIdentity(winner.Path)
 	item, err := libStore.Upsert(ctx, library.Item{
 		Mode: mode.Movies, TMDBID: p.TMDBID, Title: p.Title,
 		FilePath: winner.Path, RootFolderPath: p.RootFolderPath,
+		PHash: winner.PHash, PHashFileSize: winnerSize, PHashFileMTime: winnerMTime,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("registering surviving copy %q: %w", p.Title, err)

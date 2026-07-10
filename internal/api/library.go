@@ -9,6 +9,7 @@ import (
 
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/naming"
+	"github.com/curtiswtaylorjr/sakms/internal/phash"
 	"github.com/curtiswtaylorjr/sakms/internal/quality"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
@@ -238,6 +239,80 @@ func putNamingPresetHandler(settingsStore *settings.Store) http.HandlerFunc {
 			return
 		}
 		if err := settingsStore.Set(r.Context(), namingPresetKey(m), req.Preset); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// phashThresholdKey is per-mode — the Dedup perceptual-hash similarity cut is
+// configured independently per mode (only Movies reads it today, but the
+// endpoint is per-mode-generic like naming-preset). Stored as the string form
+// of an int (per-frame average Hamming bits).
+func phashThresholdKey(m mode.Mode) string { return string(m) + "_phash_dedup_threshold" }
+
+// resolvePHashThreshold loads m's Dedup phash similarity threshold, defaulting
+// to phash.DefaultThreshold when unset — the same fallback
+// getPHashThresholdHandler reports, reused by dedup.go's Scan handler so
+// ScanLibrary gates on whatever is configured. A stored value is always a
+// validated int (putPHashThresholdHandler rejects otherwise), so a parse
+// failure falls back to the default rather than failing a Scan.
+func resolvePHashThreshold(ctx context.Context, settingsStore *settings.Store, m mode.Mode) (int, error) {
+	raw, err := settingsStore.Get(ctx, phashThresholdKey(m))
+	if err != nil && !errors.Is(err, settings.ErrNotFound) {
+		return 0, err
+	}
+	if raw == "" {
+		return phash.DefaultThreshold, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return phash.DefaultThreshold, nil
+	}
+	return v, nil
+}
+
+type phashThresholdResponse struct {
+	Threshold int `json:"threshold"`
+}
+
+type phashThresholdRequest struct {
+	Threshold int `json:"threshold"`
+}
+
+// getPHashThresholdHandler returns {mode}'s Dedup perceptual-hash similarity
+// threshold (per-frame average Hamming bits) — defaults to
+// phash.DefaultThreshold when unset.
+func getPHashThresholdHandler(settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		threshold, err := resolvePHashThreshold(r.Context(), settingsStore, mode.Mode(r.PathValue("mode")))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(phashThresholdResponse{Threshold: threshold})
+	}
+}
+
+// putPHashThresholdHandler stores {mode}'s Dedup perceptual-hash similarity
+// threshold. Rejects a value outside 0–64 (a per-frame Hamming distance over a
+// 64-bit-per-frame hash), mirroring putNamingPresetHandler's invalid-input
+// rejection.
+func putPHashThresholdHandler(settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m := mode.Mode(r.PathValue("mode"))
+		var req phashThresholdRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Threshold < 0 || req.Threshold > 64 {
+			http.Error(w, "threshold must be between 0 and 64", http.StatusBadRequest)
+			return
+		}
+		if err := settingsStore.Set(r.Context(), phashThresholdKey(m), strconv.Itoa(req.Threshold)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
