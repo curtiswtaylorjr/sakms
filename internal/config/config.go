@@ -42,13 +42,20 @@ type Config struct {
 	// "not set, fall through to auto-generation" sentinel, not a value
 	// that needs a fallback.
 	APIKey string
+	// BundledOllamaModel, if set, names the Ollama model the opt-in
+	// `ai`-variant image (see Dockerfile) pulls and serves in-container.
+	// Same empty-is-the-sentinel reasoning as APIKey: blank means "not the
+	// ai-variant image, don't seed anything" — the default (non-ai) image
+	// never sets this env var, so existing installs are unaffected.
+	BundledOllamaModel string
 }
 
 // FromEnv reads Config from the environment, applying defaults for anything unset.
 func FromEnv() Config {
 	return Config{
-		Addr:    cmp.Or(os.Getenv("SAKMS_ADDR"), ":8080"),
-		DataDir: cmp.Or(os.Getenv("SAKMS_DATA_DIR"), "./data"),
-		APIKey:  os.Getenv("SAKMS_API_KEY"),
+		Addr:               cmp.Or(os.Getenv("SAKMS_ADDR"), ":8080"),
+		DataDir:            cmp.Or(os.Getenv("SAKMS_DATA_DIR"), "./data"),
+		APIKey:             os.Getenv("SAKMS_API_KEY"),
+		BundledOllamaModel: os.Getenv("SAKMS_BUNDLED_OLLAMA_MODEL"),
 	}
 }

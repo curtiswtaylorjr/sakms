@@ -268,6 +268,7 @@ Configuration is via environment variables for now:
 | `SAKMS_ADDR`      | `:8080`   | HTTP listen address               |
 | `SAKMS_DATA_DIR`  | `./data`  | Where `sakms.db` and `secret.key` live — back both up together, or a backup of one without the other is useless |
 | `SAKMS_API_KEY`   | (unset)   | Optional. If set, its value is the API key external clients send as the `X-Api-Key` header — hashed at boot, stable across restarts/redeploys, never persisted. If unset, SAK auto-generates one on first boot (logged once) and stores its hash. Note: unsetting this after it was once set falls back to whatever key was last persisted in Settings (e.g. an earlier auto-generated one), not to "no key" — only relevant on a deployment with a persistent database. |
+| `SAKMS_BUNDLED_OLLAMA_MODEL` | (unset) | Only meaningful on the `ai` Docker build target (see below) — every other build ignores it. Names the Ollama model to auto-pull and wire up as the default AI backend. |
 
 Every `/api/...` route accepts either the session cookie a browser carries
 after login, or an `X-Api-Key: <key>` header — useful for scripts and other
@@ -311,6 +312,30 @@ automatically on failure instead of requiring a second command:
 ./scripts/docker-dev.sh shell    # a shell in the built image, server not started
 ./scripts/docker-dev.sh clean    # stop the container and wipe its dev data dir
 ```
+
+#### Opt-in: bundled Ollama (`ai` build target)
+
+`docker build --target ai .` builds a second image that bundles Ollama as a
+second process in the same container, alongside sakms — a working AI
+backend (Adult kids-classify, Movies/Series garbled-title-guess fallback)
+with no external setup and no Settings-page steps. This is **not** the
+default image: plain `docker build .` is unaffected and stays exactly as
+described above.
+
+On first start, the container pulls `SAKMS_BUNDLED_OLLAMA_MODEL` (default
+`qwen2.5:1.5b`, ~1GB) into its own `/ollama-models` volume in the
+background — sakms itself starts immediately and doesn't wait on the pull,
+so a slow first pull never blocks the container from coming up. The `ollama`
+connection and `ai_model` setting are auto-seeded to point at it (only if
+you haven't already configured something else — a deliberate choice is
+never overwritten). Requires an init process so the backgrounded
+`ollama serve` gets reaped correctly:
+
+```sh
+docker run --init -v host/path:/data -v host/ollama-models:/ollama-models -p 8080:8080 sakms:ai
+```
+
+`./scripts/docker-dev.sh` supports this target too: `DOCKER_TARGET=ai ./scripts/docker-dev.sh` (its `up`/`restart` already pass `--init` unconditionally — harmless for the default image, required for `ai`).
 
 Env overrides: `IMAGE_TAG`, `CONTAINER_NAME`, `HOST_PORT`, `DATA_DIR`,
 `HEALTH_TIMEOUT` — see the script's `--help`.

@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
+	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/phash"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
@@ -93,6 +96,19 @@ func run() error {
 		return err
 	} else if raw != "" {
 		log.Printf("API key generated (shown once, store it now): %s", raw)
+	}
+
+	// Opt-in ai-variant image only (see Dockerfile's "ai" build stage and
+	// docker-entrypoint-ai.sh) — SAKMS_BUNDLED_OLLAMA_MODEL is blank on the
+	// default image, so this is a no-op for every existing install. Same
+	// one-shot-boot-step reasoning as the API key block above: not fatal,
+	// since a seeding failure just means the operator falls back to
+	// configuring the ollama connection/model by hand in Settings, same as
+	// any other install.
+	if cfg.BundledOllamaModel != "" {
+		if err := seedBundledOllamaDefaults(context.Background(), connStore, settingsStore, cfg.BundledOllamaModel); err != nil {
+			log.Printf("bundled ollama: seeding defaults: %v", err)
+		}
 	}
 
 	// Every review-workflow route requires a valid session OR a valid
@@ -175,6 +191,33 @@ func run() error {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// seedBundledOllamaDefaults gives the opt-in ai-variant image (see
+// Dockerfile's "ai" build stage) a working AI backend with zero Settings-page
+// steps: an "ollama" connection pointed at the in-container server, and the
+// model to request. Only fills in what's genuinely unset — a connection or
+// model an operator already configured (even to point somewhere else
+// entirely, e.g. an external Ollama, OpenAI, or a different local model) is
+// never overwritten, so this only ever helps a blank install and can't fight
+// a deliberate choice made later.
+func seedBundledOllamaDefaults(ctx context.Context, connStore *connections.Store, settingsStore *settings.Store, model string) error {
+	if _, err := connStore.Get(ctx, "ollama"); errors.Is(err, connections.ErrNotFound) {
+		if err := connStore.Upsert(ctx, "ollama", "http://localhost:11434", ""); err != nil {
+			return fmt.Errorf("seeding ollama connection: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("checking existing ollama connection: %w", err)
+	}
+
+	if _, err := settingsStore.Get(ctx, mode.AIModelKey); errors.Is(err, settings.ErrNotFound) {
+		if err := settingsStore.Set(ctx, mode.AIModelKey, model); err != nil {
+			return fmt.Errorf("seeding ai_model setting: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("checking existing ai_model setting: %w", err)
 	}
 	return nil
 }

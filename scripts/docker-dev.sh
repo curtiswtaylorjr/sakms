@@ -16,6 +16,9 @@ HOST_PORT="${HOST_PORT:-8080}"
 DATA_DIR="${DATA_DIR:-$(pwd)/.dockerdata}"
 HEALTH_URL="http://localhost:${HOST_PORT}/healthz"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-30}"
+# Empty = the Dockerfile's default last stage ("runtime"). Set to "ai" to
+# iterate on the opt-in Ollama-bundled variant instead (see Dockerfile).
+DOCKER_TARGET="${DOCKER_TARGET:-}"
 
 export DOCKER_BUILDKIT=1
 
@@ -33,13 +36,17 @@ Commands:
   clean     Stop the container and wipe ${DATA_DIR} for a fresh-install test.
   status    Show whether the container is running and its health check result.
 
-Env overrides: IMAGE_TAG, CONTAINER_NAME, HOST_PORT, DATA_DIR, HEALTH_TIMEOUT
+Env overrides: IMAGE_TAG, CONTAINER_NAME, HOST_PORT, DATA_DIR, HEALTH_TIMEOUT, DOCKER_TARGET
 EOF
 }
 
 build() {
-  echo "==> building ${IMAGE_TAG}"
-  docker build -t "${IMAGE_TAG}" .
+  local target_args=()
+  if [[ -n "${DOCKER_TARGET}" ]]; then
+    target_args=(--target "${DOCKER_TARGET}")
+  fi
+  echo "==> building ${IMAGE_TAG}${DOCKER_TARGET:+ (target: ${DOCKER_TARGET})}"
+  docker build "${target_args[@]}" -t "${IMAGE_TAG}" .
 }
 
 stop() {
@@ -71,7 +78,10 @@ up() {
   stop
   mkdir -p "${DATA_DIR}"
   echo "==> starting ${CONTAINER_NAME} on port ${HOST_PORT}, data dir ${DATA_DIR}"
+  # --init: no-op for the default image, required for the "ai" target so its
+  # backgrounded `ollama serve` process gets reaped (see docker-entrypoint-ai.sh).
   docker run -d \
+    --init \
     --name "${CONTAINER_NAME}" \
     -p "${HOST_PORT}:8080" \
     -v "${DATA_DIR}:/data" \

@@ -1818,3 +1818,91 @@ Verified via `gofmt -l` (clean), `go build ./...` / `go vet ./...` (clean),
 full `go test ./...` (all green), and `node --check` on the extracted
 `<script>` block (frontend syntax valid) — both before and after the
 reviewer-prompted fixes.
+
+## 2026-07-11 — Opt-in Ollama-bundled Docker image (`ai` build target)
+
+Added a second, explicitly opt-in Dockerfile build target that bundles
+Ollama as a second in-container process alongside sakms, so an operator gets
+AI-assisted features (Adult kids-classify, Movies/Series garbled-title-guess
+fallback) working out of the box with zero external setup and zero
+Settings-page steps. **Not the default image** — `docker build .` with no
+`--target` is unchanged, byte-identical to before this entry; the new
+behavior only exists under `docker build --target ai .`. Chosen over
+bundling into the one default image everyone pulls, since the AI path is a
+fallback for two features, not core function, and forcing the size/pull cost
+onto every install (including anyone already running their own Ollama
+elsewhere) was the wrong default — confirmed real: measured `sakms:ai` at
+**4.74GB** built vs. the default's **781MB** (Ollama's official install
+bundles GPU/Vulkan support libraries even on this CPU-only target; no way to
+trim that without hand-unpacking its release tarball, judged not worth the
+maintenance fragility for a homelab fallback path).
+
+Confirmed before building anything: `internal/identify.AIClient`
+(`ChatJSON(ctx, prompt string)`) and `internal/ollama`'s wire format
+(`chatMessage{Role, Content string}`) are structurally text-only — no image
+field anywhere in the request path, and `classify.WithAI` (kids-classify)
+sends title+overview text, not a poster/thumbnail. `qwen2.5vl:7b` shows up
+in a couple of comments only as the author's own real-world example model
+choice, not a functional requirement — so a plain (non-vision) small Qwen
+model is architecturally correct here, not a downgrade.
+
+**Design constraint that shaped the whole thing:** server1's
+`sakms-auto-update.py` (`wipe_data()`) `rm -rf`s every entry under
+`SAKMS_DATA_DIR` on every deploy — a pre-alpha, deliberate, temporary policy
+(see that script's own header). A model cached anywhere under `/data` would
+therefore re-download on every push-triggered deploy. `OLLAMA_MODELS` is set
+to its own `/ollama-models` volume instead, entirely outside `/data` —
+verified by wiping `/data` inside a running test container and confirming
+`ollama list` still showed the model afterward.
+
+**What shipped:**
+- `Dockerfile`: restructured into a shared `base` stage (unchanged content
+  from before), an `ai` stage (installs Ollama's official prebuilt binary —
+  a separate OS process, doesn't touch sakms's own `CGO_ENABLED=0` Go
+  build), and `runtime` (today's lean default, kept as the file's last
+  stage so plain `docker build .` still resolves to it). `ai` needs
+  `zstd` at install time (Ollama's install script requires it to extract
+  its tarball) — installed and purged in the same `apt-get` layer as
+  `curl`, same pattern the layer already used.
+- `docker-entrypoint-ai.sh`: same PUID/PGID + ownership handling as the
+  existing entrypoint, plus starting `ollama serve` in the background,
+  polling briefly for it to come up, then pulling
+  `SAKMS_BUNDLED_OLLAMA_MODEL` (default `qwen2.5:1.5b`, ~1GB — chosen over
+  smaller Qwen sizes down to 0.5b because the garbled-filename title-guess
+  task leans on real title recognition, not just classification, and the
+  smaller sizes hallucinate titles noticeably more) in the background too,
+  **never blocking** sakms's own startup on the pull. This is load-bearing,
+  not a nicety: `sakms-auto-update.py`'s health check only allows ~30s (10
+  retries × 3s) before rolling a deploy back, and a first-ever pull can take
+  minutes. Verified live — `/healthz` returned 200 immediately while the
+  ~986MB pull was still in progress in the background. Requires the
+  container to run with an init (`docker run --init` / compose's
+  `init: true`) so the backgrounded `ollama serve` process gets reaped
+  correctly once the script `exec`s into sakms as PID 1.
+- `internal/config`: new `BundledOllamaModel` field
+  (`SAKMS_BUNDLED_OLLAMA_MODEL` env var), blank on the default image — same
+  empty-is-the-sentinel convention as `APIKey`.
+- `cmd/sakms/main.go`: `seedBundledOllamaDefaults` — on boot, if
+  `BundledOllamaModel` is set, seeds the `ollama` connection to
+  `http://localhost:11434` and the `ai_model` setting to the bundled model,
+  but **only what's genuinely unset** — a connection or model an operator
+  already configured (even pointed elsewhere) is never overwritten. No
+  changes needed to `ai_provider` selection itself: `mode.buildAIClient`
+  already defaults an unset provider to `ollama`.
+
+Verified end-to-end against a live build on wade-pc (not just unit tests):
+built both targets, confirmed the default target's image hash is unchanged
+by the new `ai` stage's existence, ran the `ai` image, confirmed the
+connection/model auto-seeded via the real HTTP API, waited for the
+background pull to finish, and ran a real `ollama run qwen2.5:1.5b` inference
+call end-to-end (responded "OK" to a one-word prompt) — not just confirming
+the model downloaded. New tests: `cmd/sakms/main_test.go`
+(`seedBundledOllamaDefaults` — blank install seeds both, pre-existing
+connection survives untouched, pre-existing model survives untouched).
+`go build ./...`, `go vet ./...`, full `go test ./...` all clean; `gofmt -l`
+shows only pre-existing unrelated files, none touched by this change.
+
+Server1 deployment (updating `compose.yml` to add the `ai` target + a
+dedicated model volume) deliberately not done as part of this entry — the
+capability was built and verified locally; deploying it is a separate,
+explicit decision.
