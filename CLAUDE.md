@@ -82,10 +82,16 @@ above, so don't drop them for convenience:
   key file, not an OS keychain — the primary deployment target is a
   headless container with no keychain to use).
 - **Single-operator auth**, not multi-tenant. No permissions system, no
-  per-user roles — one login gates the whole app. The `X-Api-Key` header
-  (additive to the session cookie, for out-of-process clients) doesn't
-  change this: a key inherits the one operator's full access, it is not a
-  second user or a permissions surface.
+  per-user roles — one login gates the whole app, across all four
+  supported auth strategies (`password`, `forward`, `authentik`, `none`).
+  A forward-auth request's identity header value (e.g. `Remote-User`) and
+  an Authentik bearer token's `sub` claim are never treated as a second
+  identity to authorize against — they still map to the SAME one
+  operator; no user table, no roles, no permissions surface is
+  introduced by any of the four modes. The `X-Api-Key` header (additive
+  to whichever mode is active, for out-of-process clients) doesn't change
+  this either: a key inherits the one operator's full access in every
+  mode, it is not a second user or a permissions surface.
 - **Honesty about unverified assumptions.** When a client's response shape
   is modeled from documentation but not confirmed against a live instance,
   say so explicitly in the package doc — don't present a guess as fact.

@@ -450,3 +450,56 @@ func TestAuthLogout_ClearsCookie(t *testing.T) {
 		t.Fatalf("expected a cookie-clearing response, got %+v", resp.Cookies())
 	}
 }
+
+// TestSetup_NoneMode_SecondCallRejected_409 closes an AC8 gap found during
+// slice 5's final coverage audit: TestConfigured_TrueAfterModeSetOnly
+// (internal/auth) proves Configured() flips true at the store level once
+// auth_mode is set with no password, and TestAuthSetup_RejectsSecondCall
+// proves the setup gate doesn't reappear for the PASSWORD path — but
+// nothing exercised the full HTTP round trip for a non-password first-run
+// mode: does a REAL second POST to /api/auth/setup actually 409 after a
+// none-mode setup, i.e. does authSetupHandler's already-configured guard
+// really fire off Configured()'s OR-based redefinition for a mode that
+// never wrote auth_username? This is the concrete, end-to-end version of
+// AC8 ("Configured() returns true after a non-password mode is chosen at
+// first run — the setup gate does not reappear").
+func TestSetup_NoneMode_SecondCallRejected_409(t *testing.T) {
+	authStore, tokenEnc := testAuthStore(t)
+	srv := httptest.NewServer(NewAuthMux(authStore, tokenEnc))
+	defer srv.Close()
+
+	body, _ := json.Marshal(authCredentialsRequest{Mode: "none", AcknowledgeInsecure: true})
+	resp, err := http.Post(srv.URL+"/api/auth/setup", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 for the first none-mode setup call, got %d", resp.StatusCode)
+	}
+
+	takeoverBody, _ := json.Marshal(authCredentialsRequest{Username: "attacker", Password: "attacker-password"})
+	resp2, err := http.Post(srv.URL+"/api/auth/setup", "application/json", bytes.NewReader(takeoverBody))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 refusing a second setup call after a none-mode first run, got %d", resp2.StatusCode)
+	}
+
+	// The rejected second call must not have altered the active mode.
+	statusResp, err := http.Get(srv.URL + "/api/auth/status")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer statusResp.Body.Close()
+	var status authStatusResponse
+	json.NewDecoder(statusResp.Body).Decode(&status)
+	if !status.Configured {
+		t.Error("expected the instance to still report configured:true")
+	}
+	if status.Mode != auth.ModeNone {
+		t.Errorf("expected mode to remain %q after the rejected takeover attempt, got %q", auth.ModeNone, status.Mode)
+	}
+}

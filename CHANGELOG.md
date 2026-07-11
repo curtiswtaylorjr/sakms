@@ -1211,3 +1211,149 @@ disclosed in the entry above, but worth restating plainly: prefer setting
 relying on the auto-generate-then-rotate path.
 
 Verified via `go build/vet/test -race` across the whole module (all green).
+
+## 2026-07-11 — Four-mode auth strategy switch (password/forward/authentik/none)
+
+A human-directed, net-new feature — not a pre-existing item anywhere in
+`docs/ROADMAP.md`'s backlog (same framing as the PUID/PGID entry above:
+described here on its own terms, not as a checkbox off an existing list).
+Auth is now chosen at first-run and switchable later from Settings,
+across four strategies, all built on ONE mode-aware `Middleware` that
+reads `auth_mode` per request and fails closed on any read error:
+
+1. **`password`** — today's session-cookie login, unchanged behavior for
+   every existing install (regression-verified).
+2. **`forward`** (new) — trusts a reverse-proxy-set identity header,
+   gated by a shared secret header the proxy must also present
+   (`subtle.ConstantTimeCompare` against a stored hash — never a plain
+   `==`). The identity header's value is cosmetic (logging only); the
+   secret header is the entire authorization decision.
+3. **`authentik`** (new) — validates a presented `Authorization: Bearer`
+   token via RFC 7662 introspection against an Authentik OAuth2 provider.
+   SAK is an API-client bearer-token *validator* here, not an OIDC
+   client — no redirect flow, no JWKS, no browser-mediated login. Any
+   introspection error, timeout, or `active:false` fails closed to 401.
+4. **`none`** (new) — no auth at all, gated by a mandatory
+   `acknowledgeInsecure:true` flag at both the point it's chosen (setup)
+   and the point it's switched into later (`PUT /api/auth/mode`), plus a
+   persistent warning banner in the UI while active.
+
+**The universal `X-Api-Key` decision — a deliberate, informed reversal of
+the original Analyst spec, not an oversight.** The spec's default
+recommendation was to scope `X-Api-Key` to `password` mode only, so that
+`forward` and `authentik` modes could offer a clean "only reachable
+through the proxy" / "only reachable with a valid bearer token" trust
+boundary. The operator was shown this tradeoff explicitly and chose the
+opposite: `X-Api-Key` is accepted in **all four modes**, checked in
+`Middleware`'s own top-level body (not inside any per-mode helper), for
+uniform out-of-process/script access regardless of which mode is active.
+This is a real, accepted narrowing of `forward`/`authentik` mode's trust
+boundary — a caller who obtains the API key can reach every protected
+route without ever touching the proxy or holding a real Authentik token
+— documented here plainly rather than left as a silent gap. The
+`SAKMS_API_KEY` environment-variable key reconciles the same way: it now
+works in every mode too (reversing spec Edge Case #6, which assumed the
+old mode-1-only key scoping), verified with a real cross-mode Middleware
+test (`TestMiddleware_EnvAPIKeyUniversal_AcrossModes`, slice 5) that
+exercises the env-supplied key against both `none` and `forward` as the
+active mode, not just asserted in prose.
+
+**The `authentik` mode UI-scope correction — a UI-surface decision, not a
+capability reduction.** The first-run/create-user screen offers only
+THREE mode options (`password`/`forward`/`none`); `authentik` was
+deliberately dropped from that specific screen by a later human decision
+recorded mid-slice-4, after the user's initial mental model for
+"Authentik mode" (which turned out to already be `forward` — Authentik
+doing its own login+2FA upstream at the proxy) was clarified against what
+`authentik` mode actually is (SAK as its own independent OAuth2 client
+introspecting a bearer token an API/script caller already holds). Once
+clarified, the user confirmed they still want `authentik` mode exactly as
+built — they just don't want it cluttering a browser setup wizard whose
+natural audience (a script/API client) never uses that screen anyway.
+`authentik` remains a fully-built, fully-tested backend mode from slices
+1-3 with zero scope reduction: reachable via the Settings panel's
+four-way mode selector (post-setup, once some initial credential already
+exists to authenticate the switch), or via a direct `POST /api/auth/setup`
+call with `mode:"authentik"` at first run, which the backend still
+accepts unchanged — only the setup screen's `<select>` narrows.
+
+**The status-endpoint amplification fix — a deliberate, scoped narrowing,
+not a silent deviation from the spec's AC7.** `/api/auth/status`'s
+`authenticated` field means a REAL, per-request check for `password`
+(cookie), `forward` (the same constant-time secret compare `Middleware`
+itself uses — cheap, purely local, no amplification concern), and `none`
+(always true, nothing to check). For `authentik` specifically, it is
+**presence-only**: `true` if a non-empty `Authorization: Bearer <token>`
+header is present on the status request, without ever calling the real
+RFC 7662 introspection endpoint. This is a deliberate narrowing to avoid
+letting an unauthenticated caller trigger unbounded outbound
+introspection calls against the operator's own Authentik instance simply
+by hitting the public status endpoint with an `Authorization: Bearer
+<anything>` header once per request — a real amplification vector an
+attacker fully controls the rate of. Real enforcement is unchanged and
+happens on every actual protected API call via `Middleware`, which does
+call the real, fully-enforced `AuthentikAuth` (with real introspection)
+per request as designed; a present-but-invalid token surfaces as a normal
+401 on the app's first real API call, no new error-handling path needed.
+Proven, not just asserted: `TestStatus_AuthentikMode_PresenceOnly_
+NeverIntrospects` injects a fake introspection server that fails the test
+outright if it receives any request at all.
+
+**The `Configured()` redefinition — an instance-takeover guard, not just
+UX.** `Configured` used to key off `auth_username` presence alone.
+Redefining it as "`auth_mode` is set" ALONE (the naive reading of the
+spec) would have been a real security regression: every pre-existing
+install has `auth_username` set but no `auth_mode` row (that setting
+didn't exist before this feature), so a naive redefinition would report
+`Configured=false` for every existing install — re-showing "Create your
+login" on every boot AND, critically, making the setup handler's 409
+already-configured guard stop firing, opening a window for an
+unauthenticated visitor to re-POST `/api/auth/setup` and overwrite the
+real operator's credentials. The definition actually shipped is the
+migration-safe OR: `Configured = auth_mode is set OR auth_username is
+set`. A brand-new install is ungated until either is written; an existing
+password-only install is (and stays) gated, with its effective mode
+correctly defaulting to `password`; a first run that picks
+`forward`/`authentik`/`none` gates immediately once `auth_mode` is
+written. `TestConfigured_ExistingUsernameOnlyInstall_StillTrue` is the
+regression test for this exact scenario.
+
+**The Authentik introspection endpoint's verification status — stated
+plainly, per this project's established honesty convention (see the
+Jellyfin client's own package-doc caveat earlier this session).** The
+introspection path (`/application/o/introspect/`) and the RFC 7662
+form-body client-auth method were confirmed against Authentik's official
+OAuth2-provider documentation (fetched 2026-07-10) — they are **NOT**
+verified against a live Authentik instance. A wrong path or auth method
+fails closed (the introspection request errors, the caller denies), so
+this is a correctness-of-claim issue, not a live security gap — but it is
+an unverified assumption and is documented as one in
+`internal/authentik`'s package doc, not presented as confirmed fact.
+
+Backend: `internal/auth/{auth,session,forward,authentik}.go`,
+`internal/authentik/client.go` (new house HTTP client, mirrors
+`internal/jellyfin`'s shape), `internal/api/{auth,authmode,forward,
+authentik}.go`, `cmd/sakms/main.go` wiring (the single additive
+`auth.New(settingsStore, secretStore, outboundHTTP)` signature change
+slice 3 needed for Authentik's introspection client + decryptor, `auth.
+Middleware`'s own signature is unchanged). Frontend:
+`internal/web/static/index.html` (mode selector at setup, all-four-mode
+Settings panel, mode-relative `boot()` gating, persistent `none`-mode
+banner). Full design/decision detail, including the spec deviations
+above, lives in `.omc/plans/autopilot-impl-auth-mode-switch.md`.
+
+`go build/vet/test -race` across the whole module: all green. Combined
+with slice 4's manual browser verification, every item in the spec's
+nine "Missing Acceptance Criteria" and seven "Edge Cases" now has
+coverage per the plan's §5.4 matrix — with two honest exceptions, stated
+plainly rather than folded into a blanket "all covered" claim: Edge Case
+#5 (SPA re-`boot()` on a mid-session mode switch) is UI behavior with no
+Go test harness for `index.html` in this repo, verified manually in
+slice 4, not by this slice's automated suite; and AC9's "secrets never
+appear in logs" half is enforced by code review + the reveal-once/
+not-in-response tests (secrets are never placed on a code path that
+logs them), not by a test that scans log output for absence — the same
+scope the plan's own G6 row describes. JWKS-local token validation,
+considered for `authentik` mode,
+was explicitly deferred (spec §4) and is not built; noted in
+`docs/ROADMAP.md`.

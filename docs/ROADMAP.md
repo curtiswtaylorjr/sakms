@@ -151,6 +151,26 @@ slice. Spec at `.omc/autopilot/spec-player-rescan-trigger.md`.
 
 ## Recently shipped (outside this backlog)
 
+### Four-mode auth strategy switch — shipped 2026-07-11
+A human-directed addition, not a pre-existing item anywhere in this
+backlog. Auth is now chosen at first-run and switchable later from
+Settings, across four strategies: `password` (today's session-cookie
+login, unchanged), `forward` (trust a reverse-proxy identity header,
+gated by a constant-time-compared shared secret header), `authentik`
+(RFC 7662 bearer-token introspection against an Authentik OAuth2
+provider — API/script-client use, not a browser OIDC flow), and `none`
+(no auth, gated by a mandatory acknowledgment both at setup and at any
+later switch, plus a persistent UI warning banner). All four share one
+mode-aware `Middleware` that fails closed on any mode-read error. The
+existing `X-Api-Key` header (see the entry below) now works in all four
+modes by deliberate operator choice, not just `password` — a real,
+accepted narrowing of `forward`/`authentik` mode's trust boundary. JWKS-
+based local token validation for `authentik` mode was considered and
+explicitly deferred, not built. See `CHANGELOG.md`'s entry of the same
+date for the full design/decision/honesty-framing detail, and
+`.omc/plans/autopilot-impl-auth-mode-switch.md` for the implementation
+plan.
+
 ### API-key auth (X-Api-Key) — shipped 2026-07-10
 A human-directed addition, not a pre-existing item anywhere in this
 backlog. Any `/api/...` route now accepts either the session cookie or an
