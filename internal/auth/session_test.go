@@ -332,3 +332,199 @@ func TestMiddleware_StoreReadError_500(t *testing.T) {
 		t.Error("inner handler must NEVER run when the store errors — that would be a fail-open bug")
 	}
 }
+
+// --- Mode-aware dispatch (slice 1) ---
+
+// TestMiddleware_ModeReadError_500 covers G1: a store error while reading
+// auth_mode itself (not the key lookup) must fail closed, before any
+// mode-specific or key logic ever runs.
+func TestMiddleware_ModeReadError_500(t *testing.T) {
+	enc := testEncryptor(t)
+	store, sqlDB := newTestStoreWithDB(t)
+	if _, err := sqlDB.Exec(`DROP TABLE settings`); err != nil {
+		t.Fatalf("dropping settings table: %v", err)
+	}
+
+	srv, called := middlewareTestServer(t, enc, store)
+	// No cookie, no key at all — the mode read itself must be what fails,
+	// not a fallthrough to "no credentials presented".
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (fail closed on auth_mode read error), got %d", resp.StatusCode)
+	}
+	if *called {
+		t.Error("inner handler must NEVER run when the mode read errors")
+	}
+}
+
+// TestMiddleware_NoneMode_AllPass asserts that once auth_mode is "none",
+// every request passes through with no credential at all.
+func TestMiddleware_NoneMode_AllPass(t *testing.T) {
+	enc := testEncryptor(t)
+	store := newTestStore(t)
+	if err := store.SetAuthMode(context.Background(), ModeNone); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	srv, called := middlewareTestServer(t, enc, store)
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 in none mode with no credential, got %d", resp.StatusCode)
+	}
+	if !*called {
+		t.Error("expected the inner handler to run in none mode")
+	}
+}
+
+// TestMiddleware_APIKeyWorksRegardlessOfMode proves the universal
+// X-Api-Key hoist (§0.4/Human Decision #2): a valid key passes even when
+// auth_mode is something other than "password". Uses a stubbed/unknown
+// mode value (which the slice-1 dispatch's default case fails closed on
+// for the mode-specific branch) to prove the key check truly happens
+// independent of the mode switch, not just for the two modes slice 1
+// implements end-to-end.
+func TestMiddleware_APIKeyWorksRegardlessOfMode(t *testing.T) {
+	enc := testEncryptor(t)
+	store := newTestStore(t)
+	ctx := context.Background()
+	raw, err := store.EnsureAPIKey(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, mode := range []string{ModeNone, "some-future-mode-not-yet-implemented"} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			if err := store.SetAuthMode(ctx, mode); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			srv, called := middlewareTestServer(t, enc, store)
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+			req.Header.Set("X-Api-Key", raw)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("expected a valid X-Api-Key to pass in mode %q, got %d", mode, resp.StatusCode)
+			}
+			if !*called {
+				t.Error("expected the inner handler to run for a valid key")
+			}
+		})
+	}
+}
+
+// TestMiddleware_PasswordMode_CookieOrKey is the regression check for
+// slice 1's mode-aware rewrite: with auth_mode explicitly "password"
+// (rather than relying on the unset default), the cookie-or-key behavior
+// from before this slice must be unchanged.
+func TestMiddleware_PasswordMode_CookieOrKey(t *testing.T) {
+	enc := testEncryptor(t)
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetAuthMode(ctx, ModePassword); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	t.Run("cookie passes", func(t *testing.T) {
+		token, err := IssueToken(enc)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		srv, called := middlewareTestServer(t, enc, store)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+		req.AddCookie(&http.Cookie{Name: CookieName, Value: token})
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		if !*called {
+			t.Error("expected the inner handler to run for a valid cookie")
+		}
+	})
+
+	t.Run("valid key passes", func(t *testing.T) {
+		raw, err := store.EnsureAPIKey(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		srv, called := middlewareTestServer(t, enc, store)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+		req.Header.Set("X-Api-Key", raw)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		if !*called {
+			t.Error("expected the inner handler to run for a valid key")
+		}
+	})
+
+	t.Run("neither passes", func(t *testing.T) {
+		srv, called := middlewareTestServer(t, enc, store)
+		resp, err := http.Get(srv.URL + "/")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", resp.StatusCode)
+		}
+		if *called {
+			t.Error("inner handler must not run with neither credential")
+		}
+	})
+}
+
+// TestMiddleware_StaleCookieIgnoredOutsidePassword covers Edge Case #3: a
+// valid session cookie must never authenticate a request once the active
+// mode is not "password" — here, a valid cookie is set but the mode is
+// "none" (where it's simply moot, everything passes anyway) and a stubbed
+// non-password mode (where the cookie must be ignored and the request
+// rejected, since no mode-specific helper honors it and no key is
+// presented).
+func TestMiddleware_StaleCookieIgnoredOutsidePassword(t *testing.T) {
+	enc := testEncryptor(t)
+	store := newTestStore(t)
+	ctx := context.Background()
+	token, err := IssueToken(enc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := store.SetAuthMode(ctx, "some-future-mode-not-yet-implemented"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv, called := middlewareTestServer(t, enc, store)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: token})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected a stale cookie to be ignored outside password mode (401), got %d", resp.StatusCode)
+	}
+	if *called {
+		t.Error("inner handler must not run — a cookie must never authenticate a non-password mode")
+	}
+}

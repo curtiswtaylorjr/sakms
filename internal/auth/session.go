@@ -95,26 +95,54 @@ func Authenticated(enc TokenEncryptor, r *http.Request) bool {
 	return ValidateToken(enc, cookie.Value)
 }
 
-// Middleware gates every request to next behind either a valid session
-// cookie or a valid X-Api-Key header — meant to wrap the business-logic API
-// mux only; the auth endpoints themselves (setup/login/logout/status) live
-// on a separate, always-public mux that never passes through this (see
-// internal/api.NewAuthMux), so there's no exemption list to keep in sync
-// here.
+// Middleware gates every request to next according to the instance's
+// active auth mode (password/forward/authentik/none) — meant to wrap the
+// business-logic API mux only; the auth endpoints themselves (setup/login/
+// logout/status) live on a separate, always-public mux that never passes
+// through this (see internal/api.NewAuthMux), so there's no exemption list
+// to keep in sync here.
 //
-// Cookie is checked first via the unchanged Authenticated — Authenticated
-// itself is not modified, so authStatusHandler (internal/api/auth.go) stays
-// cookie-only, unaware the key path exists. Only if there's no valid cookie
-// does the X-Api-Key header get a look, verified via store.VerifyAPIKey.
+// Dispatch order (deliberate, do not reorder):
+//  1. Read the effective mode via store.AuthMode. Any error (not the
+//     unset→"password" default, a genuine store failure) fails CLOSED
+//     (500) before anything else runs — G1, "the store couldn't tell us"
+//     must never be treated as a passing default.
+//  2. "none" short-circuits here, before the key check below — so a
+//     key-store hiccup can never 500 an explicitly no-auth mode.
+//  3. The universal X-Api-Key header is checked next, INDEPENDENT of which
+//     mode is active (Human Decision #2: the key works in every mode, not
+//     just password) — finalAllow = keyOK || modeSpecificOK. This check
+//     lives here, in Middleware's own body, deliberately NOT inside any
+//     per-mode helper, so no future mode addition can accidentally scope it
+//     to one mode.
+//  4. Only if the key didn't pass does a mode-specific credential get
+//     checked (cookie for password, etc). The password branch is
+//     cookie-ONLY (passwordAuth) — the key is no longer localized to this
+//     branch, it already had its shot in step 3 — and a session cookie is
+//     honored ONLY in the password branch (Edge Case #3: a stale cookie
+//     must never authenticate a request once the active mode is
+//     forward/authentik/none).
 //
-// A store read error fails CLOSED (500), never falls through to allow —
-// "the store couldn't tell us" must never be treated as "the key is fine".
+// A mode-read or credential-check store error fails CLOSED (500), never
+// falls through to allow.
 func Middleware(enc TokenEncryptor, store *Store, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if Authenticated(enc, r) {
+		mode, err := store.AuthMode(r.Context())
+		if err != nil { // G1 fail-closed
+			http.Error(w, "authentication error", http.StatusInternalServerError)
+			return
+		}
+		// none short-circuits BEFORE the key check so a key-store hiccup
+		// can't 500 an explicitly no-auth mode. Represented here directly
+		// (no separate noneAuth function) so a reader sees the ordering
+		// guarantee in one place rather than hunting for it.
+		if mode == ModeNone {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// UNIVERSAL X-Api-Key credential, checked here in the top-level
+		// body, independent of the mode switch — Human Decision #2. Do NOT
+		// move this into any per-mode helper.
 		presented := strings.TrimSpace(r.Header.Get("X-Api-Key"))
 		if presented != "" {
 			ok, err := store.VerifyAPIKey(r.Context(), presented)
@@ -127,6 +155,37 @@ func Middleware(enc TokenEncryptor, store *Store, next http.Handler) http.Handle
 				return
 			}
 		}
+		// Mode-specific credential.
+		var allowed bool
+		switch mode {
+		case ModePassword:
+			allowed = passwordAuth(enc, r)
+		case ModeForward:
+			// slice 2 replaces this with: allowed, err = forwardAuth(store, r)
+			allowed = false
+		case ModeAuthentik:
+			// slice 3 replaces this with: allowed, err = authentikAuth(store, r)
+			allowed = false
+		default: // unknown/corrupt mode → fail closed
+			allowed = false
+		}
+		if err != nil {
+			http.Error(w, "authentication error", http.StatusInternalServerError)
+			return
+		}
+		if allowed {
+			next.ServeHTTP(w, r)
+			return
+		}
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 	})
+}
+
+// passwordAuth is the cookie-only check for password mode (Edge Case #3: a
+// session cookie is honored ONLY in this branch, never in forward/
+// authentik/none). The X-Api-Key path is deliberately NOT here — it is
+// universal and lives in Middleware's own body above, checked before this
+// helper ever runs.
+func passwordAuth(enc TokenEncryptor, r *http.Request) bool {
+	return Authenticated(enc, r)
 }

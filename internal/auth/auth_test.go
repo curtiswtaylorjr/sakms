@@ -104,6 +104,112 @@ func TestSetCredentials_RejectsBlankUsernameOrPassword(t *testing.T) {
 	}
 }
 
+// --- auth_mode: effective-mode getter + migration-safe Configured ---
+
+func TestAuthMode_UnsetDefaultsPassword(t *testing.T) {
+	s := newTestStore(t)
+	mode, err := s.AuthMode(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mode != ModePassword {
+		t.Errorf("expected AuthMode to default to %q on a fresh store, got %q", ModePassword, mode)
+	}
+}
+
+func TestAuthMode_ReturnsWhateverWasSet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SetAuthMode(ctx, ModeNone); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mode, err := s.AuthMode(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mode != ModeNone {
+		t.Errorf("expected AuthMode to return %q, got %q", ModeNone, mode)
+	}
+}
+
+func TestConfigured_TrueAfterModeSetOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SetAuthMode(ctx, ModeNone); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	configured, err := s.Configured(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !configured {
+		t.Error("expected Configured to be true once auth_mode is set, even with no auth_username")
+	}
+}
+
+// TestConfigured_ExistingUsernameOnlyInstall_StillTrue is the instance-
+// takeover regression test the plan (§0.1) specifically calls out: every
+// pre-existing install has auth_username set but no auth_mode row (that
+// setting didn't exist before this slice). If Configured were redefined as
+// "auth_mode is set" ALONE (instead of the OR with auth_username), this
+// install would report Configured=false — re-showing "Create your login"
+// and, worse, letting the setup handler's 409 guard stop firing so an
+// unauthenticated visitor could re-POST /api/auth/setup and overwrite the
+// owner's credentials. This test simulates that install shape directly
+// (SetCredentials only, auth_mode never written) and asserts Configured
+// still reports true, and AuthMode still reports "password".
+func TestConfigured_ExistingUsernameOnlyInstall_StillTrue(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SetCredentials(ctx, "wade", "the-real-password"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Deliberately never call SetAuthMode — this is the exact shape of an
+	// install that existed before auth_mode was introduced.
+
+	configured, err := s.Configured(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !configured {
+		t.Fatal("instance-takeover regression: an existing username-only install must still report Configured=true")
+	}
+
+	mode, err := s.AuthMode(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mode != ModePassword {
+		t.Errorf("expected an existing username-only install to default to %q, got %q", ModePassword, mode)
+	}
+}
+
+func TestPasswordConfigured_FalseBeforeSetCredentials(t *testing.T) {
+	s := newTestStore(t)
+	ok, err := s.PasswordConfigured(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected PasswordConfigured to be false on a fresh store")
+	}
+}
+
+func TestPasswordConfigured_TrueAfterSetCredentials(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SetCredentials(ctx, "wade", "the-real-password"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ok, err := s.PasswordConfigured(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected PasswordConfigured to be true after SetCredentials")
+	}
+}
+
 func TestSetCredentials_CanReplaceExistingLogin(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

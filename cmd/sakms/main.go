@@ -106,10 +106,22 @@ func run() error {
 	apikeyMux := api.NewAPIKeyMux(authStore)
 	protectedAPIKey := auth.Middleware(secretStore, authStore, apikeyMux)
 
+	// Auth-mode management (GET/PUT /api/auth/mode) mutates security state,
+	// so — unlike NewAuthMux's setup/login/logout/status routes — it must be
+	// session-protected. Wrapped in the same auth.Middleware as apikeyMux,
+	// so either a session cookie or the universal API key can reach it. Its
+	// exact-match pattern ("/api/auth/mode") beats NewAuthMux's subtree
+	// pattern ("/api/auth/") regardless of registration order (Go ServeMux
+	// picks the more specific match), so mode stays protected while
+	// setup/login/logout/status stay public.
+	authModeMux := api.NewAuthModeMux(authStore)
+	protectedAuthMode := auth.Middleware(secretStore, authStore, authModeMux)
+
 	top := http.NewServeMux()
 	top.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
+	top.Handle("/api/auth/mode", protectedAuthMode)
 	top.Handle("/api/auth/", api.NewAuthMux(authStore, secretStore))
 	top.Handle("/api/apikey", protectedAPIKey)  // exact match: GET status
 	top.Handle("/api/apikey/", protectedAPIKey) // subtree: POST .../regenerate
