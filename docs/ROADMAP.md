@@ -214,11 +214,6 @@ reversal).
   work is just turning a raw `WalkDir`/`os.Stat` error into a clear "root
   folder unreadable — check your mount" message in Rename/Dedup's Scan
   error path.
-- **Forward-auth header support** — trust a header (e.g. `Remote-User`)
-  set by a reverse proxy the user already runs (Authelia, Authentik,
-  Tailscale, etc.), instead of a full OIDC/SAML client. Keeps SAK
-  single-operator; the proxy owns real identity federation.
-
 ### Matching quality
 - **Confidence scoring** — today `items[0]` from TMDB/community-DB search
   is always taken unconditionally as the match; the only thing that routes
@@ -293,9 +288,10 @@ lowest priority.
   for phash frame-decoding — see the "phash-based Dedup" in-progress entry
   above, a different and more concrete driver.)
 - **Full OIDC/SAML client** — dropped in favor of forward-auth header
-  support (see Cheap wins above) — a proxy in front of SAK already solves
-  this for most people in this situation, and a full client is a bigger
-  lift in tension with SAK's single-operator design.
+  support (shipped 2026-07-11, see "Recently shipped" above, as part of
+  the four-mode auth strategy switch) — a proxy in front of SAK already
+  solves this for most people in this situation, and a full client is a
+  bigger lift in tension with SAK's single-operator design.
 - **GraphQL API** — dropped; the existing REST surface has no problem a
   GraphQL rewrite would actually solve.
 
