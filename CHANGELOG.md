@@ -1471,3 +1471,41 @@ interactive login fallback). Two changes close the gap:
    Detection is not a mitigation for the lockout; the break-glass key is. A
    spoofed identity header can at most flip a first-run dropdown default; no
    authorization path ever reads these headers.
+
+## 2026-07-11 — Fix: "Copy" button in first-run setup submitted the form and wiped the reveal panel
+
+**A real live incident, diagnosed via CDP against the deployed instance.** After the
+break-glass-key fix above shipped and was deployed, an operator reported the "Copy"
+button breaking the setup flow. Root cause: `internal/web/static/index.html`'s
+forward-mode reveal panel (the forward secret, the break-glass API key, their two
+"Copy" buttons, and the "I've copied it — continue" button) is appended as a child
+of the setup `<form>` element. None of those four buttons had an explicit `type`
+attribute — and a `<button>` with no `type` defaults to `type="submit"` **when it's
+a descendant of a `<form>`**, per the HTML spec. Clicking "Copy" therefore also
+submitted the form, re-running `submit()` a second time: its first line
+(`reveal.innerHTML = ""`) wiped the entire reveal panel — the secret, the
+break-glass key, and the continue button — the instant Copy was clicked, followed
+by a 409 ("a login is already configured") since the mode had already committed on
+the first successful submit. The operator was left with no visible way to finish
+setup or recover the credentials they were trying to copy.
+
+Confirmed via CDP against a local instance both ways: reverted the fix and
+reproduced the exact reported symptom (`readonlyInputCountAfterCopy: 0`, all reveal
+buttons gone, `"a login is already configured"` error) driving the actual browser
+DOM through the real setup flow — then restored the fix and confirmed all reveal
+elements survive a Copy click.
+
+**Fix:** added `type: "button"` to all three previously-untyped buttons in the
+reveal panel (both "Copy" buttons and "I've copied it — continue"). The existing
+"Skip" button already had this correctly set (it was explicitly specced), which is
+what made the omission on the other three read as an oversight rather than a
+design choice — confirmed by reproducing the bug, not just inferring it from the
+code.
+
+**Scope note:** the two other "Copy" buttons in this codebase (`renderAPIAccess`'s
+API-key panel, `renderAuthMode`'s Settings forward-secret panel) are NOT inside any
+`<form>` element — verified `renderSettings` never wraps its fieldsets in a form —
+so they were never affected and needed no change.
+
+Verified via `go build/vet/test -race` (all green) and the live CDP
+reproduce-then-fix cycle above, not just a syntax check.

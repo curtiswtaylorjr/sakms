@@ -1454,7 +1454,20 @@ function renderCredentialsGate(container, kind, authStatus) {
         const secretInput = el("input", { type: "text", readonly: "readonly", value: data.forwardSecret || "", style: "width:100%" });
         reveal.appendChild(secretInput);
         secretInput.select();
-        reveal.appendChild(el("button", { text: "Copy", onclick: () => { secretInput.select(); if (navigator.clipboard) navigator.clipboard.writeText(data.forwardSecret || "").catch(() => {}); } }));
+        // BUG FIX (2026-07-11, live incident: "copy button breaks login"):
+        // every button below lives inside the setup <form> (see the `form =
+        // el("form", ...)` a few lines down, which appends `reveal` as a
+        // child). A <button> with no explicit "type" defaults to
+        // type="submit" INSIDE a form — clicking it fires the form's
+        // onsubmit handler too, which calls submit() again. submit()'s
+        // first line is `reveal.innerHTML = ""`, so clicking "Copy" (or
+        // "I've copied it — continue") was wiping this entire reveal panel
+        // — the secret, the break-glass key, and the continue button — the
+        // instant it was clicked, and then hitting a 409 (mode already
+        // committed by the first successful submit) with no visible way
+        // forward. type: "button" on all three stops them from being
+        // treated as implicit submit buttons.
+        reveal.appendChild(el("button", { type: "button", text: "Copy", onclick: () => { secretInput.select(); if (navigator.clipboard) navigator.clipboard.writeText(data.forwardSecret || "").catch(() => {}); } }));
         reveal.appendChild(el("div", { class: "error", text: "Shown once — copy this into your reverse proxy's config now; it cannot be retrieved later." }));
         // Break-glass API key (spec AC6, Decision #3): same reveal-once /
         // readonly-input / "copy now" treatment as the forward secret above.
@@ -1464,13 +1477,13 @@ function renderCredentialsGate(container, kind, authStatus) {
           const keyInput = el("input", { type: "text", readonly: "readonly", value: data.apiKey, style: "width:100%" });
           reveal.appendChild(el("div", { class: "muted", style: "margin-top:0.75rem", text: "Break-glass API key (save this now):" }));
           reveal.appendChild(keyInput);
-          reveal.appendChild(el("button", { text: "Copy", onclick: () => { keyInput.select(); if (navigator.clipboard) navigator.clipboard.writeText(data.apiKey).catch(() => {}); } }));
+          reveal.appendChild(el("button", { type: "button", text: "Copy", onclick: () => { keyInput.select(); if (navigator.clipboard) navigator.clipboard.writeText(data.apiKey).catch(() => {}); } }));
           reveal.appendChild(el("div", { class: "error", text: "Shown once — if your proxy locks you out, send this as an X-Api-Key header to reach Settings. It cannot be retrieved later." }));
         } else if (data.apiKeyNote) {
           reveal.appendChild(el("div", { class: "muted", style: "margin-top:0.75rem", text: data.apiKeyNote }));
         }
         reveal.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [
-          el("button", { class: "primary", text: "I've copied it — continue", onclick: async () => { await boot(); } }),
+          el("button", { type: "button", class: "primary", text: "I've copied it — continue", onclick: async () => { await boot(); } }),
         ]));
         submitBtn.disabled = true;
         modeSelect.disabled = true;
