@@ -35,6 +35,31 @@ func TestNormalizeForSearch(t *testing.T) {
 	}
 }
 
+func TestRejectNonStudioGuess(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"content-rating tag XXX", "XXX", ""},
+		{"content-rating tag lowercase xxx", "xxx", ""},
+		{"content-rating tag XXXX", "XXXX", ""},
+		{"release-group-shaped tag", "WRB", ""},
+		{"release-group-shaped tag 4 letters", "NBQ1", "NBQ1"}, // has a digit, not all-letters — passes through
+		{"real studio name", "Tushy", "Tushy"},
+		{"real multi-word studio name", "Wow Girls", "Wow Girls"},
+		{"short all-caps acronym rejected by this bare function", "DDF", ""}, // rejectNonStudioGuess alone can't tell a real short-acronym studio from a release-group tag by shape — see TestVerifyStudio_ShortAcronymStudioStillSucceedsViaDBMatch, where verifyStudio's earlier DB-match step returns before this fallback is ever reached
+		{"empty string", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rejectNonStudioGuess(tc.in); got != tc.want {
+				t.Errorf("rejectNonStudioGuess(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBestMatch(t *testing.T) {
 	names := []string{"Riley Reid", "Riley Star", "Someone Else"}
 	got, ok := bestMatch("riley reid", names, 0.6)
@@ -76,6 +101,50 @@ func TestVerifyStudio_EmptyGuessReturnsEmpty(t *testing.T) {
 	id := newIdentifierWithFakes(t, nil, nil)
 	if got := id.verifyStudio(context.Background(), "", "stem"); got != "" {
 		t.Fatalf("got %q, want empty string unchanged", got)
+	}
+}
+
+// Confirmed real failure mode (see sakms_adult_ai_identification.md): on 2/8
+// real test files, the AI returned a content-rating tag or release-group tag
+// as "studio" instead of the real studio name. Neither can be fixed by
+// fuzzy-matching against real studio names, so they must be rejected outright
+// rather than passed through as Studio.
+func TestVerifyStudio_RejectsContentRatingTag(t *testing.T) {
+	id := newIdentifierWithFakes(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"findStudio":null}}`))
+	}, nil)
+
+	got := id.verifyStudio(context.Background(), "XXX", "ftvgirls.25.12.11.krystal.teen.orgasms.xxx.1080p")
+	if got != "" {
+		t.Fatalf("got %q, want empty (content-rating tag rejected, not passed through)", got)
+	}
+}
+
+func TestVerifyStudio_RejectsReleaseGroupShapedTag(t *testing.T) {
+	id := newIdentifierWithFakes(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"findStudio":null}}`))
+	}, nil)
+
+	got := id.verifyStudio(context.Background(), "WRB", "evilangel.25.11.11.rebel.rhyder.xxx.2160p.mp4-wrb")
+	if got != "" {
+		t.Fatalf("got %q, want empty (release-group-shaped tag rejected, not passed through)", got)
+	}
+}
+
+func TestVerifyStudio_ShortAcronymStudioStillSucceedsViaDBMatch(t *testing.T) {
+	// The denylist heuristic only gates the LAST-RESORT fallback — a real
+	// short-acronym studio that a DB confirms should still return that DB's
+	// canonical name, not get caught by looksLikeReleaseGroupTag.
+	id := newIdentifierWithFakes(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"findStudio":{"id":"s1","name":"DDF"}}}`))
+	}, nil)
+
+	got := id.verifyStudio(context.Background(), "ddf", "ddf.24.01.01.some.scene")
+	if got != "DDF" {
+		t.Fatalf("got %q, want DDF's canonical DB name (not rejected)", got)
 	}
 }
 

@@ -76,18 +76,63 @@ func tpdbSiteNames(sites []tpdbrest.Site) []string {
 	return out
 }
 
+// studioDenylistExact are known non-studio tokens the AI has been observed
+// (via live testing against real filenames) to mistake for a studio name —
+// content-rating placeholders, not real production companies. Matched
+// case-insensitively.
+var studioDenylistExact = map[string]bool{
+	"xxx":  true,
+	"xxxx": true,
+}
+
+// looksLikeReleaseGroupTag reports whether cleaned has the shape of a scene
+// release-group tag (e.g. "WRB", "NBQ", "KTR") rather than a studio name:
+// short and entirely uppercase letters. This is a real observed failure mode
+// (see sakms_adult_ai_identification.md — the AI returned exactly this shape
+// of token as "studio" on 2/8 real test files), but it only gates the
+// last-resort fallback in verifyStudio below: a genuine short-acronym studio
+// name would already have matched via StashDB/FansDB/TPDB earlier in that
+// function, so this heuristic only ever fires for a guess that ALSO failed
+// real-database verification.
+func looksLikeReleaseGroupTag(cleaned string) bool {
+	if len(cleaned) < 2 || len(cleaned) > 5 {
+		return false
+	}
+	for _, r := range cleaned {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+// rejectNonStudioGuess returns "" instead of a cleaned guess that looks like
+// a content-rating tag or release-group tag rather than a real studio name —
+// better to leave Studio empty than confidently wrong, the same "decline
+// rather than fabricate" principle GuessTitle's escape valve already applies
+// to mainstream titles.
+func rejectNonStudioGuess(cleaned string) string {
+	if studioDenylistExact[strings.ToLower(cleaned)] || looksLikeReleaseGroupTag(cleaned) {
+		return ""
+	}
+	return cleaned
+}
+
 // verifyStudio checks an AI-guessed studio name (ParseFilename's raw
 // extraction) against StashDB/FansDB/TPDB and returns the database's own
 // canonical name where a confident match exists — correctness comes from
 // real data instead of hoping the AI formats text perfectly. Falls back to
 // a deterministically-cleaned version of the guess (still better than the
-// AI's raw, possibly dot/underscore-separated text) if nothing matches.
-// Every external call goes through the same per-host throttle every other
-// StashDB/FansDB/TPDB call in this package uses, and the same FansDB
-// fansite-hint gate as searchInternalDBs (see IsFansiteHinted's doc
-// comment) — querying FansDB's mostly-generic-clip catalog for every
-// mainstream file's studio/performers would be both wasteful and prone to
-// spurious corrections.
+// AI's raw, possibly dot/underscore-separated text) if nothing matches,
+// unless that guess itself looks like a content-rating or release-group tag
+// (see rejectNonStudioGuess) — a completely wrong entity guess can't be
+// fixed by fuzzy-matching against real studio names, so it's rejected
+// outright rather than passed through. Every external call goes through the
+// same per-host throttle every other StashDB/FansDB/TPDB call in this
+// package uses, and the same FansDB fansite-hint gate as searchInternalDBs
+// (see IsFansiteHinted's doc comment) — querying FansDB's mostly-generic-clip
+// catalog for every mainstream file's studio/performers would be both
+// wasteful and prone to spurious corrections.
 func (id *Identifier) verifyStudio(ctx context.Context, guess, stem string) string {
 	if guess == "" {
 		return guess
@@ -104,7 +149,7 @@ func (id *Identifier) verifyStudio(ctx context.Context, guess, stem string) stri
 			continue
 		}
 		if err := id.Throttle.Wait(ctx, box); err != nil {
-			return cleaned
+			return rejectNonStudioGuess(cleaned)
 		}
 		studio, err := client.FindStudio(ctx, cleaned)
 		if err != nil {
@@ -117,7 +162,7 @@ func (id *Identifier) verifyStudio(ctx context.Context, guess, stem string) stri
 
 	if id.Boxes.tpdb != nil {
 		if err := id.Throttle.Wait(ctx, "tpdb"); err != nil {
-			return cleaned
+			return rejectNonStudioGuess(cleaned)
 		}
 		if candidates, err := id.Boxes.tpdb.SearchSites(ctx, cleaned); err == nil {
 			if best, ok := bestMatch(cleaned, tpdbSiteNames(candidates), studioMatchThreshold); ok {
@@ -126,7 +171,7 @@ func (id *Identifier) verifyStudio(ctx context.Context, guess, stem string) stri
 		}
 	}
 
-	return cleaned
+	return rejectNonStudioGuess(cleaned)
 }
 
 // verifyPerformers is verifyStudio's sibling for the performers array —
