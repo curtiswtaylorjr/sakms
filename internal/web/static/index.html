@@ -64,6 +64,20 @@
   form label { display: block; margin-bottom: 0.75rem; font-size: 0.9rem; }
   form label input { margin-top: 0.25rem; }
   code { background: var(--bg); padding: 0.1rem 0.3rem; border-radius: 4px; }
+  .path-field { position: relative; display: flex; gap: 0.5rem; align-items: flex-start; }
+  .path-field > input { min-width: 20rem; }
+  .autocomplete { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--card); border: 1px solid var(--border); border-radius: 6px; margin-top: 2px; max-height: 14rem; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
+  .autocomplete .ac-item { padding: 0.35rem 0.5rem; cursor: pointer; font-size: 0.85rem; }
+  .autocomplete .ac-item:hover { background: var(--accent); color: var(--accent-fg); }
+  .modal-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  .modal { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; width: 100%; max-width: 640px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); }
+  .modal-head h2 { margin: 0; font-size: 1rem; }
+  .modal-crumbs { padding: 0.5rem 1rem; font-size: 0.8rem; color: var(--muted); word-break: break-all; border-bottom: 1px solid var(--border); }
+  .modal-list { overflow-y: auto; flex: 1; }
+  .modal-list .dir-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  .modal-list .dir-item:hover { background: var(--card); }
+  .modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -139,6 +153,121 @@ function el(tag, attrs, children) {
 
 function fmtErr(err) {
   return el("div", { class: "error", text: "Error: " + err.message });
+}
+
+// ---- Root-folder path picker (shared by every Settings path input) ----
+//
+// pathInputWithBrowse returns { wrapper, input } for a server-side folder
+// path field: the plain text input (still hand-editable — nothing here
+// removes that), a "Browse" button that opens a folder-tree modal, and a
+// live autocomplete dropdown under the input. All three read/write the SAME
+// input element, so callers keep owning save/validation semantics (one
+// caller treats blank as meaningful, others require non-empty) — this helper
+// only ever sets input.value, it never PUTs anything itself. Both the modal
+// and the autocomplete hit GET /api/browse, which restricts listing to the
+// container's mounted roots server-side.
+function pathInputWithBrowse(current, placeholder) {
+  const input = el("input", { type: "text", value: current || "", placeholder: placeholder });
+  const ac = el("div", { class: "autocomplete", style: "display:none" });
+  const browseBtn = el("button", { text: "Browse…", onclick: () => openBrowseModal(input) });
+  const wrapper = el("div", { class: "path-field" }, [input, browseBtn, ac]);
+
+  const closeAC = () => { ac.style.display = "none"; ac.innerHTML = ""; };
+
+  let timer = null;
+  input.addEventListener("input", () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const val = input.value;
+      const slash = val.lastIndexOf("/");
+      if (slash < 0) { closeAC(); return; }
+      const parent = slash === 0 ? "/" : val.slice(0, slash);
+      const frag = val.slice(slash + 1).toLowerCase();
+      let entries;
+      try { entries = (await api("/api/browse?path=" + encodeURIComponent(parent))).entries; }
+      catch (e) { closeAC(); return; }
+      const matches = entries.filter((e) => e.name.toLowerCase().startsWith(frag)).slice(0, 30);
+      if (matches.length === 0) { closeAC(); return; }
+      ac.innerHTML = "";
+      for (const m of matches) {
+        ac.appendChild(el("div", { class: "ac-item", text: m.name, onclick: () => {
+          input.value = m.path;
+          closeAC();
+          input.focus();
+        } }));
+      }
+      ac.style.display = "block";
+    }, 200);
+  });
+  // Dismiss the dropdown when focus leaves the field (a small delay so a
+  // click on a suggestion registers before blur tears it down).
+  input.addEventListener("blur", () => setTimeout(closeAC, 150));
+
+  return { wrapper, input };
+}
+
+// openBrowseModal pops the folder-tree picker over the page and, on "Select
+// this folder", writes the chosen absolute path back into targetInput.value.
+function openBrowseModal(targetInput) {
+  let currentPath = ""; // "" == the roots listing (/media, /downloads, /adult)
+
+  const crumbs = el("div", { class: "modal-crumbs" });
+  const list = el("div", { class: "modal-list" });
+  const upBtn = el("button", { text: "↑ Up" });
+  const selectBtn = el("button", { class: "primary", text: "Select this folder" });
+
+  const overlay = el("div", { class: "modal-overlay" }, [
+    el("div", { class: "modal" }, [
+      el("div", { class: "modal-head" }, [
+        el("h2", { text: "Choose a folder" }),
+        el("button", { text: "✕", onclick: close }),
+      ]),
+      crumbs,
+      list,
+      el("div", { class: "modal-foot" }, [upBtn, selectBtn]),
+    ]),
+  ]);
+
+  function close() { document.body.removeChild(overlay); }
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  async function load(path) {
+    currentPath = path;
+    crumbs.textContent = path || "Mounted roots";
+    upBtn.disabled = path === "";
+    selectBtn.disabled = path === "";
+    list.innerHTML = "";
+    let entries;
+    try { entries = (await api("/api/browse?path=" + encodeURIComponent(path))).entries; }
+    catch (e) { list.appendChild(fmtErr(e)); return; }
+    if (entries.length === 0) {
+      list.appendChild(el("div", { class: "empty", style: "padding:1rem", text: "No sub-folders here." }));
+      return;
+    }
+    for (const entry of entries) {
+      list.appendChild(el("div", { class: "dir-item", onclick: () => load(entry.path) }, [
+        el("span", { text: "📁" }),
+        el("span", { text: entry.name }),
+      ]));
+    }
+  }
+
+  upBtn.addEventListener("click", () => {
+    if (currentPath === "") return;
+    const slash = currentPath.lastIndexOf("/");
+    // A bare root (e.g. "/media") has its only slash at index 0 — going up
+    // from there returns to the roots listing rather than "/".
+    const parent = (slash <= 0 || ["/media", "/downloads", "/adult"].includes(currentPath)) ? "" : currentPath.slice(0, slash);
+    load(parent);
+  });
+  selectBtn.addEventListener("click", () => {
+    targetInput.value = currentPath;
+    close();
+  });
+
+  document.body.appendChild(overlay);
+  // Start from the folder already typed (if any), else the roots listing.
+  load(targetInput.value ? targetInput.value : "");
 }
 
 // ---- Nav ----
@@ -295,7 +424,7 @@ async function buildLibraryWizardStep(m, n, configured, wizardContainer) {
   const fs = el("fieldset", {}, [
     el("legend", { text: n + ". " + MODE_LABELS[m] + " — library root folder" + (configured ? " ✓" : "") }),
   ]);
-  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/" + MODE_LABELS[m], style: "min-width:20rem" });
+  const { wrapper, input: pathInput } = pathInputWithBrowse(current, "/path/to/" + MODE_LABELS[m]);
   const status = el("span", { class: "muted" });
   const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
     try {
@@ -304,7 +433,7 @@ async function buildLibraryWizardStep(m, n, configured, wizardContainer) {
       await renderWizard(wizardContainer);
     } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
   } });
-  fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), pathInput]));
+  fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), wrapper]));
   fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
   return fs;
 }
@@ -898,7 +1027,7 @@ async function renderLibrarySettings(container, m) {
   let current = "";
   try { current = (await api("/api/modes/" + m + "/library/root-folder")).path; } catch (e) {}
 
-  const pathInput = el("input", { type: "text", value: current, placeholder: "/path/to/" + MODE_LABELS[m], style: "min-width:20rem" });
+  const { wrapper, input: pathInput } = pathInputWithBrowse(current, "/path/to/" + MODE_LABELS[m]);
   const status = el("span", { class: "muted" });
   const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
     try {
@@ -907,7 +1036,7 @@ async function renderLibrarySettings(container, m) {
     } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
   } });
 
-  fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), pathInput]));
+  fs.appendChild(el("label", {}, [document.createTextNode("Root folder"), wrapper]));
   fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
   fs.appendChild(el("div", { class: "muted", text: "Where Rename/Purge/Dedup and Search's Check & Import look for and place " + MODE_LABELS[m] + " files — no " + (m === "movies" ? "Radarr" : "Sonarr") + " involved." }));
   container.appendChild(fs);
@@ -1259,7 +1388,7 @@ async function renderKidsRootPath(container) {
   let current = "";
   try { current = (await api("/api/modes/" + m + "/rename/kids-root-path")).path; } catch (e) {}
 
-  const input = el("input", { type: "text", placeholder: "/path/to/" + MODE_LABELS[m] + " (Kids)", style: "min-width:20rem", value: current });
+  const { wrapper, input } = pathInputWithBrowse(current, "/path/to/" + MODE_LABELS[m] + " (Kids)");
   const status = el("span", { class: "muted" });
   const saveBtn = el("button", { class: "primary", text: "Save", onclick: async () => {
     try {
@@ -1267,7 +1396,7 @@ async function renderKidsRootPath(container) {
       status.textContent = "saved"; status.className = "muted";
     } catch (e) { status.textContent = "✗ " + e.message; status.className = "error"; }
   } });
-  fs.appendChild(el("label", { class: "row" }, [document.createTextNode("Kids root folder path"), input]));
+  fs.appendChild(el("label", { class: "row" }, [document.createTextNode("Kids root folder path"), wrapper]));
   fs.appendChild(el("div", { class: "row", style: "margin-top:0.5rem" }, [saveBtn, status]));
   fs.appendChild(el("div", { class: "muted", text: "Leave blank to turn Kids classification off. Applies to both newly-found files and already-tracked items whose classification has drifted." }));
   container.appendChild(fs);
