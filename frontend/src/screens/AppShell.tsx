@@ -3,16 +3,44 @@
 // add the remaining views (Settings, workflows) and Discover's auto-grab. The
 // router must never claim an /api/* path (see APP_ROUTES).
 
-import { type Component, createSignal, Show } from "solid-js";
-import { Route, Router } from "@solidjs/router";
+import { type Component, type JSX, createSignal, Show } from "solid-js";
+import { A, Route, Router } from "@solidjs/router";
 import { Button, ErrorText, Muted } from "../components/ui";
 import { Discover } from "./Discover";
+import { Grabs } from "./Grabs";
 
 // APP_ROUTES is the exhaustive list of client-side route patterns the router
 // serves. Guardrail #2 / requirement #7: the router must NEVER claim any
 // /api/* path (the OIDC callback /api/auth/oidc/callback is a real server
 // route). A unit test asserts none of these start with "/api".
-export const APP_ROUTES = ["/", "/discover"] as const;
+export const APP_ROUTES = ["/", "/discover", "/grabs"] as const;
+
+// ShellLayout is the Router root — a tab nav (Discover / Grabs) above whatever
+// route is active. Being inside <Router> is what gives <A> its active-link
+// context.
+const ShellLayout: Component<{ children?: JSX.Element }> = (props) => (
+  <>
+    <nav class="mb-4 flex gap-3 border-b border-border pb-2">
+      <A
+        href="/discover"
+        class="text-sm font-medium text-muted hover:text-fg"
+        activeClass="text-fg"
+        inactiveClass="text-muted"
+      >
+        Discover
+      </A>
+      <A
+        href="/grabs"
+        class="text-sm font-medium hover:text-fg"
+        activeClass="text-fg"
+        inactiveClass="text-muted"
+      >
+        Grabs
+      </A>
+    </nav>
+    {props.children}
+  </>
+);
 
 const NotFound: Component = () => (
   <div class="rounded-xl border border-border bg-surface p-6">
@@ -68,9 +96,10 @@ export const AppShell: Component<{
 
       <main class="p-6">
         {logoutError() && <ErrorText>{logoutError()}</ErrorText>}
-        <Router>
+        <Router root={ShellLayout}>
           <Route path="/" component={Discover} />
           <Route path="/discover" component={Discover} />
+          <Route path="/grabs" component={Grabs} />
           <Route path="*" component={NotFound} />
         </Router>
       </main>

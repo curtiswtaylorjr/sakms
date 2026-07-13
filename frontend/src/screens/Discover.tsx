@@ -1,17 +1,27 @@
-// Discover — the read-only browse landing (Stage 1 Wave 3). Seerr-inspired
-// look: a hero banner plus horizontal category rows (NOT a flat grid) for
-// Movies/Series, and a scene grid for Adult. Poster/scene art is rendered
-// ONLY through the image proxy (src/api/discover.ts's proxyImage/tmdbPoster),
-// never hot-linked from TMDB/TPDB (plan Decision #7).
+// Discover — the Seerr-inspired browse landing, now MUTATING (Stage 2). Hero
+// banner + horizontal category rows for Movies/Series, a scene grid for Adult.
+// Poster/scene art renders ONLY through the image proxy (src/api/discover.ts's
+// proxyImage/tmdbPoster), never hot-linked from TMDB/TPDB (plan Decision #7).
 //
-// READ-ONLY by design: a card shows detail (title/year/rating/overview) and an
-// availability badge, but there is NO grab/request affordance — clicking a card
-// mutates nothing. Auto-grab is Stage 2's job; adding any grab button here
-// would violate this wave's scope and the project's no-bulk / staged-approval
-// invariants.
+// One-click auto-grab (plan Decision #5): a card's "Grab" triggers the backend
+// auto-grab — search + bitrate-quality-floor scoring — which either grabs the
+// top qualifier outright or returns a ranked manual pick list when nothing
+// clears the floor (never a silent failure, never "grab the least-bad option").
+// Per-mode nuance is respected exactly:
+//   - Movies: one click grabs directly (the clean 1-poster=1-title case).
+//   - Series: one click opens a season/episode picker FIRST — "one click per
+//     season/episode selection", since no release exists to score until a
+//     specific episode/pack is chosen. Season-0/Specials is preserved:
+//     submitting the picker always sets seasonSpecified=true (a bare season
+//     number can't tell "Season 0 picked" from "no season picked").
+//   - Adult: one click grabs a scene, sourcing the bitrate scorer's runtime
+//     from the scene's TPDB durationSeconds.
+// No bulk actions anywhere (Guardrail #3): every affordance grabs exactly one
+// title/episode/scene per click.
 
 import {
   type Component,
+  type JSX,
   createResource,
   createSignal,
   For,
@@ -32,7 +42,15 @@ import {
   tmdbHero,
   tmdbPoster,
 } from "../api/discover";
-import { ErrorText, Muted } from "../components/ui";
+import {
+  type AutoGrabCandidate,
+  type AutoGrabRequest,
+  type AutoGrabResponse,
+  autoGrab,
+  libraryRootFolder,
+  manualGrab,
+} from "../api/grab";
+import { Button, ErrorText, Muted } from "../components/ui";
 
 const MODES: { id: Mode; label: string }[] = [
   { id: "movies", label: "Movies" },
@@ -40,10 +58,286 @@ const MODES: { id: Mode; label: string }[] = [
   { id: "adult", label: "Adult" },
 ];
 
+// GrabTarget is one pending auto-grab: which mode, a human label for the
+// dialog title, and the exact request body the backend needs. For Series the
+// season/episode picker has already resolved before a target exists.
+type GrabTarget = { mode: Mode; label: string; request: AutoGrabRequest };
+
+// STATUS_COPY turns an autograb.Grade Status into a short human reason for a
+// fallback pick-list row — so the operator sees WHY each release wasn't
+// auto-picked, not a bare rejected flag.
+const STATUS_COPY: Record<string, string> = {
+  qualified: "meets the bar",
+  "below-floor": "below the quality floor",
+  mislabeled: "looks mislabeled",
+  "low-seeders": "too few seeders",
+  "unknown-bitrate": "runtime unknown — bitrate not scored",
+  "unknown-resolution": "resolution not recognized",
+};
+
 // year pulls the leading 4-digit year from a TMDB/TPDB date string ("YYYY-..").
 function year(date: string): string {
   return date && date.length >= 4 ? date.slice(0, 4) : "";
 }
+
+// Modal is a lightweight centered overlay for the grab dialog. Clicking the
+// backdrop or Close dismisses it; clicks inside don't bubble out.
+const Modal: Component<{
+  title: string;
+  onClose: () => void;
+  children: JSX.Element;
+}> = (props) => (
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+    onClick={props.onClose}
+  >
+    <div
+      class="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-lg"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <h3 class="truncate text-base font-semibold text-fg">{props.title}</h3>
+        <Button onClick={props.onClose}>Close</Button>
+      </div>
+      {props.children}
+    </div>
+  </div>
+);
+
+// FallbackPickList renders the ranked manual pick list the backend returns when
+// nothing auto-qualified. Each row labels why it wasn't auto-picked and offers
+// a single "Grab this" — one release per click, never a batch.
+const FallbackPickList: Component<{
+  response: AutoGrabResponse;
+  onPick: (c: AutoGrabCandidate) => void;
+  grabbing: string;
+  error: string;
+}> = (props) => (
+  <div>
+    <Muted class="mb-2">{props.response.message}</Muted>
+    <Show when={props.error}>
+      <ErrorText>{props.error}</ErrorText>
+    </Show>
+    <Show
+      when={(props.response.candidates ?? []).length > 0}
+      fallback={<Muted>No releases found for this title.</Muted>}
+    >
+      <ul class="flex flex-col gap-2">
+        <For each={props.response.candidates}>
+          {(c) => (
+            <li class="flex items-center gap-3 rounded-md border border-border bg-surface-2 p-2">
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm text-fg" title={c.title}>
+                  {c.title}
+                </div>
+                <div class="truncate text-xs text-muted">
+                  {[c.indexer, c.protocol, STATUS_COPY[c.status] ?? c.status]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              </div>
+              <Button
+                onClick={() => props.onPick(c)}
+                disabled={!!props.grabbing}
+              >
+                {props.grabbing === c.downloadUrl ? "Grabbing…" : "Grab this"}
+              </Button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
+  </div>
+);
+
+// GrabDialog fires the auto-grab for a target on mount, then shows the outcome:
+// a success line when the backend grabbed the top qualifier, or the manual pick
+// list when it fell back. The manual pick reuses the existing /search/grab
+// endpoint (auto-grab resolves the root folder server-side; the fallback path
+// must fetch it explicitly).
+const GrabDialog: Component<{ target: GrabTarget; onClose: () => void }> = (
+  props,
+) => {
+  const [result] = createResource(
+    () => props.target,
+    (t) => autoGrab(t.mode, t.request),
+  );
+  const [grabbing, setGrabbing] = createSignal("");
+  const [manualError, setManualError] = createSignal("");
+  const [manualGrabbed, setManualGrabbed] = createSignal<string | null>(null);
+
+  const pickManual = async (c: AutoGrabCandidate) => {
+    setManualError("");
+    setGrabbing(c.downloadUrl);
+    try {
+      const root = await libraryRootFolder(props.target.mode);
+      if (!root) {
+        throw new Error(
+          "no root folder configured for this mode — set one in Settings first",
+        );
+      }
+      await manualGrab(props.target.mode, {
+        title: props.target.request.title,
+        tmdbId: props.target.request.tmdbId,
+        seasonNumber: props.target.request.seasonNumber,
+        episodeNumber: props.target.request.episodeNumber,
+        seasonSpecified: props.target.request.seasonSpecified,
+        indexer: c.indexer,
+        protocol: c.protocol,
+        downloadUrl: c.downloadUrl,
+        rootFolderPath: root,
+      });
+      setManualGrabbed(c.title);
+    } catch (e) {
+      setManualError((e as Error).message);
+    } finally {
+      setGrabbing("");
+    }
+  };
+
+  return (
+    <Modal title={`Grab — ${props.target.label}`} onClose={props.onClose}>
+      <Show
+        when={!result.loading}
+        fallback={<Muted>Searching and scoring releases…</Muted>}
+      >
+        <Show when={result.error}>
+          <ErrorText>{(result.error as Error)?.message}</ErrorText>
+        </Show>
+        <Show when={result()}>
+          {(r) => (
+            <Switch>
+              <Match when={r().grabbed}>
+                <div class="text-sm text-ok">{r().message}</div>
+                <Muted class="mt-1">
+                  Tracked in the Grabs view — check import there once it finishes
+                  downloading.
+                </Muted>
+              </Match>
+              <Match when={r().fallback}>
+                <Show
+                  when={manualGrabbed()}
+                  fallback={
+                    <FallbackPickList
+                      response={r()}
+                      onPick={pickManual}
+                      grabbing={grabbing()}
+                      error={manualError()}
+                    />
+                  }
+                >
+                  <div class="text-sm text-ok">
+                    Grabbed “{manualGrabbed()}”. Tracked in the Grabs view.
+                  </div>
+                </Show>
+              </Match>
+            </Switch>
+          )}
+        </Show>
+      </Show>
+    </Modal>
+  );
+};
+
+// SeasonEpisodePicker gates a Series grab: no release can be scored until a
+// specific season (and optionally episode) is chosen. Submitting always marks
+// the season as specified — that is what preserves Season-0/Specials (a bare
+// season number can't distinguish "Season 0 picked" from "nothing picked").
+const SeasonEpisodePicker: Component<{
+  onSubmit: (season: number, episode: number) => void;
+}> = (props) => {
+  const [season, setSeason] = createSignal("");
+  const [episode, setEpisode] = createSignal("");
+  return (
+    <form
+      class="mt-1 flex items-center gap-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        props.onSubmit(
+          parseInt(season(), 10) || 0,
+          parseInt(episode(), 10) || 0,
+        );
+      }}
+    >
+      <input
+        class="w-12 rounded border border-border bg-bg px-1 py-0.5 text-xs text-fg outline-none focus:border-accent"
+        placeholder="S"
+        aria-label="Season"
+        value={season()}
+        onInput={(e) => setSeason(e.currentTarget.value)}
+      />
+      <input
+        class="w-12 rounded border border-border bg-bg px-1 py-0.5 text-xs text-fg outline-none focus:border-accent"
+        placeholder="E"
+        aria-label="Episode"
+        value={episode()}
+        onInput={(e) => setEpisode(e.currentTarget.value)}
+      />
+      <button
+        type="submit"
+        class="rounded bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg"
+      >
+        Go
+      </button>
+    </form>
+  );
+};
+
+// GrabButton is the per-title grab affordance. Movies grab on click. Series
+// first reveal the season/episode picker (the gating step) and only build a
+// GrabTarget once the picker is submitted.
+const GrabButton: Component<{
+  mode: "movies" | "series";
+  item: DiscoverItem;
+  onGrab: (t: GrabTarget) => void;
+}> = (props) => {
+  const [picking, setPicking] = createSignal(false);
+
+  const grabMovie = () =>
+    props.onGrab({
+      mode: "movies",
+      label: props.item.title,
+      request: { title: props.item.title, tmdbId: props.item.id },
+    });
+
+  const grabSeries = (season: number, episode: number) => {
+    setPicking(false);
+    const suffix = `S${season}${episode ? "E" + episode : ""}`;
+    props.onGrab({
+      mode: "series",
+      label: `${props.item.title} ${suffix}`,
+      request: {
+        title: props.item.title,
+        tmdbId: props.item.id,
+        seasonNumber: season,
+        episodeNumber: episode,
+        seasonSpecified: true,
+      },
+    });
+  };
+
+  return (
+    <Show
+      when={props.mode === "series"}
+      fallback={
+        <Button class="w-full !py-1 text-xs" onClick={grabMovie}>
+          Grab
+        </Button>
+      }
+    >
+      <Show
+        when={picking()}
+        fallback={
+          <Button class="w-full !py-1 text-xs" onClick={() => setPicking(true)}>
+            Grab
+          </Button>
+        }
+      >
+        <SeasonEpisodePicker onSubmit={grabSeries} />
+      </Show>
+    </Show>
+  );
+};
 
 // AvailabilityBadge renders the outcome of a per-card availability probe. It is
 // deliberately quiet on failure: Prowlarr may not be configured (a 400/502),
@@ -89,9 +383,11 @@ const TextPoster: Component<{ label: string }> = (props) => (
 // PosterCard is one Movies/Series title. Fixed width so a row scrolls
 // horizontally. The title attribute carries the overview as a native tooltip —
 // "show more detail" without any click handler that could mutate.
-const PosterCard: Component<{ mode: "movies" | "series"; item: DiscoverItem }> = (
-  props,
-) => {
+const PosterCard: Component<{
+  mode: "movies" | "series";
+  item: DiscoverItem;
+  onGrab: (t: GrabTarget) => void;
+}> = (props) => {
   const [avail] = createResource(
     () => props.item.id,
     (id) => fetchTitleAvailability(props.mode, id).catch(() => null),
@@ -121,6 +417,9 @@ const PosterCard: Component<{ mode: "movies" | "series"; item: DiscoverItem }> =
       <div class="mt-1">
         <AvailabilityBadge result={avail()} loading={avail.loading} />
       </div>
+      <div class="mt-1.5">
+        <GrabButton mode={props.mode} item={props.item} onGrab={props.onGrab} />
+      </div>
     </div>
   );
 };
@@ -131,19 +430,26 @@ const Row: Component<{
   mode: "movies" | "series";
   items: DiscoverItem[] | undefined;
   loading: boolean;
+  onGrab: (t: GrabTarget) => void;
 }> = (props) => (
   <section class="mt-6">
     <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-muted">
       {props.title}
     </h2>
-    <Show
-      when={!props.loading}
-      fallback={<Muted>Loading…</Muted>}
-    >
-      <Show when={props.items && props.items.length > 0} fallback={<Muted>Nothing here yet.</Muted>}>
+    <Show when={!props.loading} fallback={<Muted>Loading…</Muted>}>
+      <Show
+        when={props.items && props.items.length > 0}
+        fallback={<Muted>Nothing here yet.</Muted>}
+      >
         <div class="flex gap-3 overflow-x-auto pb-2">
           <For each={props.items}>
-            {(item) => <PosterCard mode={props.mode} item={item} />}
+            {(item) => (
+              <PosterCard
+                mode={props.mode}
+                item={item}
+                onGrab={props.onGrab}
+              />
+            )}
           </For>
         </div>
       </Show>
@@ -152,8 +458,12 @@ const Row: Component<{
 );
 
 // Hero is the top trending title, rendered wide with its backdrop/poster and
-// overview — the Seerr-style banner. Falls back to a plain heading if no art.
-const Hero: Component<{ item: DiscoverItem | undefined }> = (props) => (
+// overview — the Seerr-style banner, now with its own one-click Grab.
+const Hero: Component<{
+  item: DiscoverItem | undefined;
+  mode: "movies" | "series";
+  onGrab: (t: GrabTarget) => void;
+}> = (props) => (
   <Show when={props.item}>
     {(item) => {
       const src = () => tmdbHero(item().posterPath);
@@ -174,7 +484,16 @@ const Hero: Component<{ item: DiscoverItem | undefined }> = (props) => (
                 <span>★ {item().voteAverage.toFixed(1)}</span>
               </Show>
             </div>
-            <p class="mt-3 line-clamp-3 text-sm text-muted">{item().overview}</p>
+            <p class="mt-3 line-clamp-3 text-sm text-muted">
+              {item().overview}
+            </p>
+            <div class="mt-4 max-w-[10rem]">
+              <GrabButton
+                mode={props.mode}
+                item={item()}
+                onGrab={props.onGrab}
+              />
+            </div>
           </div>
         </div>
       );
@@ -183,7 +502,8 @@ const Hero: Component<{ item: DiscoverItem | undefined }> = (props) => (
 );
 
 // TitleDiscover backs Movies and Series (both TMDB title-shaped). Both category
-// resources re-run when props.mode changes, so switching tabs refetches.
+// resources re-run when props.mode changes, so switching tabs refetches. It
+// owns the single grab dialog for its titles.
 const TitleDiscover: Component<{ mode: "movies" | "series" }> = (props) => {
   const [trending] = createResource(
     () => props.mode,
@@ -193,6 +513,7 @@ const TitleDiscover: Component<{ mode: "movies" | "series" }> = (props) => {
     () => props.mode,
     (m) => fetchDiscover(m, "popular"),
   );
+  const [grabTarget, setGrabTarget] = createSignal<GrabTarget | null>(null);
 
   return (
     <div>
@@ -203,20 +524,25 @@ const TitleDiscover: Component<{ mode: "movies" | "series" }> = (props) => {
         </ErrorText>
       </Show>
       <Show when={!trending.loading}>
-        <Hero item={trending()?.[0]} />
+        <Hero item={trending()?.[0]} mode={props.mode} onGrab={setGrabTarget} />
       </Show>
       <Row
         title="Trending this week"
         mode={props.mode}
         items={trending()}
         loading={trending.loading}
+        onGrab={setGrabTarget}
       />
       <Row
         title="Popular"
         mode={props.mode}
         items={popular()}
         loading={popular.loading}
+        onGrab={setGrabTarget}
       />
+      <Show when={grabTarget()}>
+        {(t) => <GrabDialog target={t()} onClose={() => setGrabTarget(null)} />}
+      </Show>
     </div>
   );
 };
@@ -224,7 +550,10 @@ const TitleDiscover: Component<{ mode: "movies" | "series" }> = (props) => {
 // AdultCard is one TPDB scene. TPDB frequently returns no art, so the image is
 // Show-guarded with a text fallback (the old frontend rendered Adult text-only;
 // this adds art where TPDB provides it, via the proxy).
-const AdultCard: Component<{ item: AdultDiscoverItem }> = (props) => {
+const AdultCard: Component<{
+  item: AdultDiscoverItem;
+  onGrab: (t: GrabTarget) => void;
+}> = (props) => {
   const [avail] = createResource(
     () => props.item.id,
     () =>
@@ -235,6 +564,16 @@ const AdultCard: Component<{ item: AdultDiscoverItem }> = (props) => {
   const src = () => proxyImage(props.item.image);
   const subtitle = () =>
     [props.item.studio, year(props.item.date)].filter(Boolean).join(" · ");
+  const grab = () =>
+    props.onGrab({
+      mode: "adult",
+      label: props.item.title,
+      request: {
+        title: props.item.title,
+        studio: props.item.studio,
+        durationSeconds: props.item.durationSeconds,
+      },
+    });
   return (
     <div class="w-40 shrink-0" title={props.item.title}>
       <div class="aspect-video overflow-hidden rounded-lg border border-border bg-surface">
@@ -252,17 +591,23 @@ const AdultCard: Component<{ item: AdultDiscoverItem }> = (props) => {
       <div class="mt-1">
         <AvailabilityBadge result={avail()} loading={avail.loading} />
       </div>
+      <div class="mt-1.5">
+        <Button class="w-full !py-1 text-xs" onClick={grab}>
+          Grab
+        </Button>
+      </div>
     </div>
   );
 };
 
 // AdultDiscover is the scene-shaped browse: a search box over TPDB's catalog,
 // plain paginated browse when the box is empty. No hero (scenes have no single
-// "featured" title); a wrapping grid of scene cards.
+// "featured" title); a wrapping grid of scene cards. Owns its own grab dialog.
 const AdultDiscover: Component = () => {
   const [submitted, setSubmitted] = createSignal("");
   const [draft, setDraft] = createSignal("");
   const [scenes] = createResource(submitted, (q) => fetchAdultDiscover(q));
+  const [grabTarget, setGrabTarget] = createSignal<GrabTarget | null>(null);
 
   return (
     <div>
@@ -289,16 +634,21 @@ const AdultDiscover: Component = () => {
           fallback={<Muted>No scenes found.</Muted>}
         >
           <div class="flex flex-wrap gap-3">
-            <For each={scenes()}>{(item) => <AdultCard item={item} />}</For>
+            <For each={scenes()}>
+              {(item) => <AdultCard item={item} onGrab={setGrabTarget} />}
+            </For>
           </div>
         </Show>
+      </Show>
+      <Show when={grabTarget()}>
+        {(t) => <GrabDialog target={t()} onClose={() => setGrabTarget(null)} />}
       </Show>
     </div>
   );
 };
 
 // Discover is the mode-switching shell: tab bar (Movies/Series/Adult) over the
-// matching sub-view. Read-only throughout.
+// matching sub-view.
 export const Discover: Component = () => {
   const [mode, setMode] = createSignal<Mode>("movies");
   return (

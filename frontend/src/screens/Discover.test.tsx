@@ -30,6 +30,7 @@ const scene = (over: Partial<AdultDiscoverItem>): AdultDiscoverItem => ({
   studio: "Tushy",
   date: "2023-02-02",
   image: "https://cdn.theporndb.net/scenes/abc.jpg",
+  durationSeconds: 1800,
   ...over,
 });
 

@@ -282,3 +282,105 @@ type ConnectionUpsertRequest struct {
 	Username string  `json:"username,omitempty"`
 	APIKey   *string `json:"apiKey,omitempty"`
 }
+
+// --- Stage 2: auto-grab (Discover becomes mutating) ------------------------
+
+// Grab mirrors internal/grabs.Grab's exact wire shape — the record SAK keeps
+// for one release it has sent to a download client. Exposed here so the
+// frontend's Grabs view and the auto-grab response share one generated
+// TypeScript type instead of hand-duplicating the shape.
+//
+// FlaggedForReview / FlagReason are the ADVISORY post-grab mislabel signal
+// (set by checkImportHandler via internal/autograb.RuntimeMismatch, Movies
+// only for now): they do NOT mean the import failed — the import already
+// succeeded — only that the imported file's runtime looked inconsistent with
+// its metadata and a human might want to eyeball it. The Grabs view must say
+// so in its copy, never present the flag as an error.
+type Grab struct {
+	ID               int64  `json:"id"`
+	Mode             string `json:"mode"`
+	Title            string `json:"title"`
+	TMDBID           int    `json:"tmdbId,omitempty"`
+	TVDBID           int    `json:"tvdbId,omitempty"`
+	SeasonNumber     int    `json:"seasonNumber,omitempty"`
+	EpisodeNumber    int    `json:"episodeNumber,omitempty"`
+	SeasonSpecified  bool   `json:"seasonSpecified,omitempty"`
+	QualityProfileID int    `json:"qualityProfileId,omitempty"`
+	Indexer          string `json:"indexer"`
+	Protocol         string `json:"protocol"`
+	DownloadClient   string `json:"downloadClient"`
+	ClientRef        string `json:"clientRef,omitempty"`
+	Status           string `json:"status"`
+	RootFolderPath   string `json:"rootFolderPath"`
+	FlaggedForReview bool   `json:"flaggedForReview,omitempty"`
+	FlagReason       string `json:"flagReason,omitempty"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+}
+
+// AutoGrabRequest is POST /api/modes/{mode}/autograb's body — Discover's
+// one-click unattended grab trigger for exactly one title/scene. Which fields
+// matter is mode-specific:
+//   - Movies:  TMDBID (drives the id-scoped Prowlarr search AND the TMDB
+//     runtime lookup the bitrate scorer needs) + Title.
+//   - Series:  TMDBID + Title + SeasonNumber/EpisodeNumber/SeasonSpecified —
+//     the picker's selection ("one click PER season/episode selection", per
+//     the plan's per-mode nuance). No per-episode runtime exists pre-grab
+//     today, so Series candidates all grade as unknown-bitrate and the call
+//     returns the manual fallback list rather than auto-grabbing (documented
+//     behavior, not a bug). SeasonSpecified must be threaded through so a
+//     deliberate Season-0/Specials grab isn't misread as "no season picked"
+//     (see grabs.Grab.SeasonSpecified / checkImportHandler).
+//   - Adult:   Title + Studio (the free-text Prowlarr query, mirroring
+//     availability.CheckAdultScene) + DurationSeconds (TPDB's pre-grab
+//     runtime → the scorer's RuntimeSeconds; 0 = unknown, handled neutrally).
+type AutoGrabRequest struct {
+	Title           string `json:"title"`
+	TMDBID          int    `json:"tmdbId,omitempty"`
+	Studio          string `json:"studio,omitempty"`
+	SeasonNumber    int    `json:"seasonNumber,omitempty"`
+	EpisodeNumber   int    `json:"episodeNumber,omitempty"`
+	SeasonSpecified bool   `json:"seasonSpecified,omitempty"`
+	DurationSeconds int    `json:"durationSeconds,omitempty"`
+}
+
+// AutoGrabCandidate is one graded release in an auto-grab manual-fallback list
+// (AutoGrabResponse.Candidates). It pairs the grade (Status = why it did/didn't
+// auto-qualify, Score = the bitrate ranking key) with the exact release
+// identity the frontend needs to grab it manually via
+// POST /api/modes/{mode}/search/grab — one release per click, never a batch.
+// Status is one of internal/autograb.Status's values ("qualified",
+// "below-floor", "mislabeled", "low-seeders", "unknown-bitrate",
+// "unknown-resolution").
+type AutoGrabCandidate struct {
+	Title       string  `json:"title"`
+	Indexer     string  `json:"indexer"`
+	Protocol    string  `json:"protocol"`
+	DownloadURL string  `json:"downloadUrl"`
+	Size        int64   `json:"size"`
+	Seeders     int     `json:"seeders"`
+	Status      string  `json:"status"`
+	Score       float64 `json:"score"`
+	ImpliedMbps float64 `json:"impliedMbps"`
+	FloorMbps   float64 `json:"floorMbps"`
+	Qualified   bool    `json:"qualified"`
+}
+
+// AutoGrabResponse is POST /api/modes/{mode}/autograb's result — exactly one
+// of two outcomes:
+//   - Grabbed == true:  a release cleared every gate and was sent to the
+//     download client. Grab is the recorded grab (also visible in the Grabs
+//     view); Candidates is empty.
+//   - Grabbed == false (Fallback == true): nothing auto-qualified —
+//     Candidates is the ranked manual pick list (best bitrate score first,
+//     the SAME score that gated auto-grab), each row labeled with why it
+//     didn't qualify. The operator picks exactly one to grab; Grab is nil.
+//
+// Message is a short human summary for the UI.
+type AutoGrabResponse struct {
+	Grabbed    bool                `json:"grabbed"`
+	Fallback   bool                `json:"fallback"`
+	Message    string              `json:"message"`
+	Grab       *Grab               `json:"grab,omitempty"`
+	Candidates []AutoGrabCandidate `json:"candidates,omitempty"`
+}

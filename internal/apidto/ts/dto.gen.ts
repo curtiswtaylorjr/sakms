@@ -291,3 +291,105 @@ export interface ConnectionUpsertRequest {
   username?: string;
   apiKey?: string;
 }
+/**
+ * Grab mirrors internal/grabs.Grab's exact wire shape — the record SAK keeps
+ * for one release it has sent to a download client. Exposed here so the
+ * frontend's Grabs view and the auto-grab response share one generated
+ * TypeScript type instead of hand-duplicating the shape.
+ * FlaggedForReview / FlagReason are the ADVISORY post-grab mislabel signal
+ * (set by checkImportHandler via internal/autograb.RuntimeMismatch, Movies
+ * only for now): they do NOT mean the import failed — the import already
+ * succeeded — only that the imported file's runtime looked inconsistent with
+ * its metadata and a human might want to eyeball it. The Grabs view must say
+ * so in its copy, never present the flag as an error.
+ */
+export interface Grab {
+  id: number /* int64 */;
+  mode: string;
+  title: string;
+  tmdbId?: number /* int */;
+  tvdbId?: number /* int */;
+  seasonNumber?: number /* int */;
+  episodeNumber?: number /* int */;
+  seasonSpecified?: boolean;
+  qualityProfileId?: number /* int */;
+  indexer: string;
+  protocol: string;
+  downloadClient: string;
+  clientRef?: string;
+  status: string;
+  rootFolderPath: string;
+  flaggedForReview?: boolean;
+  flagReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * AutoGrabRequest is POST /api/modes/{mode}/autograb's body — Discover's
+ * one-click unattended grab trigger for exactly one title/scene. Which fields
+ * matter is mode-specific:
+ *   - Movies:  TMDBID (drives the id-scoped Prowlarr search AND the TMDB
+ *     runtime lookup the bitrate scorer needs) + Title.
+ *   - Series:  TMDBID + Title + SeasonNumber/EpisodeNumber/SeasonSpecified —
+ *     the picker's selection ("one click PER season/episode selection", per
+ *     the plan's per-mode nuance). No per-episode runtime exists pre-grab
+ *     today, so Series candidates all grade as unknown-bitrate and the call
+ *     returns the manual fallback list rather than auto-grabbing (documented
+ *     behavior, not a bug). SeasonSpecified must be threaded through so a
+ *     deliberate Season-0/Specials grab isn't misread as "no season picked"
+ *     (see grabs.Grab.SeasonSpecified / checkImportHandler).
+ *   - Adult:   Title + Studio (the free-text Prowlarr query, mirroring
+ *     availability.CheckAdultScene) + DurationSeconds (TPDB's pre-grab
+ *     runtime → the scorer's RuntimeSeconds; 0 = unknown, handled neutrally).
+ */
+export interface AutoGrabRequest {
+  title: string;
+  tmdbId?: number /* int */;
+  studio?: string;
+  seasonNumber?: number /* int */;
+  episodeNumber?: number /* int */;
+  seasonSpecified?: boolean;
+  durationSeconds?: number /* int */;
+}
+/**
+ * AutoGrabCandidate is one graded release in an auto-grab manual-fallback list
+ * (AutoGrabResponse.Candidates). It pairs the grade (Status = why it did/didn't
+ * auto-qualify, Score = the bitrate ranking key) with the exact release
+ * identity the frontend needs to grab it manually via
+ * POST /api/modes/{mode}/search/grab — one release per click, never a batch.
+ * Status is one of internal/autograb.Status's values ("qualified",
+ * "below-floor", "mislabeled", "low-seeders", "unknown-bitrate",
+ * "unknown-resolution").
+ */
+export interface AutoGrabCandidate {
+  title: string;
+  indexer: string;
+  protocol: string;
+  downloadUrl: string;
+  size: number /* int64 */;
+  seeders: number /* int */;
+  status: string;
+  score: number /* float64 */;
+  impliedMbps: number /* float64 */;
+  floorMbps: number /* float64 */;
+  qualified: boolean;
+}
+/**
+ * AutoGrabResponse is POST /api/modes/{mode}/autograb's result — exactly one
+ * of two outcomes:
+ *   - Grabbed == true:  a release cleared every gate and was sent to the
+ *     download client. Grab is the recorded grab (also visible in the Grabs
+ *     view); Candidates is empty.
+ *   - Grabbed == false (Fallback == true): nothing auto-qualified —
+ *     Candidates is the ranked manual pick list (best bitrate score first,
+ *     the SAME score that gated auto-grab), each row labeled with why it
+ *     didn't qualify. The operator picks exactly one to grab; Grab is nil.
+ * Message is a short human summary for the UI.
+ */
+export interface AutoGrabResponse {
+  grabbed: boolean;
+  fallback: boolean;
+  message: string;
+  grab?: Grab;
+  candidates?: AutoGrabCandidate[];
+}

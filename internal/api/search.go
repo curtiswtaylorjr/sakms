@@ -186,40 +186,9 @@ func grabHandler(httpClient *http.Client, connStore *connections.Store, settings
 			return
 		}
 
-		var downloadClient, clientRef string
-		switch prowlarr.Protocol(req.Protocol) {
-		case prowlarr.Torrent:
-			if sess.QBittorrent == nil {
-				http.Error(w, "qbittorrent isn't configured yet — add it in Settings first", http.StatusBadRequest)
-				return
-			}
-			if err := sess.QBittorrent.Add(ctx, req.DownloadURL, string(m)); err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			downloadClient = "qbittorrent"
-			// A non-magnet .torrent URL leaves clientRef blank — this grab
-			// still gets recorded (visible in the Grabs list) but can't be
-			// status-polled later. See qbittorrent.HashFromMagnet's doc
-			// comment for why deriving a hash from a .torrent file itself
-			// isn't attempted here.
-			if hash, ok := qbittorrent.HashFromMagnet(req.DownloadURL); ok {
-				clientRef = hash
-			}
-		case prowlarr.Usenet:
-			if sess.NZBGet == nil {
-				http.Error(w, "nzbget isn't configured yet — add it in Settings first", http.StatusBadRequest)
-				return
-			}
-			id, err := sess.NZBGet.Append(ctx, req.DownloadURL, req.Title+".nzb", string(m))
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			downloadClient = "nzbget"
-			clientRef = strconv.FormatInt(id, 10)
-		default:
-			http.Error(w, fmt.Sprintf("unrecognized protocol %q", req.Protocol), http.StatusBadRequest)
+		downloadClient, clientRef, status, err := dispatchToDownloadClient(ctx, sess, m, req.Protocol, req.DownloadURL, req.Title)
+		if err != nil {
+			http.Error(w, err.Error(), status)
 			return
 		}
 
@@ -236,6 +205,42 @@ func grabHandler(httpClient *http.Client, connStore *connections.Store, settings
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(created)
+	}
+}
+
+// dispatchToDownloadClient sends one release to the appropriate download
+// client (qBittorrent for torrent, NZBGet for usenet) and returns the client
+// name plus a pollable client-side reference (a torrent hash, or an NZBGet id;
+// "" when it can't be derived — e.g. a non-magnet .torrent URL, which is still
+// recorded but can't be status-polled later; see qbittorrent.HashFromMagnet).
+// Shared by the manual grabHandler and the auto-grab handler — auto-grab is
+// the genuine second caller that justifies the extraction. On failure it
+// returns the HTTP status the caller should surface, preserving each path's
+// original code (400 not-configured / unrecognized-protocol, 502 client error).
+func dispatchToDownloadClient(ctx context.Context, sess *mode.Session, m mode.Mode, protocol, downloadURL, title string) (downloadClient, clientRef string, status int, err error) {
+	switch prowlarr.Protocol(protocol) {
+	case prowlarr.Torrent:
+		if sess.QBittorrent == nil {
+			return "", "", http.StatusBadRequest, errors.New("qbittorrent isn't configured yet — add it in Settings first")
+		}
+		if err := sess.QBittorrent.Add(ctx, downloadURL, string(m)); err != nil {
+			return "", "", http.StatusBadGateway, err
+		}
+		if hash, ok := qbittorrent.HashFromMagnet(downloadURL); ok {
+			clientRef = hash
+		}
+		return "qbittorrent", clientRef, http.StatusOK, nil
+	case prowlarr.Usenet:
+		if sess.NZBGet == nil {
+			return "", "", http.StatusBadRequest, errors.New("nzbget isn't configured yet — add it in Settings first")
+		}
+		id, err := sess.NZBGet.Append(ctx, downloadURL, title+".nzb", string(m))
+		if err != nil {
+			return "", "", http.StatusBadGateway, err
+		}
+		return "nzbget", strconv.FormatInt(id, 10), http.StatusOK, nil
+	default:
+		return "", "", http.StatusBadRequest, fmt.Errorf("unrecognized protocol %q", protocol)
 	}
 }
 
