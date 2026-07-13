@@ -20,14 +20,13 @@
 
 import { api } from "./client";
 import type { Proposal, AllowlistAddRequest } from "@dto";
-import type { Mode } from "./discover";
+import type { Mode, ProposalStatus } from "./discover";
 
 export type { Proposal };
-
-// ProposalStatus narrows the DTO's `status: string` to the four lifecycle
-// values proposals.Status emits (Purge only ever produces pending, then
-// applied/dismissed). Mirrors the same split rename.ts / discover.ts use.
-export type ProposalStatus = "pending" | "unmatched" | "applied" | "dismissed";
+// ProposalStatus is the single shared narrowing (see discover.ts); re-exported
+// so screens keep importing it from their workflow's api module. Purge only
+// ever produces pending, then applied/dismissed.
+export type { ProposalStatus };
 
 // scanPurge runs Purge's propose-phase for one mode: the backend matches the
 // mode's allowlist against every tracked item's tags and replaces the mode's

@@ -50,13 +50,13 @@ import {
   libraryRootFolder,
   manualGrab,
 } from "../api/grab";
-import { Button, ErrorText, Muted } from "../components/ui";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "movies", label: "Movies" },
-  { id: "series", label: "Series" },
-  { id: "adult", label: "Adult" },
-];
+import {
+  Button,
+  ErrorText,
+  ModeTabs,
+  Muted,
+  yearOf,
+} from "../components/ui";
 
 // GrabTarget is one pending auto-grab: which mode, a human label for the
 // dialog title, and the exact request body the backend needs. For Series the
@@ -74,11 +74,6 @@ const STATUS_COPY: Record<string, string> = {
   "unknown-bitrate": "runtime unknown — bitrate not scored",
   "unknown-resolution": "resolution not recognized",
 };
-
-// year pulls the leading 4-digit year from a TMDB/TPDB date string ("YYYY-..").
-function year(date: string): string {
-  return date && date.length >= 4 ? date.slice(0, 4) : "";
-}
 
 // Modal is a lightweight centered overlay for the grab dialog. Clicking the
 // backdrop or Close dismisses it; clicks inside don't bubble out.
@@ -409,7 +404,7 @@ const PosterCard: Component<{
         {props.item.title}
       </div>
       <div class="flex items-center gap-2 text-xs text-muted">
-        <span>{year(props.item.releaseDate) || "—"}</span>
+        <span>{yearOf(props.item.releaseDate) ?? "—"}</span>
         <Show when={props.item.voteAverage > 0}>
           <span>★ {props.item.voteAverage.toFixed(1)}</span>
         </Show>
@@ -479,7 +474,7 @@ const Hero: Component<{
           <div class="relative max-w-2xl p-6">
             <h1 class="text-2xl font-semibold text-fg">{item().title}</h1>
             <div class="mt-1 flex items-center gap-3 text-sm text-muted">
-              <span>{year(item().releaseDate)}</span>
+              <span>{yearOf(item().releaseDate)}</span>
               <Show when={item().voteAverage > 0}>
                 <span>★ {item().voteAverage.toFixed(1)}</span>
               </Show>
@@ -519,10 +514,13 @@ const TitleDiscover: Component<{ mode: "movies" | "series" }> = (props) => {
     <div>
       <Show when={trending.error || popular.error}>
         <ErrorText>
-          {(trending.error as Error)?.message ??
-            (popular.error as Error)?.message}
+          {((trending.error ?? popular.error) as Error)?.message}
         </ErrorText>
       </Show>
+      {/* The top trending title deliberately appears BOTH as the hero banner
+          and as the first card of the "Trending this week" row below — the
+          Seerr/Netflix-style featured-item-also-in-its-row treatment, not a
+          bug (Discover.test.tsx locks this). Don't skip index 0 in the row. */}
       <Show when={!trending.loading}>
         <Hero item={trending()?.[0]} mode={props.mode} onGrab={setGrabTarget} />
       </Show>
@@ -563,7 +561,7 @@ const AdultCard: Component<{
   );
   const src = () => proxyImage(props.item.image);
   const subtitle = () =>
-    [props.item.studio, year(props.item.date)].filter(Boolean).join(" · ");
+    [props.item.studio, yearOf(props.item.date)].filter(Boolean).join(" · ");
   const grab = () =>
     props.onGrab({
       mode: "adult",
@@ -653,23 +651,7 @@ export const Discover: Component = () => {
   const [mode, setMode] = createSignal<Mode>("movies");
   return (
     <div>
-      <div class="flex gap-1">
-        <For each={MODES}>
-          {(m) => (
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-              classList={{
-                "bg-accent text-accent-fg": mode() === m.id,
-                "bg-surface-2 text-muted hover:text-fg": mode() !== m.id,
-              }}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          )}
-        </For>
-      </div>
+      <ModeTabs current={mode} onSelect={setMode} class="flex gap-1" />
       <div class="mt-4">
         <Switch>
           <Match when={mode() === "adult"}>

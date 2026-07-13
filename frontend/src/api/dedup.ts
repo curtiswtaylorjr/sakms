@@ -25,14 +25,13 @@
 
 import { api } from "./client";
 import type { Candidate, DedupApplyRequest, Proposal } from "@dto";
-import type { Mode } from "./discover";
+import type { Mode, ProposalStatus } from "./discover";
 
 export type { Candidate, Proposal };
-
-// ProposalStatus narrows the DTO's `status: string` to the four lifecycle values
-// proposals.Status emits (Dedup only ever produces pending, then
-// applied/dismissed). Mirrors the same split rename.ts / purge.ts use.
-export type ProposalStatus = "pending" | "unmatched" | "applied" | "dismissed";
+// ProposalStatus is the single shared narrowing (see discover.ts); re-exported
+// so screens keep importing it from their workflow's api module. Dedup only
+// ever produces pending, then applied/dismissed.
+export type { ProposalStatus };
 
 // scanDedup runs Dedup's propose-phase for one mode: the backend scans the
 // mode's library root, groups duplicates, and replaces the mode's pending queue

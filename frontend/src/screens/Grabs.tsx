@@ -17,13 +17,7 @@ import {
 } from "solid-js";
 import { type Grab, fetchGrabs } from "../api/grab";
 import type { Mode } from "../api/discover";
-import { ErrorText, Muted } from "../components/ui";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "movies", label: "Movies" },
-  { id: "series", label: "Series" },
-  { id: "adult", label: "Adult" },
-];
+import { ErrorText, ModeTabs, Muted } from "../components/ui";
 
 // ReviewBadge is the advisory flag — amber, explicitly worded so it doesn't
 // read as an import failure. Rendered only when the grab is flagged.
@@ -67,23 +61,7 @@ export const Grabs: Component = () => {
 
   return (
     <div>
-      <div class="mb-4 flex gap-1">
-        <For each={MODES}>
-          {(m) => (
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-              classList={{
-                "bg-accent text-accent-fg": mode() === m.id,
-                "bg-surface-2 text-muted hover:text-fg": mode() !== m.id,
-              }}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          )}
-        </For>
-      </div>
+      <ModeTabs current={mode} onSelect={setMode} />
       <Show when={grabs.error}>
         <ErrorText>{(grabs.error as Error)?.message}</ErrorText>
       </Show>

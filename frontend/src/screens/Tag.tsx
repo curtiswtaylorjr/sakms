@@ -41,13 +41,13 @@ import {
   fetchTrackedItems,
   removeTag,
 } from "../api/tag";
-import { Button, ErrorText, Muted, inputClass } from "../components/ui";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "movies", label: "Movies" },
-  { id: "series", label: "Series" },
-  { id: "adult", label: "Adult" },
-];
+import {
+  Button,
+  ErrorText,
+  ModeTabs,
+  Muted,
+  inputClass,
+} from "../components/ui";
 
 // TagView is one mode's tag editor. Keyed on props.mode so both resources
 // refetch when the shell switches tabs. vocab + tracked load in parallel.
@@ -98,11 +98,11 @@ const TagView: Component<{ mode: Mode }> = (props) => {
   };
 
   const submitAdd = (item: TrackedItem) => {
-    const label = (draft()[Number(item.id)] ?? "").trim();
+    const label = (draft()[item.id] ?? "").trim();
     if (!label) return;
     void act(async () => {
-      await addTag(props.mode, Number(item.id), label);
-      setDraft((prev) => ({ ...prev, [Number(item.id)]: "" }));
+      await addTag(props.mode, item.id, label);
+      setDraft((prev) => ({ ...prev, [item.id]: "" }));
     });
   };
 
@@ -160,7 +160,7 @@ const TagView: Component<{ mode: Mode }> = (props) => {
                                     void act(() =>
                                       removeTag(
                                         props.mode,
-                                        Number(item.id),
+                                        item.id,
                                         tag,
                                       ),
                                     )
@@ -181,11 +181,11 @@ const TagView: Component<{ mode: Mode }> = (props) => {
                             list={datalistId()}
                             placeholder="tag label"
                             aria-label={`Add tag to ${item.title}`}
-                            value={draft()[Number(item.id)] ?? ""}
+                            value={draft()[item.id] ?? ""}
                             onInput={(e) =>
                               setDraft((prev) => ({
                                 ...prev,
-                                [Number(item.id)]: e.currentTarget.value,
+                                [item.id]: e.currentTarget.value,
                               }))
                             }
                             onKeyDown={(e) => {
@@ -216,23 +216,7 @@ export const Tag: Component = () => {
   const [mode, setMode] = createSignal<Mode>("movies");
   return (
     <div>
-      <div class="mb-4 flex gap-1">
-        <For each={MODES}>
-          {(m) => (
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-              classList={{
-                "bg-accent text-accent-fg": mode() === m.id,
-                "bg-surface-2 text-muted hover:text-fg": mode() !== m.id,
-              }}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          )}
-        </For>
-      </div>
+      <ModeTabs current={mode} onSelect={setMode} />
       <TagView mode={mode()} />
     </div>
   );

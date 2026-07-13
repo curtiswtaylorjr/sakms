@@ -47,39 +47,14 @@ import {
   submitDraft,
   tmdbSearch,
 } from "../api/rename";
-import { Button, ErrorText, Muted } from "../components/ui";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "movies", label: "Movies" },
-  { id: "series", label: "Series" },
-  { id: "adult", label: "Adult" },
-];
-
-// STATUS_STYLE colors the status pill — pending amber, applied green, unmatched
-// muted, dismissed muted-strike. Keeps the review state scannable at a glance.
-const STATUS_STYLE: Record<string, string> = {
-  pending: "bg-warn/20 text-warn",
-  applied: "bg-ok/20 text-ok",
-  unmatched: "bg-surface-2 text-muted",
-  dismissed: "bg-surface-2 text-muted",
-};
-
-const StatusPill: Component<{ status: string }> = (props) => (
-  <span
-    class="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
-    classList={{
-      [STATUS_STYLE[props.status] ?? "bg-surface-2 text-muted"]: true,
-    }}
-  >
-    {props.status}
-  </span>
-);
-
-// yearOf pulls the leading 4-digit year from a TMDB date string ("YYYY-..").
-function yearOf(date: string): number | undefined {
-  const y = date && date.length >= 4 ? parseInt(date.slice(0, 4), 10) : NaN;
-  return Number.isFinite(y) ? y : undefined;
-}
+import {
+  Button,
+  ErrorText,
+  ModeTabs,
+  Muted,
+  StatusPill,
+  yearOf,
+} from "../components/ui";
 
 // shortHash renders the PHash column value — the full scheme-tagged hash is
 // too long to usefully show inline, so the cell shows a short prefix and the
@@ -340,7 +315,7 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
                                 disabled={!!p.draftId}
                                 onClick={() => act(() => submitDraft(p.id))}
                               >
-                                {p.draftId ? "Give backed" : "Give back"}
+                                {p.draftId ? "Given back" : "Give back"}
                               </Button>
                             </Show>
                             <Show when={actionable && isTitleMode()}>
@@ -373,7 +348,13 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
           <RepickPanel
             mode={props.mode as "movies" | "series"}
             proposal={p()}
-            onDone={() => act(() => Promise.resolve())}
+            onDone={() => {
+              // Re-pick already committed inside RepickPanel; just close the
+              // panel, clear any stale error, and refresh the queue.
+              setActionError("");
+              setRepickFor(null);
+              void refetch();
+            }}
             onCancel={() => setRepickFor(null)}
           />
         )}
@@ -388,23 +369,7 @@ export const Rename: Component = () => {
   const [mode, setMode] = createSignal<Mode>("movies");
   return (
     <div>
-      <div class="mb-4 flex gap-1">
-        <For each={MODES}>
-          {(m) => (
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-              classList={{
-                "bg-accent text-accent-fg": mode() === m.id,
-                "bg-surface-2 text-muted hover:text-fg": mode() !== m.id,
-              }}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          )}
-        </For>
-      </div>
+      <ModeTabs current={mode} onSelect={setMode} />
       <RenameQueue mode={mode()} />
     </div>
   );

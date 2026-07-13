@@ -9,14 +9,12 @@
 
 import { api } from "./client";
 import type { DiscoverItem, Proposal, RepickRequest } from "@dto";
-import type { Mode } from "./discover";
+import type { Mode, ProposalStatus } from "./discover";
 
 export type { Proposal, RepickRequest };
-
-// ProposalStatus narrows the DTO's `status: string` to the four lifecycle
-// values proposals.Status emits. Defined here (not in apidto) so the generated
-// DTO stays a minimal wire mirror — the same split discover.ts uses for Mode.
-export type ProposalStatus = "pending" | "unmatched" | "applied" | "dismissed";
+// ProposalStatus is the single shared narrowing (see discover.ts); re-exported
+// so screens keep importing it from their workflow's api module.
+export type { ProposalStatus };
 
 // scanRename kicks off a fresh scan for one mode. The backend replaces the
 // mode's pending/unmatched queue with what it finds; the caller then re-fetches
@@ -48,7 +46,7 @@ export function dismissProposal(id: number): Promise<unknown> {
 
 // submitDraft ("Give back") hands one unmatched proposal back to the community
 // databases as a draft. Succeeds once per proposal — the server records a
-// draftId so it can't be submitted twice (the button then renders "Give backed"
+// draftId so it can't be submitted twice (the button then renders "Given back"
 // and disables).
 export function submitDraft(id: number): Promise<unknown> {
   return api(`/api/proposals/${id}/submit-draft`, { method: "POST" });

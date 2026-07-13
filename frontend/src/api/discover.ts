@@ -17,6 +17,13 @@ export type { AdultDiscoverItem, AvailabilityResponse, DiscoverItem };
 // title-shaped Discover path; Adult is scene-shaped (TPDB).
 export type Mode = "movies" | "series" | "adult";
 
+// ProposalStatus narrows the DTO's `status: string` to the four lifecycle
+// values proposals.Status emits. The single shared definition for every review
+// workflow (Rename/Purge/Dedup), which each re-export — the same shared-narrow
+// pattern as Mode, kept out of apidto so the generated DTO stays a minimal wire
+// mirror.
+export type ProposalStatus = "pending" | "unmatched" | "applied" | "dismissed";
+
 // DiscoverCategory selects which TMDB list a Movies/Series row renders. These
 // are the only two the backend's discoverHandler accepts (trending | popular).
 export type DiscoverCategory = "trending" | "popular";

@@ -39,34 +39,13 @@ import {
   removeAllowlistTag,
   scanPurge,
 } from "../api/purge";
-import { Button, ErrorText, Muted } from "../components/ui";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "movies", label: "Movies" },
-  { id: "series", label: "Series" },
-  { id: "adult", label: "Adult" },
-];
-
-// STATUS_STYLE colors the status pill — pending amber, applied green, the rest
-// muted. A local copy (Rename.tsx's is not exported and is off-limits to edit);
-// small presentational duplication is the right tradeoff here.
-const STATUS_STYLE: Record<string, string> = {
-  pending: "bg-warn/20 text-warn",
-  applied: "bg-ok/20 text-ok",
-  unmatched: "bg-surface-2 text-muted",
-  dismissed: "bg-surface-2 text-muted",
-};
-
-const StatusPill: Component<{ status: string }> = (props) => (
-  <span
-    class="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
-    classList={{
-      [STATUS_STYLE[props.status] ?? "bg-surface-2 text-muted"]: true,
-    }}
-  >
-    {props.status}
-  </span>
-);
+import {
+  Button,
+  ErrorText,
+  ModeTabs,
+  Muted,
+  StatusPill,
+} from "../components/ui";
 
 // PurgeView is one mode's allowlist editor + delete-review queue. Keyed on
 // props.mode so both resources refetch when the shell switches tabs.
@@ -135,7 +114,7 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
   // on the same row while the first request is still pending returns early
   // before any fetch fires, so a double-click never issues two Apply calls.
   const apply = (p: Proposal) => {
-    const id = Number(p.id);
+    const id = p.id;
     if (applyingIds().has(id)) return;
     const label = p.title || p.sourceName || "";
     if (!window.confirm(`Delete "${label}" from ${props.mode}?`)) return;
@@ -269,16 +248,16 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
                             <div class="flex flex-wrap gap-1">
                               <Button
                                 class="!bg-danger !text-accent-fg"
-                                disabled={applyingIds().has(Number(p.id))}
+                                disabled={applyingIds().has(p.id)}
                                 onClick={() => apply(p)}
                               >
-                                {applyingIds().has(Number(p.id))
+                                {applyingIds().has(p.id)
                                   ? "Deleting…"
                                   : "Apply (Delete)"}
                               </Button>
                               <Button
                                 onClick={() =>
-                                  void act(() => dismissProposal(Number(p.id)))
+                                  void act(() => dismissProposal(p.id))
                                 }
                               >
                                 Dismiss
@@ -305,23 +284,7 @@ export const Purge: Component = () => {
   const [mode, setMode] = createSignal<Mode>("movies");
   return (
     <div>
-      <div class="mb-4 flex gap-1">
-        <For each={MODES}>
-          {(m) => (
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-              classList={{
-                "bg-accent text-accent-fg": mode() === m.id,
-                "bg-surface-2 text-muted hover:text-fg": mode() !== m.id,
-              }}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          )}
-        </For>
-      </div>
+      <ModeTabs current={mode} onSelect={setMode} />
       <PurgeView mode={mode()} />
     </div>
   );

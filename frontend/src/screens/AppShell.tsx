@@ -1,7 +1,6 @@
-// The authed app shell. Past auth it renders the client-side router; the
-// landing view is the read-only Discover browse (Stage 1 Wave 3). Later waves
-// add the remaining views (Settings, workflows) and Discover's auto-grab. The
-// router must never claim an /api/* path (see APP_ROUTES).
+// The authed app shell. Past auth it renders the client-side router over the
+// top tab nav; the landing view is Discover. The router must never claim an
+// /api/* path (see APP_ROUTES).
 
 import { type Component, type JSX, createSignal, Show } from "solid-js";
 import { A, Route, Router } from "@solidjs/router";
@@ -20,15 +19,15 @@ import { Settings } from "./Settings";
 // route). A unit test asserts none of these start with "/api".
 export const APP_ROUTES = ["/", "/discover", "/grabs", "/rename", "/purge", "/dedup", "/tag", "/settings"] as const;
 
-// ShellLayout is the Router root — a tab nav (Discover / Grabs) above whatever
-// route is active. Being inside <Router> is what gives <A> its active-link
-// context.
+// ShellLayout is the Router root — the top nav (Discover / Grabs / Rename /
+// Purge / Dedup / Tag / Settings) above whatever route is active. Being inside
+// <Router> is what gives <A> its active-link context.
 const ShellLayout: Component<{ children?: JSX.Element }> = (props) => (
   <>
     <nav class="mb-4 flex gap-3 border-b border-border pb-2">
       <A
         href="/discover"
-        class="text-sm font-medium text-muted hover:text-fg"
+        class="text-sm font-medium hover:text-fg"
         activeClass="text-fg"
         inactiveClass="text-muted"
       >

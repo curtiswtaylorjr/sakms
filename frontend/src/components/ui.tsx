@@ -1,10 +1,10 @@
-// Small shared primitives for the auth screens (setup / login / SSO notice).
-// Kept intentionally minimal — these are the only views this wave builds; the
-// full Seerr re-skin lands in later waves. Styling uses the theme tokens from
-// src/index.css (bg-surface, text-fg, text-muted, bg-accent, border-border,
-// text-danger) so the palette stays in one place.
+// Shared UI primitives used across the app — the auth screens (setup / login /
+// SSO notice) and the workflow/browse screens alike. Styling uses the theme
+// tokens from src/index.css (bg-surface, text-fg, text-muted, bg-accent,
+// border-border, text-danger) so the palette stays in one place.
 
-import { type JSX, splitProps } from "solid-js";
+import { type Component, type JSX, For, splitProps } from "solid-js";
+import type { Mode } from "../api/discover";
 
 export const inputClass =
   "w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg " +
@@ -80,4 +80,75 @@ export function Muted(props: {
 // ErrorText renders an error line (empty content renders nothing).
 export function ErrorText(props: { children: JSX.Element }): JSX.Element {
   return <div class="mt-2 text-sm text-danger">{props.children}</div>;
+}
+
+// MODES is the canonical Movies/Series/Adult tab set every workflow/browse
+// screen shares — defined once here so a mode is never added in one screen and
+// missed in another.
+export const MODES: { id: Mode; label: string }[] = [
+  { id: "movies", label: "Movies" },
+  { id: "series", label: "Series" },
+  { id: "adult", label: "Adult" },
+];
+
+// ModeTabs is the shared mode tab bar mounted above each screen's mode-specific
+// body. `current` is a Solid accessor (NOT a frozen value) so the active-tab
+// highlight tracks the caller's mode signal; `onSelect` sets it. The container
+// class defaults to the standard `mb-4 flex gap-1`; Discover overrides it (its
+// tabs sit above a separately-spaced body).
+export function ModeTabs(props: {
+  current: () => Mode;
+  onSelect: (mode: Mode) => void;
+  class?: string;
+}): JSX.Element {
+  return (
+    <div class={props.class ?? "mb-4 flex gap-1"}>
+      <For each={MODES}>
+        {(m) => (
+          <button
+            type="button"
+            class="rounded-md px-3 py-1.5 text-sm font-medium transition"
+            classList={{
+              "bg-accent text-accent-fg": props.current() === m.id,
+              "bg-surface-2 text-muted hover:text-fg": props.current() !== m.id,
+            }}
+            onClick={() => props.onSelect(m.id)}
+          >
+            {m.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+// STATUS_STYLE colors the proposal status pill — pending amber, applied green,
+// unmatched/dismissed muted. Shared by every review-queue screen
+// (Rename/Purge/Dedup) so the review state reads identically across them.
+export const STATUS_STYLE: Record<string, string> = {
+  pending: "bg-warn/20 text-warn",
+  applied: "bg-ok/20 text-ok",
+  unmatched: "bg-surface-2 text-muted",
+  dismissed: "bg-surface-2 text-muted",
+};
+
+// StatusPill renders one proposal's lifecycle state as a small colored pill.
+export const StatusPill: Component<{ status: string }> = (props) => (
+  <span
+    class="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
+    classList={{
+      [STATUS_STYLE[props.status] ?? "bg-surface-2 text-muted"]: true,
+    }}
+  >
+    {props.status}
+  </span>
+);
+
+// yearOf pulls the leading 4-digit year from a TMDB/TPDB date string
+// ("YYYY-.."), as a number — undefined when there is no parseable year. Shared
+// by Discover (display) and Rename's Re-pick (the numeric year sent with a new
+// match).
+export function yearOf(date: string): number | undefined {
+  const y = date && date.length >= 4 ? parseInt(date.slice(0, 4), 10) : NaN;
+  return Number.isFinite(y) ? y : undefined;
 }

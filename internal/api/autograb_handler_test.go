@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/curtiswtaylorjr/sakms/internal/apidto"
+	"github.com/curtiswtaylorjr/sakms/internal/autograb"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/quality"
 )
@@ -155,6 +156,72 @@ func TestAutoGrabHandler_Movies_FallbackGrabsNothing(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Errorf("expected zero recorded grabs on fallback, got %d", len(list))
+	}
+}
+
+// TestAutoGrabHandler_Movies_LowSeedersTorrentFallsBack exercises the
+// torrent-only seeder floor end to end: a release whose bitrate easily clears
+// the tier floor but that carries too few seeders must be disqualified as
+// low-seeders (not auto-grabbed), so the call falls back to the manual pick
+// list. This is the one path that drives a real prowlarr.Release with
+// protocol:"torrent" all the way through buildAutoGrabCandidates →
+// GradeCandidate's `c.Protocol == "torrent"` branch, so it locks that literal
+// to prowlarr's actual wire value — a drift there would flip this to a
+// spurious auto-grab.
+func TestAutoGrabHandler_Movies_LowSeedersTorrentFallsBack(t *testing.T) {
+	var qbAdds int32
+	fakeQB := fakeQBittorrent(t, func(r *http.Request) { atomic.AddInt32(&qbAdds, 1) })
+	tmdbSrv := fakeTMDBMovieRuntime(t, 100) // 100 min = 6000 s
+	// Same healthy 8 GB / x265 / 1080p release as the qualified test — its
+	// bitrate clears every Low-tier floor — but only 2 seeders (< the default
+	// minimum of 5), so the torrent seeder floor is the sole disqualifier.
+	prowlarr := fakeProwlarr(t, `[{"guid":"1","title":"Some.Movie.2023.1080p.WEB-DL.x265-GROUP","indexer":"I","protocol":"torrent","size":8000000000,"seeders":2,"downloadUrl":"magnet:?xt=urn:btih:ABCDEF1234567890abcdef1234567890abcdef12"}]`)
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	ctx := context.Background()
+	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := connStore.Upsert(ctx, "prowlarr", prowlarr.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, qualityTierKey(mode.Movies), string(quality.Low)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, moviesLibraryRootFolderKey, "/movies"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	body, _ := json.Marshal(apidto.AutoGrabRequest{Title: "Some Movie", TMDBID: 42})
+	resp, err := http.Post(srv.URL+"/api/modes/movies/autograb", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var out apidto.AutoGrabResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if out.Grabbed || !out.Fallback || out.Grab != nil {
+		t.Fatalf("expected a low-seeders fallback (no auto-grab), got %+v", out)
+	}
+	if len(out.Candidates) != 1 || out.Candidates[0].Qualified {
+		t.Fatalf("expected one non-qualified candidate, got %+v", out.Candidates)
+	}
+	if out.Candidates[0].Status != string(autograb.StatusLowSeeders) {
+		t.Errorf("expected low-seeders status for a 2-seeder torrent, got %q", out.Candidates[0].Status)
+	}
+	if got := atomic.LoadInt32(&qbAdds); got != 0 {
+		t.Errorf("expected ZERO download-client adds on a low-seeders fallback, got %d", got)
 	}
 }
 

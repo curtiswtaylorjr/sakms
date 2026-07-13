@@ -51,34 +51,13 @@ import {
   fetchDedupProposals,
   scanDedup,
 } from "../api/dedup";
-import { Button, ErrorText, Muted } from "../components/ui";
-
-const MODES: { id: Mode; label: string }[] = [
-  { id: "movies", label: "Movies" },
-  { id: "series", label: "Series" },
-  { id: "adult", label: "Adult" },
-];
-
-// STATUS_STYLE colors the status pill — pending amber, applied green, the rest
-// muted. A local copy (Rename/Purge each keep their own); small presentational
-// duplication is the right tradeoff over a premature shared abstraction.
-const STATUS_STYLE: Record<string, string> = {
-  pending: "bg-warn/20 text-warn",
-  applied: "bg-ok/20 text-ok",
-  unmatched: "bg-surface-2 text-muted",
-  dismissed: "bg-surface-2 text-muted",
-};
-
-const StatusPill: Component<{ status: string }> = (props) => (
-  <span
-    class="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
-    classList={{
-      [STATUS_STYLE[props.status] ?? "bg-surface-2 text-muted"]: true,
-    }}
-  >
-    {props.status}
-  </span>
-);
+import {
+  Button,
+  ErrorText,
+  ModeTabs,
+  Muted,
+  StatusPill,
+} from "../components/ui";
 
 // winnerIndex returns the index of the group's flagged keeper, defaulting to 0
 // when none is flagged (mirrors the backend's own winnerIndex fallback).
@@ -148,7 +127,7 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
   // choice if made, else the group's flagged winner. Always a real number
   // (including 0) so applyKeep never drops a literal-0 index.
   const selectedKeep = (p: Proposal): number => {
-    const chosen = keepSel()[Number(p.id)];
+    const chosen = keepSel()[p.id];
     return chosen ?? winnerIndex(p.candidates ?? []);
   };
 
@@ -219,7 +198,7 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
                                     onChange={() =>
                                       setKeepSel((prev) => ({
                                         ...prev,
-                                        [Number(p.id)]: i(),
+                                        [p.id]: i(),
                                       }))
                                     }
                                   />
@@ -246,24 +225,20 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
                         <Button
                           variant="primary"
                           onClick={() =>
-                            void act(() =>
-                              applyKeep(Number(p.id), selectedKeep(p)),
-                            )
+                            void act(() => applyKeep(p.id, selectedKeep(p)))
                           }
                         >
                           Apply
                         </Button>
                         <Button
-                          onClick={() =>
-                            void act(() => applyKeepAll(Number(p.id)))
-                          }
+                          onClick={() => void act(() => applyKeepAll(p.id))}
                         >
                           Keep All
                         </Button>
                         <Button
                           class="!bg-danger !text-accent-fg"
                           onClick={() =>
-                            void act(() => dismissProposal(Number(p.id)))
+                            void act(() => dismissProposal(p.id))
                           }
                         >
                           Dismiss
@@ -287,23 +262,7 @@ export const Dedup: Component = () => {
   const [mode, setMode] = createSignal<Mode>("movies");
   return (
     <div>
-      <div class="mb-4 flex gap-1">
-        <For each={MODES}>
-          {(m) => (
-            <button
-              type="button"
-              class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-              classList={{
-                "bg-accent text-accent-fg": mode() === m.id,
-                "bg-surface-2 text-muted hover:text-fg": mode() !== m.id,
-              }}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          )}
-        </For>
-      </div>
+      <ModeTabs current={mode} onSelect={setMode} />
       <DedupView mode={mode()} />
     </div>
   );
