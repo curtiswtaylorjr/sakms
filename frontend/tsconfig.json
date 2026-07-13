@@ -6,7 +6,12 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
-    "types": ["vite/client"],
+    "types": ["vite/client", "vitest/globals"],
+
+    "baseUrl": ".",
+    "paths": {
+      "@dto": ["../internal/apidto/ts/dto.gen.ts"]
+    },
 
     "strict": true,
     "noUnusedLocals": true,
@@ -20,5 +25,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "../internal/apidto/ts/dto.gen.ts"]
 }
