@@ -12,6 +12,13 @@ RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
+# frontend/tsconfig.json's "@dto" path alias resolves to
+# ../internal/apidto/ts/dto.gen.ts relative to this stage's WORKDIR
+# (/src/frontend) — i.e. /src/internal/apidto/ts inside this stage. This
+# stage's build context is otherwise scoped to frontend/ alone, so that
+# directory must be copied in explicitly or every @dto import fails here
+# despite working fine in a normal (non-Docker) checkout.
+COPY internal/apidto/ts /src/internal/apidto/ts
 COPY frontend/ ./
 # Writes to /src/internal/web/static (outDir is ../internal/web/static
 # relative to this frontend/ workdir), mirroring the local-dev layout.
