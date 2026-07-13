@@ -131,13 +131,12 @@ func tmdbSearchHandler(httpClient *http.Client, connStore *connections.Store, se
 }
 
 // posterHandler resolves a Movies/Series library card's poster art lazily,
-// per card, keyed by tmdbId — mirroring availabilityHandler's per-card probe
-// pattern. SAK's library caches TMDBID/Year but no poster path, so the
-// existing-library row on Discover fetches each visible card's poster on
-// demand (one bounded call per rendered card) rather than the list endpoint
-// doing an unbounded N+1 lookup for the whole library up front, exactly the
-// N+1 discoverHandler's own doc warns against. Movies/Series only — Adult
-// scenes carry their own image inline from TPDB.
+// per card, keyed by tmdbId. SAK's library caches TMDBID/Year but no poster
+// path, so the existing-library row on Discover fetches each visible card's
+// poster on demand (one bounded call per rendered card) rather than the list
+// endpoint doing an unbounded N+1 lookup for the whole library up front,
+// exactly the N+1 discoverHandler's own doc warns against. Movies/Series
+// only — Adult scenes carry their own image inline from TPDB.
 func posterHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
