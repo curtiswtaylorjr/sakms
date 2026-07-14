@@ -705,3 +705,164 @@ export interface NetscanProwlarrKeyRequest {
 export interface NetscanProwlarrKeyResponse {
   apiKey: string;
 }
+/**
+ * Genre is one TMDB genre — mirrors tmdb.Genre's wire shape. Backs GET
+ * /api/modes/{mode}/discover/genres (a movie or TV genre list depending on
+ * {mode}'s media type) and is the reference list a "genre" slider's
+ * FilterValue picks from.
+ */
+export interface Genre {
+  id: number /* int */;
+  name: string;
+}
+/**
+ * Studio is a well-known movie production company — mirrors tmdb.Studio.
+ * Backs GET /api/discover/studios, the fixed seed-list reference a "browse
+ * by studio" row / "studio" slider's FilterValue picks from. Movies-only —
+ * TMDB companies are a movie-catalog concept with no TV equivalent (see
+ * Network below for TV's parallel concept).
+ */
+export interface Studio {
+  id: number /* int */;
+  name: string;
+}
+/**
+ * Network is a well-known TV network/streaming service — mirrors
+ * tmdb.Network. Backs GET /api/discover/networks, Studio's direct sibling
+ * for the TV catalog (TV-only, symmetric restriction to Studio's
+ * movies-only one).
+ */
+export interface Network {
+  id: number /* int */;
+  name: string;
+}
+/**
+ * Keyword is one TMDB keyword search result — mirrors tmdb.Keyword. Backs
+ * GET /api/discover/keywords?q=, the free-text lookup an admin slider editor
+ * uses to resolve typed text (e.g. "heist") into the numeric TMDB keyword id
+ * a "keyword" filter_type slider actually stores as FilterValue — unlike
+ * Genre/Studio/Network, TMDB has no fixed enumerable keyword list to serve
+ * as a seed list.
+ */
+export interface Keyword {
+  id: number /* int */;
+  name: string;
+}
+/**
+ * Slider is one admin-defined custom Discover row — mirrors
+ * discoversliders.Slider's wire shape. FilterType is one of "genre" |
+ * "keyword" | "studio" | "network" | "upcoming" | "trending" | "popular";
+ * Target restricts results to "movie" | "tv" | "mixed". FilterValue is a
+ * stringified TMDB id (genre/studio/network/keyword) and is empty for the
+ * three fixed feeds (upcoming/trending/popular) — see
+ * discoversliders.Store's validate for the enforced pairing rule.
+ */
+export interface Slider {
+  id: number /* int */;
+  title: string;
+  filterType: string;
+  filterValue?: string;
+  target: string;
+  sortOrder: number /* int */;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * SliderUpsertRequest is the body of POST /api/discover/sliders (create) and
+ * PUT /api/discover/sliders/{id} (update) — every editable field, mirroring
+ * discoversliders.Store.Create/Update's parameters exactly. Nothing in a
+ * slider is a secret, so unlike ConnectionUpsertRequest.APIKey every field
+ * here is a plain (non-pointer) required value — there is no "preserve
+ * unchanged" partial-update mode; a save always sends the full slider.
+ */
+export interface SliderUpsertRequest {
+  title: string;
+  filterType: string;
+  filterValue?: string;
+  target: string;
+  enabled: boolean;
+}
+/**
+ * SliderReorderRequest is POST /api/discover/sliders/reorder's body — ids in
+ * display order, covering every existing slider exactly once. One explicit
+ * "here is the full new order" action, not a per-item bulk mutation (see
+ * discoversliders.Store.Reorder's doc comment for why).
+ */
+export interface SliderReorderRequest {
+  ids: number /* int */[];
+}
+/**
+ * TraktStatusResponse is GET /api/trakt/status's response — the general
+ * "is Trakt usable right now" summary, consumed by both Settings (to render
+ * configured/linked state and pre-fill the client_id field via ClientID)
+ * and the Discover watchlist row. An unconfigured connection returns the
+ * zero value (Configured: false), not an error. ClientID is not secret
+ * (Trakt sends it as a plain header on every request, same as
+ * ConnectionSummary.URL's pre-fill convention) — never the client_secret or
+ * tokens themselves.
+ */
+export interface TraktStatusResponse {
+  configured: boolean;
+  linked: boolean;
+  clientId?: string;
+  tokenExpiresAt?: string;
+}
+/**
+ * TraktCredentialsRequest is PUT /api/trakt/credentials's body — the
+ * operator-entered Trakt application. ClientSecret follows the same
+ * three-state rule as ConnectionUpsertRequest.APIKey (nil = preserve
+ * stored secret, "" = clear, non-empty = set) — see that field's doc
+ * comment for the full rule; a naive `clientSecret?: string` would
+ * silently wipe the stored secret on an untouched save here too.
+ */
+export interface TraktCredentialsRequest {
+  clientId: string;
+  clientSecret?: string;
+}
+/**
+ * TraktDeviceStartResponse is POST /api/trakt/device/start's response —
+ * everything the frontend needs to show the operator (a code to enter and
+ * a URL to visit) and to know how often to call POST /api/trakt/device/poll.
+ * The device_code itself (the secret the server polls with) is deliberately
+ * not included; polling is server-side.
+ */
+export interface TraktDeviceStartResponse {
+  userCode: string;
+  verificationUrl: string;
+  expiresIn: number /* int */;
+  interval: number /* int */;
+}
+/**
+ * TraktDevicePollResponse is POST /api/trakt/device/poll's response — one
+ * non-blocking poll attempt against the in-progress device authorization
+ * started by TraktDeviceStartResponse. Deliberately a separate endpoint
+ * from TraktStatusResponse above: this one drives the Connect-flow UI's
+ * polling loop, the other answers "is Trakt usable right now" everywhere
+ * else. Linked true means tokens were saved and the flow is done; Pending
+ * true means keep polling; both false (a denied or expired device code)
+ * means the flow is over without success — the frontend's own
+ * client-side deadline (from TraktDeviceStartResponse.ExpiresIn) and the
+ * 409 a subsequent poll gets (the server clears the flow on any terminal
+ * outcome) are what surface that to the operator, since there's no
+ * separate "denied"/"expired" field on the wire.
+ */
+export interface TraktDevicePollResponse {
+  linked: boolean;
+  pending: boolean;
+}
+/**
+ * TraktWatchlistItem is one entry of GET /api/trakt/watchlist's response —
+ * a near-direct mirror of internal/trakt.WatchlistItem's fields. Note this
+ * is deliberately NOT DiscoverItem's shape: Trakt's watchlist API provides
+ * no poster/overview/rating at all, so there is nothing to mirror there;
+ * any TMDB enrichment by TmdbId is the frontend's job, not done server-side
+ * (an N-item watchlist would otherwise mean N extra TMDB calls per page
+ * load).
+ */
+export interface TraktWatchlistItem {
+  type: string;
+  title: string;
+  year?: number /* int */;
+  tmdbId: number /* int */;
+}

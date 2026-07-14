@@ -1,60 +1,35 @@
 // Trakt data access — backs the Settings "Trakt" connection section (OAuth
 // device-code flow) and Discover's Trakt Watchlist row (task #8).
 //
-// PLACEHOLDER CONTRACT (task #5, owned by worker-1, is still in progress as of
-// this writing — no `internal/apidto` Trakt types exist yet). Every path and
-// type below is a proposal sent to worker-1 (not yet confirmed), modeled
-// directly off worker-2's internal/trakt package (Session/Store/Client):
-// TraktStatusResponse mirrors Store.Configured + Tokens.Linked + ExpiresAt;
-// TraktCredentialsRequest mirrors Store.SaveCredentials(clientID, *string);
-// TraktDeviceStartResponse mirrors trakt.DeviceCode (device_code itself stays
-// server-side, never sent to the client); TraktDevicePollResponse wraps one
-// Client.PollDeviceToken attempt (not the blocking PollUntilToken);
-// TraktWatchlistItem mirrors trakt.WatchlistItem exactly.
-//
-// THIS FILE IS THE ONLY PLACE THESE TYPES/PATHS ARE DEFINED — once task #5
-// lands real `@dto` exports and real routes, only this file needs to change
-// (swap the local interfaces below for `@dto` imports, adjust paths if they
-// differ from the proposal). No other file should hand-duplicate these shapes.
+// CONFIRMED CONTRACT (2026-07-14): task #5/#9 landed real internal/apidto
+// types and internal/api routes matching this file's original proposal
+// field-for-field (worker-1 verified dto.gen.ts against this file directly
+// before finalizing) — GET /api/trakt/status, PUT /api/trakt/credentials,
+// POST /api/trakt/device/start, POST /api/trakt/device/poll,
+// POST /api/trakt/disconnect, GET /api/trakt/watchlist. Types now come from
+// the generated @dto boundary like every other api/*.ts file, not hand-
+// duplicated here.
 //
 // Three-state secret convention (same as ConnectionUpsertRequest.apiKey /
 // Guardrail #5): clientSecret is omitted entirely to preserve the stored
 // secret, sent as "" to clear it, non-empty to set it. NEVER send null.
 
 import { api } from "./client";
+import type {
+  TraktCredentialsRequest,
+  TraktDevicePollResponse,
+  TraktDeviceStartResponse,
+  TraktStatusResponse,
+  TraktWatchlistItem,
+} from "@dto";
 
-// --- Placeholder types (see file doc comment above) -------------------------
-
-export interface TraktStatusResponse {
-  configured: boolean;
-  linked: boolean;
-  clientId?: string; // pre-fills the Settings form, same as ConnectionSummary.url — never the secret
-  tokenExpiresAt?: string;
-}
-
-export interface TraktCredentialsRequest {
-  clientId: string;
-  clientSecret?: string;
-}
-
-export interface TraktDeviceStartResponse {
-  userCode: string;
-  verificationUrl: string;
-  expiresIn: number;
-  interval: number;
-}
-
-export interface TraktDevicePollResponse {
-  linked: boolean;
-  pending: boolean;
-}
-
-export interface TraktWatchlistItem {
-  type: string; // "movie" | "show"
-  title: string;
-  year: number;
-  tmdbId: number;
-}
+export type {
+  TraktCredentialsRequest,
+  TraktDevicePollResponse,
+  TraktDeviceStartResponse,
+  TraktStatusResponse,
+  TraktWatchlistItem,
+};
 
 // --- Calls -------------------------------------------------------------------
 
