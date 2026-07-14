@@ -8,7 +8,9 @@ import {
   type JSX,
   type Setter,
   For,
+  Show,
   createContext,
+  createSignal,
   onCleanup,
   onMount,
   splitProps,
@@ -90,6 +92,45 @@ export function Muted(props: {
 // ErrorText renders an error line (empty content renders nothing).
 export function ErrorText(props: { children: JSX.Element }): JSX.Element {
   return <div class="mt-2 text-sm text-danger">{props.children}</div>;
+}
+
+// Card is the fieldset frame every settings-style panel shares (originally
+// Settings.tsx-local; hoisted here so other screens, e.g. the admin slider
+// editor, can reuse the same frame instead of duplicating its styling).
+export const Card: Component<{ title: string; children: JSX.Element }> = (
+  props,
+) => (
+  <fieldset class="mb-4 rounded-xl border border-border bg-surface p-4">
+    <legend class="px-2 text-sm font-semibold text-fg">{props.title}</legend>
+    {props.children}
+  </fieldset>
+);
+
+// SaveStatus renders the inline "saved" / error line every panel's Save button
+// pairs with. text is empty until an action runs.
+export const SaveStatus: Component<{ text: string; error: boolean }> = (
+  props,
+) => (
+  <Show when={props.text}>
+    <span class={`text-sm ${props.error ? "text-danger" : "text-muted"}`}>
+      {props.text}
+    </span>
+  </Show>
+);
+
+// useSaveStatus is the tiny per-panel status signal helper.
+export function useSaveStatus() {
+  const [status, setStatus] = createSignal<{ text: string; error: boolean }>({
+    text: "",
+    error: false,
+  });
+  return {
+    status,
+    saved: () => setStatus({ text: "saved", error: false }),
+    failed: (e: unknown) =>
+      setStatus({ text: (e as Error).message, error: true }),
+    set: (text: string) => setStatus({ text, error: false }),
+  };
 }
 
 // MODES is the canonical Movies/Series/Adult tab set every workflow/browse

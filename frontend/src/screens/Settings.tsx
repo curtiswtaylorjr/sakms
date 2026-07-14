@@ -31,7 +31,6 @@
 
 import {
   type Component,
-  type JSX,
   createEffect,
   createResource,
   createSignal,
@@ -93,16 +92,20 @@ import {
   startTraktDeviceFlow,
   type TraktDeviceStartResponse,
 } from "../api/trakt";
+import { SliderAdminSection } from "./SliderAdmin";
 import {
   Button,
+  Card,
   ErrorText,
   MODES,
   Muted,
+  SaveStatus,
   ScreenTabBar,
   ScreenTabs,
   type TabDef,
   inputClass,
   labelClass,
+  useSaveStatus,
 } from "../components/ui";
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -111,38 +114,9 @@ const MODE_LABELS: Record<Mode, string> = {
   adult: "Adult",
 };
 
-// Card is the fieldset frame every settings panel shares.
-const Card: Component<{ title: string; children: JSX.Element }> = (props) => (
-  <fieldset class="mb-4 rounded-xl border border-border bg-surface p-4">
-    <legend class="px-2 text-sm font-semibold text-fg">{props.title}</legend>
-    {props.children}
-  </fieldset>
-);
-
-// SaveStatus renders the inline "saved" / error line every panel's Save button
-// pairs with. text is empty until an action runs.
-const SaveStatus: Component<{ text: string; error: boolean }> = (props) => (
-  <Show when={props.text}>
-    <span class={`text-sm ${props.error ? "text-danger" : "text-muted"}`}>
-      {props.text}
-    </span>
-  </Show>
-);
-
-// useSaveStatus is the tiny per-panel status signal helper.
-function useSaveStatus() {
-  const [status, setStatus] = createSignal<{ text: string; error: boolean }>({
-    text: "",
-    error: false,
-  });
-  return {
-    status,
-    saved: () => setStatus({ text: "saved", error: false }),
-    failed: (e: unknown) =>
-      setStatus({ text: (e as Error).message, error: true }),
-    set: (text: string) => setStatus({ text, error: false }),
-  };
-}
+// Card/SaveStatus/useSaveStatus moved to components/ui.tsx (2026-07-14) so the
+// admin slider editor can share the same panel frame/status-line convention
+// instead of duplicating it — imported from "../components/ui" below.
 
 // ---- Connections ----------------------------------------------------------
 
@@ -1432,6 +1406,7 @@ const SECTION_TABS: TabDef[] = [
   { id: "ai", label: "AI" },
   { id: "library", label: "Library" },
   { id: "advanced", label: "Advanced" },
+  { id: "sliders", label: "Sliders" },
 ];
 
 // ModeSelector is the inline Movies/Series/Adult tab bar shared by the Library
@@ -1496,6 +1471,10 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
       <Show when={section() === "advanced"}>
         <ModeSelector mode={mode} onSelect={setMode} />
         <AdvancedSection mode={mode} />
+      </Show>
+
+      <Show when={section() === "sliders"}>
+        <SliderAdminSection />
       </Show>
     </div>
   );

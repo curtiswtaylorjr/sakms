@@ -65,6 +65,7 @@ function defaultGet(url: string): Response | undefined {
   if (url.includes("/identify-enabled")) return jsonResponse({ enabled: true });
   if (url.includes("/api/trakt/status"))
     return jsonResponse({ configured: false, linked: false });
+  if (url.includes("/api/discover/sliders")) return jsonResponse([]);
   return undefined;
 }
 
@@ -101,8 +102,9 @@ const renderSettings = () => render(() => <Settings onReboot={() => {}} />);
 // Connections panel must navigate there first. Section-tab buttons are queried
 // by role+name so they never collide with a Card's <legend> of the same text
 // (legends aren't buttons) nor with the Movies/Series/Adult mode buttons.
-const goToSection = (name: "Connections" | "Auth" | "AI" | "Library" | "Advanced") =>
-  fireEvent.click(screen.getByRole("button", { name }));
+const goToSection = (
+  name: "Connections" | "Auth" | "AI" | "Library" | "Advanced" | "Sliders",
+) => fireEvent.click(screen.getByRole("button", { name }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -881,6 +883,14 @@ describe("Section tabs", () => {
     expect(
       screen.queryByLabelText("Background recheck interval (seconds) — global"),
     ).toBeNull(); // Advanced
+  });
+
+  it("Sliders tab shows the admin slider editor, hiding Connections", async () => {
+    stubFetch();
+    renderSettings();
+    goToSection("Sliders");
+    expect(await screen.findByText("+ New slider")).toBeInTheDocument();
+    expect(screen.queryByText("API Key / Password")).toBeNull();
   });
 
   it("Auth tab groups Authentication mode AND API Access, hiding Connections", async () => {
