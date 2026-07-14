@@ -19,6 +19,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/config"
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
 	"github.com/curtiswtaylorjr/sakms/internal/db"
+	"github.com/curtiswtaylorjr/sakms/internal/discoversliders"
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
@@ -28,6 +29,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/recheck"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/trakt"
 	"github.com/curtiswtaylorjr/sakms/internal/videophash"
 	"github.com/curtiswtaylorjr/sakms/internal/web"
 )
@@ -75,6 +77,12 @@ func run() error {
 	settingsStore := settings.New(sqlDB)
 	grabsStore := grabs.New(sqlDB)
 	libStore := library.New(sqlDB)
+	slidersStore := discoversliders.New(sqlDB)
+	// traktStore persists Trakt's single application connection + linked
+	// account tokens (its own table, not connections.Store — see
+	// internal/trakt's package doc for why); secretStore encrypts the same
+	// way it does for connStore.
+	traktStore := trakt.NewStore(sqlDB, secretStore)
 	// watchStore backs the opt-in background recheck job (internal/recheck) —
 	// its own table, shared with nothing else. Constructed here only so the one
 	// start-call below can be handed it; nothing else in the program reads it.
@@ -122,7 +130,7 @@ func run() error {
 	// internal/api.NewAuthMux's doc comment) — NewMux stays unaware auth
 	// exists either way, so its own large test suite never had to change
 	// for auth specifically.
-	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, videoHasher, settingsStore, grabsStore, libStore)
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, videoHasher, settingsStore, grabsStore, libStore, slidersStore, traktStore)
 	protectedAPI := auth.Middleware(secretStore, authStore, apiMux)
 
 	// API-key management (status + regenerate) is session-protected like

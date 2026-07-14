@@ -46,7 +46,7 @@ func TestDiscoverHandler_MoviesUsesMovieMediaType(t *testing.T) {
 		w.Write([]byte(`{"results":[{"id":1,"title":"Some Movie","poster_path":"/x.jpg","vote_average":7.5}]}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -54,7 +54,7 @@ func TestDiscoverHandler_MoviesUsesMovieMediaType(t *testing.T) {
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/discover")
@@ -85,7 +85,7 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 		w.Write([]byte(`{"results":[{"id":2,"name":"Some Show","poster_path":"/y.jpg","vote_average":8.0}]}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -93,7 +93,7 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/discover?category=popular")
@@ -114,11 +114,11 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 }
 
 func TestDiscoverHandler_TMDBNotConfigured(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/discover")
@@ -143,11 +143,11 @@ func TestDiscoverHandler_PageParamForwarded(t *testing.T) {
 		w.Write([]byte(`{"results":[{"id":1,"title":"Some Movie"}]}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/discover")
@@ -180,11 +180,11 @@ func TestPosterHandler_ReturnsPosterPath(t *testing.T) {
 		w.Write([]byte(`{"id":99,"title":"A Movie","poster_path":"/p99.jpg"}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/poster?tmdbId=99")
@@ -207,11 +207,11 @@ func TestPosterHandler_ReturnsPosterPath(t *testing.T) {
 // TestPosterHandler_RequiresTmdbID proves a missing/invalid tmdbId is a 400,
 // not a silent zero-id upstream lookup.
 func TestPosterHandler_RequiresTmdbID(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "tmdb", "http://tmdb.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/poster")
@@ -228,8 +228,8 @@ func TestPosterHandler_RequiresTmdbID(t *testing.T) {
 // — Adult scenes carry their own image inline from TPDB, they have no tmdbId
 // to look up a poster by (see posterHandler's doc comment).
 func TestPosterHandler_RejectsAdultMode(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/poster?tmdbId=99")
@@ -251,7 +251,7 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 		w.Write([]byte(`{"tvdb_id":12345}`))
 	})
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -259,7 +259,7 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/discover/tvdb-id?tmdbId=2")
@@ -280,11 +280,11 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 }
 
 func TestResolveTVDBIDHandler_RequiresTmdbIDParam(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	if err := connStore.Upsert(context.Background(), "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/discover/tvdb-id")
@@ -294,5 +294,270 @@ func TestResolveTVDBIDHandler_RequiresTmdbIDParam(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 without a tmdbId param, got %d", resp.StatusCode)
+	}
+}
+
+// TestDiscoverHandler_UpcomingUsesOnTheAirForSeries proves category=upcoming
+// dispatches to /movie/upcoming for Movies and /tv/on_the_air for Series
+// (tmdb.UpcomingTV's doc comment explains why on_the_air, not
+// airing_today/upcoming, is the TV analog).
+func TestDiscoverHandler_UpcomingUsesOnTheAirForSeries(t *testing.T) {
+	var gotPath string
+	fake := fakeTMDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"results":[{"id":1,"name":"Some Show"}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/series/discover?category=upcoming")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/tv/on_the_air" {
+		t.Errorf("expected /tv/on_the_air, got %s", gotPath)
+	}
+}
+
+// TestDiscoverHandler_GenreRequiresGenreID proves category=genre without a
+// genreId query param is a 400, not a zero-id upstream lookup.
+func TestDiscoverHandler_GenreRequiresGenreID(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", "http://tmdb.local", "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/movies/discover?category=genre")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 without genreId, got %d", resp.StatusCode)
+	}
+}
+
+// TestDiscoverHandler_GenreSendsWithGenres proves category=genre&genreId=N
+// forwards with_genres=N to /discover/{movie,tv} depending on {mode}.
+func TestDiscoverHandler_GenreSendsWithGenres(t *testing.T) {
+	var gotPath, gotGenre string
+	fake := fakeTMDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotGenre = r.URL.Query().Get("with_genres")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"results":[{"id":1,"title":"Some Movie"}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/movies/discover?category=genre&genreId=28")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/discover/movie" || gotGenre != "28" {
+		t.Errorf("expected /discover/movie?with_genres=28, got path=%s with_genres=%s", gotPath, gotGenre)
+	}
+}
+
+// TestDiscoverHandler_StudioRejectsSeries proves category=studio is a 400
+// for Series — TMDB companies are a movie-only concept (tmdb.Studio's doc
+// comment).
+func TestDiscoverHandler_StudioRejectsSeries(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", "http://tmdb.local", "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/series/discover?category=studio&studioId=420")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for series studio browsing, got %d", resp.StatusCode)
+	}
+}
+
+// TestDiscoverHandler_NetworkRequiresSeriesMode is studio's symmetric
+// sibling: category=network is only valid for Series.
+func TestDiscoverHandler_NetworkRequiresSeriesMode(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", "http://tmdb.local", "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/movies/discover?category=network&networkId=213")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for movies network browsing, got %d", resp.StatusCode)
+	}
+}
+
+// TestDiscoverGenresHandler_MoviesUsesMovieGenreList proves
+// GET /api/modes/{mode}/discover/genres dispatches to /genre/movie/list for
+// Movies and /genre/tv/list for Series.
+func TestDiscoverGenresHandler_MoviesUsesMovieGenreList(t *testing.T) {
+	var gotPath string
+	fake := fakeTMDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"genres":[{"id":28,"name":"Action"}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/movies/discover/genres")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/genre/movie/list" {
+		t.Errorf("expected /genre/movie/list, got %s", gotPath)
+	}
+	var genres []tmdb.Genre
+	if err := json.NewDecoder(resp.Body).Decode(&genres); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(genres) != 1 || genres[0].Name != "Action" {
+		t.Errorf("unexpected genres: %+v", genres)
+	}
+}
+
+// TestDiscoverStudiosHandler_ReturnsKnownStudios proves the static seed list
+// serves directly with no TMDB connection required.
+func TestDiscoverStudiosHandler_ReturnsKnownStudios(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/discover/studios")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with no tmdb connection configured, got %d", resp.StatusCode)
+	}
+	var studios []tmdb.Studio
+	if err := json.NewDecoder(resp.Body).Decode(&studios); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(studios) != len(tmdb.KnownStudios) {
+		t.Errorf("expected %d studios, got %d", len(tmdb.KnownStudios), len(studios))
+	}
+}
+
+// TestDiscoverNetworksHandler_ReturnsKnownNetworks is
+// TestDiscoverStudiosHandler_ReturnsKnownStudios' direct sibling.
+func TestDiscoverNetworksHandler_ReturnsKnownNetworks(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/discover/networks")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var networks []tmdb.Network
+	if err := json.NewDecoder(resp.Body).Decode(&networks); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(networks) != len(tmdb.KnownNetworks) {
+		t.Errorf("expected %d networks, got %d", len(tmdb.KnownNetworks), len(networks))
+	}
+}
+
+// TestDiscoverKeywordsHandler_SearchesTMDB proves GET /api/discover/keywords
+// proxies TMDB's /search/keyword using the shared "tmdb" connection
+// (mode-independent, same reasoning as tmdbSearchHandler).
+func TestDiscoverKeywordsHandler_SearchesTMDB(t *testing.T) {
+	var gotPath, gotQuery string
+	fake := fakeTMDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"results":[{"id":818,"name":"heist"}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/discover/keywords?q=heist")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/search/keyword" || gotQuery != "heist" {
+		t.Errorf("expected /search/keyword?query=heist, got path=%s query=%s", gotPath, gotQuery)
+	}
+	var keywords []tmdb.Keyword
+	if err := json.NewDecoder(resp.Body).Decode(&keywords); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(keywords) != 1 || keywords[0].Name != "heist" {
+		t.Errorf("unexpected keywords: %+v", keywords)
+	}
+}
+
+// TestDiscoverKeywordsHandler_RequiresQParam proves a missing q is a 400.
+func TestDiscoverKeywordsHandler_RequiresQParam(t *testing.T) {
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tmdb", "http://tmdb.local", "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/discover/keywords")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 without a q param, got %d", resp.StatusCode)
 	}
 }

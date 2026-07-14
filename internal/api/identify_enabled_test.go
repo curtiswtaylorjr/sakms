@@ -9,8 +9,8 @@ import (
 )
 
 func TestGetIdentifyEnabledHandler_DefaultsToTrue(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/identify-enabled")
@@ -31,8 +31,8 @@ func TestGetIdentifyEnabledHandler_DefaultsToTrue(t *testing.T) {
 }
 
 func TestPutThenGetIdentifyEnabled_RoundTrips(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(identifyEnabledRequest{Enabled: false})
@@ -63,8 +63,8 @@ func TestPutThenGetIdentifyEnabled_RoundTrips(t *testing.T) {
 // The toggle is Adult-only (only Adult runs rename.Scan) — non-Adult modes 400,
 // mirroring the kids-root-path applicability guard.
 func TestIdentifyEnabledHandler_NonAdultMode_400(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	getResp, err := http.Get(srv.URL + "/api/modes/movies/identify-enabled")

@@ -133,7 +133,7 @@ func TestApplyProposalHandler_MoviesRename_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	jf := newFakeJellyfin(0)
 	if err := connStore.Upsert(ctx, "jellyfin", jf.Server(t).URL, "jf-key"); err != nil {
@@ -147,7 +147,7 @@ func TestApplyProposalHandler_MoviesRename_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applied := applyProposal(t, srv, saved[0].ID, nil)
@@ -183,7 +183,7 @@ func TestApplyProposalHandler_SeriesRename_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	jf := newFakeJellyfin(0)
 	if err := connStore.Upsert(ctx, "jellyfin", jf.Server(t).URL, "jf-key"); err != nil {
@@ -200,7 +200,7 @@ func TestApplyProposalHandler_SeriesRename_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applied := applyProposal(t, srv, saved[0].ID, nil)
@@ -251,7 +251,7 @@ func TestApplyProposalHandler_MoviesRenameCollision_NotifiesActualUniquePath(t *
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	jf := newFakeJellyfin(0)
 	if err := connStore.Upsert(ctx, "jellyfin", jf.Server(t).URL, "jf-key"); err != nil {
@@ -265,7 +265,7 @@ func TestApplyProposalHandler_MoviesRenameCollision_NotifiesActualUniquePath(t *
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applied := applyProposal(t, srv, saved[0].ID, nil)
@@ -294,7 +294,7 @@ func TestApplyProposalHandler_MoviesPurge_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	item, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: filePath, RootFolderPath: dir})
 	if err != nil {
@@ -312,7 +312,7 @@ func TestApplyProposalHandler_MoviesPurge_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -340,7 +340,7 @@ func TestApplyProposalHandler_SeriesPurge_NotifiesJellyfinNDeletes(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	series, err := libStore.UpsertSeries(ctx, library.Series{TMDBID: 1, Title: "X", RootFolderPath: dir})
 	if err != nil {
@@ -364,7 +364,7 @@ func TestApplyProposalHandler_SeriesPurge_NotifiesJellyfinNDeletes(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -396,7 +396,7 @@ func TestApplyProposalHandler_MoviesDedupLoser_NotifiesJellyfin(t *testing.T) {
 	loserPath := writeTestVideoFile(t, dir, "loser.mkv", 10)
 	winnerPath := writeTestVideoFile(t, dir, "winner.mkv", 10)
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	tracked, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: loserPath, RootFolderPath: dir})
 	if err != nil {
@@ -420,7 +420,7 @@ func TestApplyProposalHandler_MoviesDedupLoser_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -441,7 +441,7 @@ func TestApplyProposalHandler_SeriesDedupLoser_NotifiesJellyfin(t *testing.T) {
 	loserPath := writeTestVideoFile(t, dir, "loser.mkv", 10)
 	winnerPath := writeTestVideoFile(t, dir, "winner.mkv", 10)
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	series, err := libStore.UpsertSeries(ctx, library.Series{TMDBID: 1, Title: "X", RootFolderPath: dir})
 	if err != nil {
@@ -469,7 +469,7 @@ func TestApplyProposalHandler_SeriesDedupLoser_NotifiesJellyfin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -486,7 +486,7 @@ func TestApplyProposalHandler_SeriesDedupLoser_NotifiesJellyfin(t *testing.T) {
 // TestApplyProposalHandler_DedupKeepAll_NoJellyfinNotify is Edge #3:
 // keepAll removes nothing, so it must produce zero notify calls.
 func TestApplyProposalHandler_DedupKeepAll_NoJellyfinNotify(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	tracked, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: "/a.mkv", RootFolderPath: "/x"})
 	if err != nil {
@@ -510,7 +510,7 @@ func TestApplyProposalHandler_DedupKeepAll_NoJellyfinNotify(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(applyProposalRequest{KeepAll: true})
@@ -532,7 +532,7 @@ func TestApplyProposalHandler_JellyfinBestEffort_ApplyStillSucceeds(t *testing.T
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	item, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: filePath, RootFolderPath: dir})
 	if err != nil {
@@ -550,7 +550,7 @@ func TestApplyProposalHandler_JellyfinBestEffort_ApplyStillSucceeds(t *testing.T
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	// applyProposal itself asserts a 200 status — the point of this test.
@@ -579,7 +579,7 @@ func TestApplyProposalHandler_MoviesApply_StashConnectionConfigured_SendsNothing
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	item, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 1, Title: "X", FilePath: filePath, RootFolderPath: dir})
 	if err != nil {
@@ -596,7 +596,7 @@ func TestApplyProposalHandler_MoviesApply_StashConnectionConfigured_SendsNothing
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	// Success here (no t.Fatalf inside the fake Stash handler having fired)
@@ -716,7 +716,7 @@ func TestApplyProposalHandler_AdultRename_NotifiesStash(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	stash := newFakeStash(0)
 	if err := connStore.Upsert(ctx, "stash", stash.Server(t).URL, "stash-key"); err != nil {
@@ -730,7 +730,7 @@ func TestApplyProposalHandler_AdultRename_NotifiesStash(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applied := applyProposal(t, srv, saved[0].ID, nil)
@@ -789,7 +789,7 @@ func TestApplyProposalHandler_AdultRenameNoMove_NoStashNotify(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	stash := newFakeStash(0)
 	if err := connStore.Upsert(ctx, "stash", stash.Server(t).URL, "stash-key"); err != nil {
@@ -803,7 +803,7 @@ func TestApplyProposalHandler_AdultRenameNoMove_NoStashNotify(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -829,7 +829,7 @@ func TestApplyProposalHandler_AdultRenameNoMove_NoStashNotify(t *testing.T) {
 // scene is removed from SAK's own library (DeleteScene, not DeleteTracked) and
 // its file path reaches Stash as a clean, with no corresponding scan.
 func TestApplyProposalHandler_AdultPurge_NotifiesStash(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	stash := newFakeStash(0)
 	if err := connStore.Upsert(ctx, "stash", stash.Server(t).URL, "stash-key"); err != nil {
@@ -850,7 +850,7 @@ func TestApplyProposalHandler_AdultPurge_NotifiesStash(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -887,7 +887,7 @@ func TestApplyProposalHandler_AdultDedupLoser_NotifiesStash(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	stash := newFakeStash(0)
 	if err := connStore.Upsert(ctx, "stash", stash.Server(t).URL, "stash-key"); err != nil {
@@ -913,7 +913,7 @@ func TestApplyProposalHandler_AdultDedupLoser_NotifiesStash(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	applyProposal(t, srv, saved[0].ID, nil)
@@ -946,7 +946,7 @@ func TestApplyProposalHandler_AdultDedupLoser_NotifiesStash(t *testing.T) {
 // TestApplyProposalHandler_AdultDedupKeepAll_NoStashNotify is Edge #3's Adult
 // counterpart: keepAll removes nothing, so Stash must receive zero calls.
 func TestApplyProposalHandler_AdultDedupKeepAll_NoStashNotify(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	stash := newFakeStash(0)
 	if err := connStore.Upsert(ctx, "stash", stash.Server(t).URL, "stash-key"); err != nil {
@@ -963,7 +963,7 @@ func TestApplyProposalHandler_AdultDedupKeepAll_NoStashNotify(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(applyProposalRequest{KeepAll: true})
@@ -985,7 +985,7 @@ func TestApplyProposalHandler_AdultApply_JellyfinConnectionConfigured_SendsNothi
 	}))
 	defer jfSrv.Close()
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.Upsert(ctx, "jellyfin", jfSrv.URL, "jf-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1005,7 +1005,7 @@ func TestApplyProposalHandler_AdultApply_JellyfinConnectionConfigured_SendsNothi
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	// Success here (no t.Fatalf inside the fake Jellyfin handler having

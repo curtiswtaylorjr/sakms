@@ -754,3 +754,176 @@ type NetscanProwlarrKeyRequest struct {
 type NetscanProwlarrKeyResponse struct {
 	APIKey string `json:"apiKey"`
 }
+
+// --- Discover: TMDB categories + custom sliders (mainstream-discover-seerr) -
+//
+// Seerr-inspired Discover category rows layered on top of the existing
+// trending/popular DiscoverItem rows: fixed built-in categories (Upcoming,
+// browse-by-genre/studio/network) plus a fully admin-defined custom-slider
+// system (Seerr's CreateSlider/DiscoverSliderEdit equivalent). Item rows for
+// every one of these categories (including a resolved slider) reuse
+// DiscoverItem unchanged above — Upcoming/genre/studio/network/keyword
+// results are still just TMDB movie/TV titles, wire-identical to
+// trending/popular, so no new item type is introduced here.
+
+// Genre is one TMDB genre — mirrors tmdb.Genre's wire shape. Backs GET
+// /api/modes/{mode}/discover/genres (a movie or TV genre list depending on
+// {mode}'s media type) and is the reference list a "genre" slider's
+// FilterValue picks from.
+type Genre struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// Studio is a well-known movie production company — mirrors tmdb.Studio.
+// Backs GET /api/discover/studios, the fixed seed-list reference a "browse
+// by studio" row / "studio" slider's FilterValue picks from. Movies-only —
+// TMDB companies are a movie-catalog concept with no TV equivalent (see
+// Network below for TV's parallel concept).
+type Studio struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// Network is a well-known TV network/streaming service — mirrors
+// tmdb.Network. Backs GET /api/discover/networks, Studio's direct sibling
+// for the TV catalog (TV-only, symmetric restriction to Studio's
+// movies-only one).
+type Network struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// Keyword is one TMDB keyword search result — mirrors tmdb.Keyword. Backs
+// GET /api/discover/keywords?q=, the free-text lookup an admin slider editor
+// uses to resolve typed text (e.g. "heist") into the numeric TMDB keyword id
+// a "keyword" filter_type slider actually stores as FilterValue — unlike
+// Genre/Studio/Network, TMDB has no fixed enumerable keyword list to serve
+// as a seed list.
+type Keyword struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// Slider is one admin-defined custom Discover row — mirrors
+// discoversliders.Slider's wire shape. FilterType is one of "genre" |
+// "keyword" | "studio" | "network" | "upcoming" | "trending" | "popular";
+// Target restricts results to "movie" | "tv" | "mixed". FilterValue is a
+// stringified TMDB id (genre/studio/network/keyword) and is empty for the
+// three fixed feeds (upcoming/trending/popular) — see
+// discoversliders.Store's validate for the enforced pairing rule.
+type Slider struct {
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	FilterType  string `json:"filterType"`
+	FilterValue string `json:"filterValue,omitempty"`
+	Target      string `json:"target"`
+	SortOrder   int    `json:"sortOrder"`
+	Enabled     bool   `json:"enabled"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+// SliderUpsertRequest is the body of POST /api/discover/sliders (create) and
+// PUT /api/discover/sliders/{id} (update) — every editable field, mirroring
+// discoversliders.Store.Create/Update's parameters exactly. Nothing in a
+// slider is a secret, so unlike ConnectionUpsertRequest.APIKey every field
+// here is a plain (non-pointer) required value — there is no "preserve
+// unchanged" partial-update mode; a save always sends the full slider.
+type SliderUpsertRequest struct {
+	Title       string `json:"title"`
+	FilterType  string `json:"filterType"`
+	FilterValue string `json:"filterValue,omitempty"`
+	Target      string `json:"target"`
+	Enabled     bool   `json:"enabled"`
+}
+
+// SliderReorderRequest is POST /api/discover/sliders/reorder's body — ids in
+// display order, covering every existing slider exactly once. One explicit
+// "here is the full new order" action, not a per-item bulk mutation (see
+// discoversliders.Store.Reorder's doc comment for why).
+type SliderReorderRequest struct {
+	IDs []int `json:"ids"`
+}
+
+// --- Trakt (mainstream-discover-seerr): watchlist connection + OAuth device flow -
+//
+// Mirrors internal/api/trakt.go's local request/response structs field-for-
+// field (that file is deliberately self-contained and doesn't import this
+// package — see its own doc comment); these DTOs exist purely for the
+// TypeScript codegen boundary. Route table:
+//   GET  /api/trakt/status          -> TraktStatusResponse
+//   PUT  /api/trakt/credentials     -> TraktCredentialsRequest
+//   POST /api/trakt/device/start    -> TraktDeviceStartResponse
+//   POST /api/trakt/device/poll     -> TraktDevicePollResponse
+//   POST /api/trakt/disconnect      -> (204, no body)
+//   GET  /api/trakt/watchlist       -> []TraktWatchlistItem
+
+// TraktStatusResponse is GET /api/trakt/status's response — the general
+// "is Trakt usable right now" summary, consumed by both Settings (to render
+// configured/linked state and pre-fill the client_id field via ClientID)
+// and the Discover watchlist row. An unconfigured connection returns the
+// zero value (Configured: false), not an error. ClientID is not secret
+// (Trakt sends it as a plain header on every request, same as
+// ConnectionSummary.URL's pre-fill convention) — never the client_secret or
+// tokens themselves.
+type TraktStatusResponse struct {
+	Configured     bool   `json:"configured"`
+	Linked         bool   `json:"linked"`
+	ClientID       string `json:"clientId,omitempty"`
+	TokenExpiresAt string `json:"tokenExpiresAt,omitempty"`
+}
+
+// TraktCredentialsRequest is PUT /api/trakt/credentials's body — the
+// operator-entered Trakt application. ClientSecret follows the same
+// three-state rule as ConnectionUpsertRequest.APIKey (nil = preserve
+// stored secret, "" = clear, non-empty = set) — see that field's doc
+// comment for the full rule; a naive `clientSecret?: string` would
+// silently wipe the stored secret on an untouched save here too.
+type TraktCredentialsRequest struct {
+	ClientID     string  `json:"clientId"`
+	ClientSecret *string `json:"clientSecret,omitempty"`
+}
+
+// TraktDeviceStartResponse is POST /api/trakt/device/start's response —
+// everything the frontend needs to show the operator (a code to enter and
+// a URL to visit) and to know how often to call POST /api/trakt/device/poll.
+// The device_code itself (the secret the server polls with) is deliberately
+// not included; polling is server-side.
+type TraktDeviceStartResponse struct {
+	UserCode        string `json:"userCode"`
+	VerificationURL string `json:"verificationUrl"`
+	ExpiresIn       int    `json:"expiresIn"`
+	Interval        int    `json:"interval"`
+}
+
+// TraktDevicePollResponse is POST /api/trakt/device/poll's response — one
+// non-blocking poll attempt against the in-progress device authorization
+// started by TraktDeviceStartResponse. Deliberately a separate endpoint
+// from TraktStatusResponse above: this one drives the Connect-flow UI's
+// polling loop, the other answers "is Trakt usable right now" everywhere
+// else. Linked true means tokens were saved and the flow is done; Pending
+// true means keep polling; both false (a denied or expired device code)
+// means the flow is over without success — the frontend's own
+// client-side deadline (from TraktDeviceStartResponse.ExpiresIn) and the
+// 409 a subsequent poll gets (the server clears the flow on any terminal
+// outcome) are what surface that to the operator, since there's no
+// separate "denied"/"expired" field on the wire.
+type TraktDevicePollResponse struct {
+	Linked  bool `json:"linked"`
+	Pending bool `json:"pending"`
+}
+
+// TraktWatchlistItem is one entry of GET /api/trakt/watchlist's response —
+// a near-direct mirror of internal/trakt.WatchlistItem's fields. Note this
+// is deliberately NOT DiscoverItem's shape: Trakt's watchlist API provides
+// no poster/overview/rating at all, so there is nothing to mirror there;
+// any TMDB enrichment by TmdbId is the frontend's job, not done server-side
+// (an N-item watchlist would otherwise mean N extra TMDB calls per page
+// load).
+type TraktWatchlistItem struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Year   int    `json:"year,omitempty"`
+	TMDBID int    `json:"tmdbId"`
+}

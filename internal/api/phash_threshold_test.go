@@ -11,8 +11,8 @@ import (
 )
 
 func TestGetPHashThresholdHandler_DefaultsToDefault(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/phash-threshold")
@@ -33,8 +33,8 @@ func TestGetPHashThresholdHandler_DefaultsToDefault(t *testing.T) {
 }
 
 func TestPutPHashThresholdHandler_RejectsOutOfRange(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(phashThresholdRequest{Threshold: 999})
@@ -53,8 +53,8 @@ func TestPutPHashThresholdHandler_RejectsOutOfRange(t *testing.T) {
 }
 
 func TestPutThenGetPHashThreshold_RoundTrips(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(phashThresholdRequest{Threshold: 8})
@@ -86,8 +86,8 @@ func TestPutThenGetPHashThreshold_RoundTrips(t *testing.T) {
 // these prove the series_phash_dedup_threshold key path works exactly as the
 // movies one does — Series Dedup gained a phash threshold with zero new routing.
 func TestPutThenGetPHashThreshold_Series_RoundTrips(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(phashThresholdRequest{Threshold: 8})
@@ -116,8 +116,8 @@ func TestPutThenGetPHashThreshold_Series_RoundTrips(t *testing.T) {
 }
 
 func TestPutPHashThresholdHandler_Series_RejectsOutOfRange(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
 	defer srv.Close()
 
 	body, _ := json.Marshal(phashThresholdRequest{Threshold: 999})

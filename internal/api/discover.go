@@ -63,6 +63,53 @@ func discoverHandler(httpClient *http.Client, connStore *connections.Store, sett
 			items, err = sess.TMDB.Trending(ctx, mt, "week", page)
 		case "popular":
 			items, err = sess.TMDB.Popular(ctx, mt, page)
+		case "upcoming":
+			// UpcomingTV is TMDB's /tv/on_the_air — the closest TV analog to
+			// Upcoming Movies' "future release date" (see tmdb.UpcomingTV's
+			// doc comment); TMDB has no direct TV equivalent.
+			if mt == tmdb.TV {
+				items, err = sess.TMDB.UpcomingTV(ctx, page)
+			} else {
+				items, err = sess.TMDB.UpcomingMovies(ctx, page)
+			}
+		case "genre":
+			genreID, gerr := strconv.Atoi(r.URL.Query().Get("genreId"))
+			if gerr != nil {
+				http.Error(w, "genreId query parameter is required and must be an integer", http.StatusBadRequest)
+				return
+			}
+			if mt == tmdb.TV {
+				items, err = sess.TMDB.DiscoverTVByGenre(ctx, genreID, page)
+			} else {
+				items, err = sess.TMDB.DiscoverMoviesByGenre(ctx, genreID, page)
+			}
+		case "studio":
+			// Studios are a movie-catalog concept (TMDB production companies) —
+			// there is no TV equivalent, so this category is Movies/Adult only,
+			// mirroring the mode restriction network below applies the other way.
+			if m == mode.Series {
+				http.Error(w, "studio browsing is not available for series — TMDB companies are a movie-only concept", http.StatusBadRequest)
+				return
+			}
+			studioID, serr := strconv.Atoi(r.URL.Query().Get("studioId"))
+			if serr != nil {
+				http.Error(w, "studioId query parameter is required and must be an integer", http.StatusBadRequest)
+				return
+			}
+			items, err = sess.TMDB.DiscoverMoviesByStudio(ctx, studioID, page)
+		case "network":
+			// Symmetric restriction to studio above: networks are a TV-catalog
+			// concept, series only.
+			if m != mode.Series {
+				http.Error(w, "network browsing is only available for series", http.StatusBadRequest)
+				return
+			}
+			networkID, nerr := strconv.Atoi(r.URL.Query().Get("networkId"))
+			if nerr != nil {
+				http.Error(w, "networkId query parameter is required and must be an integer", http.StatusBadRequest)
+				return
+			}
+			items, err = sess.TMDB.DiscoverTVByNetwork(ctx, networkID, page)
 		default:
 			http.Error(w, fmt.Sprintf("unrecognized category %q", category), http.StatusBadRequest)
 			return
@@ -74,6 +121,101 @@ func discoverHandler(httpClient *http.Client, connStore *connections.Store, sett
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(items)
+	}
+}
+
+// discoverGenresHandler returns TMDB's fixed genre list for {mode}'s media
+// type (movie genres for Movies/Adult, TV genres for Series) — reference
+// data for the genre-browse row's picker and a "genre" slider's FilterValue
+// dropdown in the admin editor. Not paginated; TMDB's genre list is small
+// and rarely changes.
+func discoverGenresHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		m := mode.Mode(r.PathValue("mode"))
+		ctx := r.Context()
+
+		sess, err := mode.Build(ctx, connStore, settingsStore, httpClient, m)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if sess.TMDB == nil {
+			http.Error(w, "tmdb isn't configured yet — add it in Settings first", http.StatusBadRequest)
+			return
+		}
+
+		var genres []tmdb.Genre
+		if mediaTypeForMode(m) == tmdb.TV {
+			genres, err = sess.TMDB.TVGenres(ctx)
+		} else {
+			genres, err = sess.TMDB.MovieGenres(ctx)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(genres)
+	}
+}
+
+// discoverStudiosHandler serves tmdb.KnownStudios — a fixed, static seed
+// list requiring no TMDB call — backing the "browse by studio" row and the
+// admin slider editor's studio picker. Global, not mode-scoped: the same
+// list regardless of which mode's Discover screen is asking.
+func discoverStudiosHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(tmdb.KnownStudios)
+	}
+}
+
+// discoverNetworksHandler is discoverStudiosHandler's direct sibling for
+// tmdb.KnownNetworks.
+func discoverNetworksHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(tmdb.KnownNetworks)
+	}
+}
+
+// discoverKeywordsHandler proxies TMDB's /search/keyword — the admin slider
+// editor's way of resolving free-typed keyword text into the numeric TMDB
+// id a "keyword" slider's FilterValue actually stores (see tmdb.Keyword's
+// doc comment for why keywords, unlike genre/studio/network, have no fixed
+// seed list). Global like discoverStudiosHandler/discoverNetworksHandler —
+// keyword search isn't mode-specific, so this always builds a Movies-mode
+// session purely to reach the shared "tmdb" connection (see
+// tmdbSearchHandler's doc comment: sess.TMDB is populated identically for
+// every mode).
+func discoverKeywordsHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		query := r.URL.Query().Get("q")
+		if query == "" {
+			http.Error(w, "q query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		sess, err := mode.Build(ctx, connStore, settingsStore, httpClient, mode.Movies)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if sess.TMDB == nil {
+			http.Error(w, "tmdb isn't configured yet — add it in Settings first", http.StatusBadRequest)
+			return
+		}
+
+		keywords, err := sess.TMDB.SearchKeywords(ctx, query)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(keywords)
 	}
 }
 

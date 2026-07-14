@@ -339,3 +339,224 @@ func (c *Client) SeasonDetails(ctx context.Context, tmdbTVID, seasonNumber int) 
 	}
 	return out, nil
 }
+
+// UpcomingMovies returns TMDB's /movie/upcoming list — movies with a future
+// release date, for the given 1-based page. Direct sibling of Popular in
+// request-build/response-decode shape.
+func (c *Client) UpcomingMovies(ctx context.Context, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/movie/upcoming", pageQuery(page), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, Movie), nil
+}
+
+// UpcomingTV returns TMDB's /tv/on_the_air list — shows with an episode
+// airing within the next 7 days, for the given 1-based page. TMDB has no
+// direct TV equivalent of /movie/upcoming (unreleased, future release
+// date); on_the_air is the closer analog for a TV "upcoming" row, as
+// opposed to /tv/airing_today, which is scoped to shows airing that exact
+// calendar day rather than a rolling window.
+func (c *Client) UpcomingTV(ctx context.Context, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/tv/on_the_air", pageQuery(page), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, TV), nil
+}
+
+// Genre is one TMDB genre, as listed by /genre/movie/list or /genre/tv/list
+// — the fixed catalog a "browse by genre" row's picker offers, and the id
+// DiscoverMoviesByGenre/DiscoverTVByGenre filter on.
+type Genre struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type genreListResponse struct {
+	Genres []Genre `json:"genres"`
+}
+
+// MovieGenres returns TMDB's full movie genre list (/genre/movie/list) —
+// rarely-changing reference data, not paginated by TMDB.
+func (c *Client) MovieGenres(ctx context.Context) ([]Genre, error) {
+	var resp genreListResponse
+	if err := c.do(ctx, "/genre/movie/list", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Genres, nil
+}
+
+// TVGenres is MovieGenres' direct sibling for /genre/tv/list — TMDB keeps
+// separate genre catalogs per media type (e.g. movie has "Science Fiction",
+// TV has "Sci-Fi & Fantasy"), so this is not just a filtered view of
+// MovieGenres.
+func (c *Client) TVGenres(ctx context.Context) ([]Genre, error) {
+	var resp genreListResponse
+	if err := c.do(ctx, "/genre/tv/list", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Genres, nil
+}
+
+// discoverQuery builds pageQuery's params plus one extra TMDB /discover
+// filter (with_genres, with_companies, or with_networks) set to filterValue
+// — the shared query-building shape behind DiscoverMoviesByGenre/
+// DiscoverTVByGenre/DiscoverMoviesByStudio/DiscoverTVByNetwork.
+func discoverQuery(page int, filterKey string, filterValue int) url.Values {
+	q := pageQuery(page)
+	if q == nil {
+		q = url.Values{}
+	}
+	q.Set(filterKey, strconv.Itoa(filterValue))
+	return q
+}
+
+// DiscoverMoviesByGenre returns TMDB movies matching genreID (one of
+// MovieGenres' ids), for the given 1-based page — the "browse by genre"
+// Discover row's data source.
+func (c *Client) DiscoverMoviesByGenre(ctx context.Context, genreID int, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/discover/movie", discoverQuery(page, "with_genres", genreID), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, Movie), nil
+}
+
+// DiscoverTVByGenre is DiscoverMoviesByGenre's direct sibling for the TV
+// catalog, filtering on one of TVGenres' ids.
+func (c *Client) DiscoverTVByGenre(ctx context.Context, genreID int, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/discover/tv", discoverQuery(page, "with_genres", genreID), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, TV), nil
+}
+
+// Studio is a well-known movie production company, keyed by TMDB's company
+// id — DiscoverMoviesByStudio's with_companies filter operates on this id.
+// JSON-tagged (unlike a bare internal Go type) because KnownStudios is
+// served directly to the frontend as a slider-editor reference list.
+type Studio struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// KnownStudios is a starting seed list of major movie studios for a "browse
+// by studio" Discover row, seerr-style — not exhaustive, extend as needed.
+// IDs are TMDB's own public company ids, the same catalog SearchMovies/
+// Trending already read from (visible on themoviedb.org's own company
+// pages, e.g. themoviedb.org/company/420-marvel-studios).
+var KnownStudios = []Studio{
+	{ID: 420, Name: "Marvel Studios"},
+	{ID: 2, Name: "Walt Disney Pictures"},
+	{ID: 3, Name: "Pixar"},
+	{ID: 9993, Name: "DC Entertainment"},
+	{ID: 1, Name: "Lucasfilm Ltd."},
+	{ID: 174, Name: "Warner Bros. Pictures"},
+	{ID: 33, Name: "Universal Pictures"},
+	{ID: 4, Name: "Paramount Pictures"},
+	{ID: 34, Name: "Sony Pictures"},
+	{ID: 521, Name: "DreamWorks Animation"},
+	{ID: 923, Name: "Legendary Pictures"},
+	{ID: 3172, Name: "Blumhouse Productions"},
+}
+
+// DiscoverMoviesByStudio returns TMDB movies produced by companyID (one of
+// KnownStudios' ids, or any other TMDB company id an admin-configured
+// slider names), for the given 1-based page.
+func (c *Client) DiscoverMoviesByStudio(ctx context.Context, companyID int, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/discover/movie", discoverQuery(page, "with_companies", companyID), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, Movie), nil
+}
+
+// Network is a well-known TV network or streaming service, keyed by TMDB's
+// network id — DiscoverTVByNetwork's with_networks filter operates on this
+// id. Direct sibling of Studio for the TV catalog; TMDB tracks companies
+// and networks as separate id spaces, so a network id is never a company id
+// or vice versa. JSON-tagged for the same reason as Studio.
+type Network struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// KnownNetworks is a starting seed list of major TV networks/streaming
+// services for a "browse by network" Discover row — not exhaustive, extend
+// as needed. Same public-id sourcing convention as KnownStudios.
+var KnownNetworks = []Network{
+	{ID: 213, Name: "Netflix"},
+	{ID: 1024, Name: "Amazon"},
+	{ID: 2552, Name: "Apple TV+"},
+	{ID: 2739, Name: "Disney+"},
+	{ID: 49, Name: "HBO"},
+	{ID: 67, Name: "Showtime"},
+	{ID: 318, Name: "Starz"},
+	{ID: 88, Name: "FX"},
+	{ID: 6, Name: "NBC"},
+	{ID: 2, Name: "ABC"},
+	{ID: 16, Name: "CBS"},
+	{ID: 19, Name: "FOX"},
+}
+
+// DiscoverTVByNetwork returns TMDB shows on networkID (one of KnownNetworks'
+// ids, or any other TMDB network id an admin-configured slider names), for
+// the given 1-based page.
+func (c *Client) DiscoverTVByNetwork(ctx context.Context, networkID int, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/discover/tv", discoverQuery(page, "with_networks", networkID), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, TV), nil
+}
+
+// Keyword is one TMDB keyword, as returned by /search/keyword — unlike
+// Genre/Studio/Network, TMDB has no fixed enumerable keyword list (there are
+// hundreds of thousands), so a keyword-filtered slider's FilterValue is
+// resolved from free-typed admin text via SearchKeywords rather than picked
+// from a seed list.
+type Keyword struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type keywordListResponse struct {
+	Results []Keyword `json:"results"`
+}
+
+// SearchKeywords looks up TMDB keywords by free-typed text (/search/keyword)
+// — the admin slider editor's way of turning "heist" into the numeric
+// keyword id DiscoverMoviesByKeyword/DiscoverTVByKeyword actually filter on.
+func (c *Client) SearchKeywords(ctx context.Context, query string) ([]Keyword, error) {
+	q := url.Values{}
+	q.Set("query", query)
+	var resp keywordListResponse
+	if err := c.do(ctx, "/search/keyword", q, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Results, nil
+}
+
+// DiscoverMoviesByKeyword returns TMDB movies tagged with keywordID (one of
+// SearchKeywords' ids), for the given 1-based page. Direct sibling of
+// DiscoverMoviesByGenre/DiscoverMoviesByStudio, filtering on with_keywords
+// instead.
+func (c *Client) DiscoverMoviesByKeyword(ctx context.Context, keywordID int, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/discover/movie", discoverQuery(page, "with_keywords", keywordID), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, Movie), nil
+}
+
+// DiscoverTVByKeyword is DiscoverMoviesByKeyword's direct sibling for the TV
+// catalog.
+func (c *Client) DiscoverTVByKeyword(ctx context.Context, keywordID int, page int) ([]Item, error) {
+	var resp listResponse
+	if err := c.do(ctx, "/discover/tv", discoverQuery(page, "with_keywords", keywordID), &resp); err != nil {
+		return nil, err
+	}
+	return normalizeAll(resp.Results, TV), nil
+}
