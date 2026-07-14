@@ -97,7 +97,10 @@ const MAINSTREAM_TABS: TabDef[] = [
 // GrabTarget is one pending auto-grab: which mode, a human label for the
 // dialog title, and the exact request body the backend needs. For Series the
 // season/episode picker has already resolved before a target exists.
-type GrabTarget = { mode: Mode; label: string; request: AutoGrabRequest };
+// Exported (along with GrabButton below) so TraktWatchlistRow (task #8) can
+// drive the same grab dialog/season-episode-picker path as every other
+// Discover row instead of duplicating it.
+export type GrabTarget = { mode: Mode; label: string; request: AutoGrabRequest };
 
 // STATUS_COPY turns an autograb.Grade Status into a short human reason for a
 // fallback pick-list row — so the operator sees WHY each release wasn't
@@ -440,7 +443,7 @@ const SeasonEpisodePicker: Component<{
 // GrabButton is the per-title grab affordance. Movies grab on click. Series
 // first reveal the season/episode picker (the gating step) and only build a
 // GrabTarget once the picker is submitted.
-const GrabButton: Component<{
+export const GrabButton: Component<{
   mode: "movies" | "series";
   item: DiscoverItem;
   onGrab: (t: GrabTarget) => void;
