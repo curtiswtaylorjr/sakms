@@ -1,8 +1,14 @@
 // AdultDiscover — the scene-shaped browse and its cards: a search bar over two
-// ordered TPDB scene rows (Recently Released, Highest Rated), a Studios row, and
-// a Performers row. Searching swaps the rows for a plain result grid; clicking a
-// Studio/Performer card drills down into a paginated grid of just that entity's
-// scenes. Extracted from the original single-file Discover.tsx.
+// ordered scene rows (Recently Released — merged/deduped across TPDB+StashDB,
+// Highest Rated — TPDB-only), a TPDB Studios row, and a TPDB Performers row,
+// plus optional StashDB/FansDB scene/Studios/Performers rows shown only when
+// that connection is configured (see the ADULT_SCENE_ROWS and
+// configuredServices doc comments below). Searching swaps the rows for a plain
+// result grid; clicking a TPDB Studio/Performer card drills down into a
+// paginated grid of just that entity's scenes (the optional sources' Studios/
+// Performers cards are non-interactive — no stash-box scenes-by-entity
+// drill-down endpoint exists yet, see EntityCard). Extracted from the original
+// single-file Discover.tsx.
 
 import {
   type Component,
@@ -12,18 +18,23 @@ import {
   Show,
 } from "solid-js";
 import {
-  type AdultCategory,
   type AdultDiscoverItem,
   type PerformerSummary,
+  type StashBox,
   type StudioSummary,
   fetchAdultDiscover,
   fetchAdultDiscoverCategory,
+  fetchAdultDiscoverMergedRecent,
   fetchAdultPerformerScenes,
   fetchAdultPerformers,
   fetchAdultStudioScenes,
   fetchAdultStudios,
+  fetchStashBoxPerformers,
+  fetchStashBoxScenes,
+  fetchStashBoxStudios,
   proxyImage,
 } from "../../api/discover";
+import { fetchConnections } from "../../api/settings";
 import { Button, ErrorText, Muted, yearOf } from "../../components/ui";
 import {
   type GrabTarget,
@@ -33,17 +44,48 @@ import {
   TextPoster,
   notConfiguredService,
 } from "./shared";
+import { type DetailTarget, DetailPopup } from "./DetailPopup";
 
-// AdultCard is one TPDB scene. TPDB frequently returns no art, so the image is
-// Show-guarded with a text fallback (the old frontend rendered Adult text-only;
-// this adds art where TPDB provides it, via the proxy).
+// sourceLabel maps a non-TPDB AdultDiscoverItem.source to its display label —
+// "" (no label) for "tpdb" (the default, unlabeled source) or an unrecognized/
+// absent value, so AdultCard's subtitle only ever adds a label for a scene
+// that actually came from an optional stash-box source (StashDB/FansDB).
+const sourceLabel = (source: string): string => {
+  switch (source) {
+    case "stashdb":
+      return "StashDB";
+    case "fansdb":
+      return "FansDB";
+    default:
+      return "";
+  }
+};
+
+// AdultCard is one scene, from TPDB or (via the merged row / an optional
+// StashDB/FansDB row) a stash-box source. Both frequently return no art, so
+// the image is Show-guarded with a text fallback (the old frontend rendered
+// Adult text-only; this adds art where the source provides it, via the
+// proxy). A non-"tpdb" item.source appends a provenance label to the
+// subtitle line so a merged-in or optional-source scene is distinguishable.
+//
+// Clicking the card body (poster/title/subtitle — NOT the Grab button below,
+// unchanged) opens DetailPopup via onDetail. The native title= tooltip
+// (previously the scene's own title, not an overview — AdultDiscoverItem has
+// no overview field at all) is replaced by a CSS-only hover overlay showing
+// the same studio/date summary the subtitle line already displays — there is
+// no description to show for a scene, so this isn't a richer version of the
+// removed tooltip, just its replacement per the same convention PosterCard
+// uses.
 const AdultCard: Component<{
   item: AdultDiscoverItem;
   onGrab: (t: GrabTarget) => void;
+  onDetail: (t: DetailTarget) => void;
 }> = (props) => {
   const src = () => proxyImage(props.item.image);
   const subtitle = () =>
-    [props.item.studio, yearOf(props.item.date)].filter(Boolean).join(" · ");
+    [props.item.studio, yearOf(props.item.date), sourceLabel(props.item.source)]
+      .filter(Boolean)
+      .join(" · ");
   const grab = () =>
     props.onGrab({
       mode: "adult",
@@ -55,19 +97,29 @@ const AdultCard: Component<{
       },
     });
   return (
-    <div class="w-40 shrink-0" title={props.item.title}>
-      <div class="aspect-video overflow-hidden rounded-lg border border-border bg-surface">
-        <Show when={src()} fallback={<TextPoster label={props.item.title} />}>
-          <img
-            src={src()}
-            alt={props.item.title}
-            loading="lazy"
-            class="h-full w-full object-cover"
-          />
-        </Show>
+    <div class="w-40 shrink-0">
+      <div
+        class="group cursor-pointer"
+        onClick={() => props.onDetail({ mode: "adult", item: props.item })}
+      >
+        <div class="relative aspect-video overflow-hidden rounded-lg border border-border bg-surface">
+          <Show when={src()} fallback={<TextPoster label={props.item.title} />}>
+            <img
+              src={src()}
+              alt={props.item.title}
+              loading="lazy"
+              class="h-full w-full object-cover"
+            />
+          </Show>
+          <div class="absolute inset-0 flex items-end bg-black/70 p-2 opacity-0 transition-opacity group-hover:opacity-100">
+            <p class="line-clamp-4 text-xs text-white">
+              {subtitle() || props.item.title}
+            </p>
+          </div>
+        </div>
+        <div class="mt-1.5 truncate text-sm text-fg">{props.item.title}</div>
+        <div class="truncate text-xs text-muted">{subtitle() || "—"}</div>
       </div>
-      <div class="mt-1.5 truncate text-sm text-fg">{props.item.title}</div>
-      <div class="truncate text-xs text-muted">{subtitle() || "—"}</div>
       <div class="mt-1.5">
         <Button class="w-full !py-1 text-xs" onClick={grab}>
           Grab
@@ -79,22 +131,26 @@ const AdultCard: Component<{
 
 // EntityCard is one Studio or Performer on the Adult browse rows — image-or-text
 // tile + name, no grab (these are pure browse/navigation, not gradable items).
-// TPDB frequently returns no art, so the image is Show-guarded with a text
-// fallback and any non-empty URL is routed through the proxy (never hot-linked).
-// The whole card is a button: clicking it drills down into that entity's scenes.
+// Art frequently absent, so the image is Show-guarded with a text fallback and
+// any non-empty URL is routed through the proxy (never hot-linked).
+//
+// onSelect is OPTIONAL: TPDB's Studios/Performers rows pass it and the whole
+// card renders as a button that drills down into that entity's scenes (via
+// setDrill). StashDB/FansDB's Studios/Performers rows deliberately do NOT pass
+// it — there is no stash-box scenes-by-entity drill-down endpoint, and TPDB's
+// drill-down route expects a TPDB id, so wiring a stash-box id into setDrill
+// would silently query the wrong catalog. Omitting onSelect renders a plain,
+// non-interactive <div> tile instead — same art/name, no click behavior — so
+// those rows stay visible (the backend QueryStudios/QueryPerformers browse
+// still shows real data) without a broken or misleading drill-down.
 const EntityCard: Component<{
   name: string;
   image: string;
-  onSelect: () => void;
+  onSelect?: () => void;
 }> = (props) => {
   const src = () => proxyImage(props.image);
-  return (
-    <button
-      type="button"
-      class="w-40 shrink-0 text-left"
-      title={props.name}
-      onClick={props.onSelect}
-    >
+  const artwork = () => (
+    <>
       <div class="aspect-video overflow-hidden rounded-lg border border-border bg-surface">
         <Show when={src()} fallback={<TextPoster label={props.name} />}>
           <img
@@ -106,19 +162,83 @@ const EntityCard: Component<{
         </Show>
       </div>
       <div class="mt-1.5 truncate text-sm text-fg">{props.name}</div>
-    </button>
+    </>
+  );
+  return (
+    <Show
+      when={props.onSelect}
+      fallback={
+        <div class="w-40 shrink-0 text-left" title={props.name}>
+          {artwork()}
+        </div>
+      }
+    >
+      {(onSelect) => (
+        <button
+          type="button"
+          class="w-40 shrink-0 text-left"
+          title={props.name}
+          onClick={() => onSelect()()}
+        >
+          {artwork()}
+        </button>
+      )}
+    </Show>
   );
 };
 
-// ADULT_SCENE_ROWS is the fixed pair of ordered TPDB scene feeds the Adult
-// browse stacks: Recently Released (TPDB's real recency sort, pages normally)
-// and Highest Rated (a page-local rating re-sort, honestly NOT a global
-// popularity ranking — see internal/api/adultdiscover.go). Highest Rated is
-// singlePage: "Show more" would append an independently-resorted page 2 after
-// page 1, producing a visibly non-monotonic rating order under that label.
-const ADULT_SCENE_ROWS: { title: string; category: AdultCategory; singlePage?: boolean }[] = [
-  { title: "Recently Released", category: "recent" },
-  { title: "Highest Rated", category: "top-rated", singlePage: true },
+// ADULT_SCENE_ROWS is the fixed pair of ordered scene feeds the Adult browse
+// stacks: Recently Released (the merged, deduped TPDB+StashDB feed —
+// fetchAdultDiscoverMergedRecent, TPDB-only when StashDB isn't configured, see
+// internal/api/adultdiscover_stashbox.go) and Highest Rated (TPDB's page-local
+// rating re-sort, honestly NOT a global popularity ranking — see
+// internal/api/adultdiscover.go; deliberately left TPDB-only, per the decision
+// to keep Trending/Rated ranking un-merged since there's no shared ranking
+// metric across sources). Highest Rated is singlePage: "Show more" would
+// append an independently-resorted page 2 after page 1, producing a visibly
+// non-monotonic rating order under that label.
+const ADULT_SCENE_ROWS: {
+  title: string;
+  load: (page: number) => Promise<AdultDiscoverItem[]>;
+  singlePage?: boolean;
+}[] = [
+  { title: "Recently Released", load: (page) => fetchAdultDiscoverMergedRecent(page) },
+  {
+    title: "Highest Rated",
+    load: (page) => fetchAdultDiscoverCategory("top-rated", page),
+    singlePage: true,
+  },
+];
+
+// STASH_BOX_ROWS drives the optional StashDB/FansDB row sections — one entry
+// per box, each gated behind configuredServices().has(box) so it renders
+// nothing at all (not even PaginatedStrip's "Nothing here yet" fallback)
+// when that connection isn't configured. sceneRows lists which scene feeds
+// that box gets (StashDB: Trending only, since its Recently Released scenes
+// are already folded into ADULT_SCENE_ROWS' merged/deduped row above — see
+// that row's doc comment; FansDB: both, since nothing merges FansDB into the
+// TPDB feed). Studios/Performers are fixed per box (every box gets both).
+// This table is the collapsed form of what was 7 near-identical hand-written
+// PaginatedStrip blocks — same fetchStashBox* calls, same card components,
+// just data-driven the same way ADULT_SCENE_ROWS already is.
+const STASH_BOX_ROWS: {
+  box: StashBox;
+  label: string;
+  sceneRows: { title: string; kind: "recent" | "trending" }[];
+}[] = [
+  {
+    box: "stashdb",
+    label: "StashDB",
+    sceneRows: [{ title: "StashDB Trending", kind: "trending" }],
+  },
+  {
+    box: "fansdb",
+    label: "FansDB",
+    sceneRows: [
+      { title: "FansDB Recently Released", kind: "recent" },
+      { title: "FansDB Trending", kind: "trending" },
+    ],
+  },
 ];
 
 // AdultDrill is the active drill-down target: which entity kind, its opaque TPDB
@@ -134,6 +254,7 @@ type AdultDrill = { kind: "studio" | "performer"; id: string; name: string };
 // setup modal, raised once when any strip's fetch reports TPDB missing.
 export const AdultDiscover: Component = () => {
   const [grabTarget, setGrabTarget] = createSignal<GrabTarget | null>(null);
+  const [detailTarget, setDetailTarget] = createSignal<DetailTarget | null>(null);
   const [setupError, setSetupError] = createSignal<unknown>(null);
   const [dismissedSetup, setDismissedSetup] = createSignal(false);
   const [reloadToken, setReloadToken] = createSignal(0);
@@ -144,6 +265,36 @@ export const AdultDiscover: Component = () => {
 
   // drill is the active Studio/Performer drill-down (null = the browse rows).
   const [drill, setDrill] = createSignal<AdultDrill | null>(null);
+
+  // connections drives which OPTIONAL Adult Discover sources (StashDB/FansDB)
+  // render at all — fetched once on mount, same as any other read-only
+  // Settings data. configuredServices() is the set of service names with a
+  // stored connection; a StashDB/FansDB row is gated behind
+  // configuredServices().has("stashdb"|"fansdb") so it doesn't render AT ALL
+  // (not even PaginatedStrip's "Nothing here yet" fallback) when that source
+  // isn't configured — TPDB is a required core dependency and has no such
+  // gate.
+  //
+  // The fetcher swallows its own error (-> []) rather than letting the
+  // resource enter Solid's errored state: configuredServices() reads
+  // connections() bare inside JSX with no <Show when={connections.error}>
+  // guard, and this app has no ErrorBoundary anywhere in its tree — an
+  // unguarded read of an errored resource re-throws on every subsequent
+  // read (by design, for ErrorBoundary integration; see GrabDialog's own
+  // doc comment for this exact Solid gotcha), which would crash the whole
+  // SPA instead of just hiding these two optional rows. Defaulting to []
+  // on failure is also the semantically correct degrade here: "couldn't
+  // learn what's configured" and "nothing is configured" both mean the
+  // same thing to configuredServices() — don't show the optional rows.
+  const [connections] = createResource(async () => {
+    try {
+      return await fetchConnections();
+    } catch {
+      return [];
+    }
+  });
+  const configuredServices = () =>
+    new Set((connections() ?? []).map((c) => c.service));
 
   const [results] = createResource(
     () => (searching() ? submitted().trim() : null),
@@ -223,14 +374,16 @@ export const AdultDiscover: Component = () => {
                     <PaginatedStrip
                       title={row.title}
                       reloadToken={reloadToken}
-                      load={(page) =>
-                        fetchAdultDiscoverCategory(row.category, page)
-                      }
+                      load={row.load}
                       onError={setSetupError}
                       singlePage={row.singlePage}
                     >
                       {(item) => (
-                        <AdultCard item={item} onGrab={setGrabTarget} />
+                        <AdultCard
+                          item={item}
+                          onGrab={setGrabTarget}
+                          onDetail={setDetailTarget}
+                        />
                       )}
                     </PaginatedStrip>
                   )}
@@ -267,6 +420,55 @@ export const AdultDiscover: Component = () => {
                     />
                   )}
                 </PaginatedStrip>
+
+                {/* Optional stash-box sources — rendered only when
+                    configured (no "Nothing here yet" placeholder otherwise).
+                    Studios/Performers cards below deliberately omit onSelect
+                    (see EntityCard's doc comment): there is no stash-box
+                    scenes-by-entity drill-down endpoint, so these render as
+                    plain, non-interactive tiles. */}
+                <For each={STASH_BOX_ROWS}>
+                  {(row) => (
+                    <Show when={configuredServices().has(row.box)}>
+                      <For each={row.sceneRows}>
+                        {(sceneRow) => (
+                          <PaginatedStrip
+                            title={sceneRow.title}
+                            reloadToken={reloadToken}
+                            load={(page) =>
+                              fetchStashBoxScenes(row.box, sceneRow.kind, page)
+                            }
+                            onError={setSetupError}
+                          >
+                            {(item) => (
+                              <AdultCard
+                                item={item}
+                                onGrab={setGrabTarget}
+                                onDetail={setDetailTarget}
+                              />
+                            )}
+                          </PaginatedStrip>
+                        )}
+                      </For>
+                      <PaginatedStrip<StudioSummary>
+                        title={`${row.label} Studios`}
+                        reloadToken={reloadToken}
+                        load={(page) => fetchStashBoxStudios(row.box, page)}
+                        onError={setSetupError}
+                      >
+                        {(s) => <EntityCard name={s.name} image={s.image} />}
+                      </PaginatedStrip>
+                      <PaginatedStrip<PerformerSummary>
+                        title={`${row.label} Performers`}
+                        reloadToken={reloadToken}
+                        load={(page) => fetchStashBoxPerformers(row.box, page)}
+                        onError={setSetupError}
+                      >
+                        {(p) => <EntityCard name={p.name} image={p.image} />}
+                      </PaginatedStrip>
+                    </Show>
+                  )}
+                </For>
               </>
             }
           >
@@ -288,7 +490,13 @@ export const AdultDiscover: Component = () => {
                   onError={setSetupError}
                   containerClass="flex flex-wrap gap-3"
                 >
-                  {(item) => <AdultCard item={item} onGrab={setGrabTarget} />}
+                  {(item) => (
+                    <AdultCard
+                      item={item}
+                      onGrab={setGrabTarget}
+                      onDetail={setDetailTarget}
+                    />
+                  )}
                 </PaginatedStrip>
               </div>
             )}
@@ -306,7 +514,13 @@ export const AdultDiscover: Component = () => {
             >
               <div class="flex flex-wrap gap-3">
                 <For each={results()}>
-                  {(item) => <AdultCard item={item} onGrab={setGrabTarget} />}
+                  {(item) => (
+                    <AdultCard
+                      item={item}
+                      onGrab={setGrabTarget}
+                      onDetail={setDetailTarget}
+                    />
+                  )}
                 </For>
               </div>
             </Show>
@@ -316,6 +530,9 @@ export const AdultDiscover: Component = () => {
 
       <Show when={grabTarget()}>
         {(t) => <GrabDialog target={t()} onClose={() => setGrabTarget(null)} />}
+      </Show>
+      <Show when={detailTarget()}>
+        {(t) => <DetailPopup target={t()} onClose={() => setDetailTarget(null)} />}
       </Show>
     </div>
   );

@@ -38,6 +38,7 @@ import {
   fetchSliderItems,
 } from "../../api/discoverSliders";
 import { TraktWatchlistRow } from "../../components/TraktWatchlistRow";
+import { type DetailTarget, DetailPopup } from "./DetailPopup";
 
 // ModedTitle is the mode a merged card belongs to — the per-item mode a
 // combined (movies+series) row/grid MUST carry so each card grabs via its own
@@ -65,7 +66,10 @@ const MAINSTREAM_ROWS: {
 // specific season (and optionally episode) is chosen. Submitting always marks
 // the season as specified — that is what preserves Season-0/Specials (a bare
 // season number can't distinguish "Season 0 picked" from "nothing picked").
-const SeasonEpisodePicker: Component<{
+// Exported (was module-private) so DetailPopup.tsx reuses the identical
+// season/episode input as its own Series gating step, instead of a second
+// hand-rolled one.
+export const SeasonEpisodePicker: Component<{
   onSubmit: (season: number, episode: number) => void;
 }> = (props) => {
   const [season, setSeason] = createSignal("");
@@ -162,34 +166,48 @@ export const GrabButton: Component<{
 };
 
 // PosterCard is one Movies/Series title. Fixed width so a row scrolls
-// horizontally. The title attribute carries the overview as a native tooltip —
-// "show more detail" without any click handler that could mutate.
+// horizontally. Clicking the card body (poster/title/meta — NOT the Grab
+// button below, which stays as today's unchanged one-click quick-grab
+// shortcut) opens DetailPopup via onDetail. The native title= overview
+// tooltip is replaced by a CSS-only (group/group-hover) hover overlay over
+// the poster — same information, richer presentation, no new Solid signal.
 const PosterCard: Component<{
   mode: "movies" | "series";
   item: DiscoverItem;
   onGrab: (t: GrabTarget) => void;
+  onDetail: (t: DetailTarget) => void;
 }> = (props) => {
   const src = () => tmdbPoster(props.item.posterPath);
   return (
-    <div class="w-36 shrink-0" title={props.item.overview}>
-      <div class="aspect-[2/3] overflow-hidden rounded-lg border border-border bg-surface">
-        <Show when={src()} fallback={<TextPoster label={props.item.title} />}>
-          <img
-            src={src()}
-            alt={props.item.title}
-            loading="lazy"
-            class="h-full w-full object-cover"
-          />
-        </Show>
-      </div>
-      <div class="mt-1.5 truncate text-sm text-fg" title={props.item.title}>
-        {props.item.title}
-      </div>
-      <div class="flex items-center gap-2 text-xs text-muted">
-        <span>{yearOf(props.item.releaseDate) ?? "—"}</span>
-        <Show when={props.item.voteAverage > 0}>
-          <span>★ {props.item.voteAverage.toFixed(1)}</span>
-        </Show>
+    <div class="w-36 shrink-0">
+      <div
+        class="group cursor-pointer"
+        onClick={() => props.onDetail({ mode: props.mode, item: props.item })}
+      >
+        <div class="relative aspect-[2/3] overflow-hidden rounded-lg border border-border bg-surface">
+          <Show when={src()} fallback={<TextPoster label={props.item.title} />}>
+            <img
+              src={src()}
+              alt={props.item.title}
+              loading="lazy"
+              class="h-full w-full object-cover"
+            />
+          </Show>
+          <Show when={props.item.overview}>
+            <div class="absolute inset-0 flex items-end bg-black/70 p-2 opacity-0 transition-opacity group-hover:opacity-100">
+              <p class="line-clamp-5 text-xs text-white">{props.item.overview}</p>
+            </div>
+          </Show>
+        </div>
+        <div class="mt-1.5 truncate text-sm text-fg" title={props.item.title}>
+          {props.item.title}
+        </div>
+        <div class="flex items-center gap-2 text-xs text-muted">
+          <span>{yearOf(props.item.releaseDate) ?? "—"}</span>
+          <Show when={props.item.voteAverage > 0}>
+            <span>★ {props.item.voteAverage.toFixed(1)}</span>
+          </Show>
+        </div>
       </div>
       <div class="mt-1.5">
         <GrabButton mode={props.mode} item={props.item} onGrab={props.onGrab} />
@@ -210,6 +228,7 @@ const PaginatedRow: Component<{
   category: DiscoverCategory;
   reloadToken: () => number;
   onGrab: (t: GrabTarget) => void;
+  onDetail: (t: DetailTarget) => void;
   onError: (err: unknown) => void;
 }> = (props) => {
   const [items, setItems] = createSignal<DiscoverItem[]>([]);
@@ -248,7 +267,12 @@ const PaginatedRow: Component<{
       title={props.title}
       items={items()}
       renderItem={(item) => (
-        <PosterCard mode={props.mode} item={item} onGrab={props.onGrab} />
+        <PosterCard
+          mode={props.mode}
+          item={item}
+          onGrab={props.onGrab}
+          onDetail={props.onDetail}
+        />
       )}
       onLoadMore={() => void load(false)}
       hasMore={!exhausted()}
@@ -380,6 +404,7 @@ const SliderRow: Component<{
   slider: Slider;
   reloadToken: () => number;
   onGrab: (t: GrabTarget) => void;
+  onDetail: (t: DetailTarget) => void;
   onError: (err: unknown) => void;
 }> = (props) => {
   const [items, setItems] = createSignal<DiscoverItem[]>([]);
@@ -420,6 +445,7 @@ const SliderRow: Component<{
           mode={sliderItemMode(props.slider.target, item)}
           item={item}
           onGrab={props.onGrab}
+          onDetail={props.onDetail}
         />
       )}
       onLoadMore={() => void load(false)}
@@ -437,6 +463,7 @@ const SliderRow: Component<{
 const SliderRows: Component<{
   reloadToken: () => number;
   onGrab: (t: GrabTarget) => void;
+  onDetail: (t: DetailTarget) => void;
   onError: (err: unknown) => void;
 }> = (props) => {
   const [sliders] = createResource(props.reloadToken, () =>
@@ -451,6 +478,7 @@ const SliderRows: Component<{
           slider={slider}
           reloadToken={props.reloadToken}
           onGrab={props.onGrab}
+          onDetail={props.onDetail}
           onError={props.onError}
         />
       )}
@@ -466,6 +494,7 @@ const SliderRows: Component<{
 // TMDB missing.
 export const MainstreamDiscover: Component = () => {
   const [grabTarget, setGrabTarget] = createSignal<GrabTarget | null>(null);
+  const [detailTarget, setDetailTarget] = createSignal<DetailTarget | null>(null);
   const [setupError, setSetupError] = createSignal<unknown>(null);
   const [dismissedSetup, setDismissedSetup] = createSignal(false);
   const [reloadToken, setReloadToken] = createSignal(0);
@@ -559,6 +588,7 @@ export const MainstreamDiscover: Component = () => {
                   category={row.category}
                   reloadToken={reloadToken}
                   onGrab={setGrabTarget}
+                  onDetail={setDetailTarget}
                   onError={setSetupError}
                 />
               )}
@@ -566,6 +596,7 @@ export const MainstreamDiscover: Component = () => {
             <SliderRows
               reloadToken={reloadToken}
               onGrab={setGrabTarget}
+              onDetail={setDetailTarget}
               onError={setSetupError}
             />
             <LibraryRow reloadToken={reloadToken} onGrab={setGrabTarget} />
@@ -588,6 +619,7 @@ export const MainstreamDiscover: Component = () => {
                       mode={e.mode}
                       item={e.item}
                       onGrab={setGrabTarget}
+                      onDetail={setDetailTarget}
                     />
                   )}
                 </For>
@@ -599,6 +631,9 @@ export const MainstreamDiscover: Component = () => {
 
       <Show when={grabTarget()}>
         {(t) => <GrabDialog target={t()} onClose={() => setGrabTarget(null)} />}
+      </Show>
+      <Show when={detailTarget()}>
+        {(t) => <DetailPopup target={t()} onClose={() => setDetailTarget(null)} />}
       </Show>
     </div>
   );

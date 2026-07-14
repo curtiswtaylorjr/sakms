@@ -128,15 +128,17 @@ func modeStatusFor(ctx context.Context, m mode.Mode, allowStore *allowlist.Store
 	return modeStatus{Mode: m, Available: true, ArrConfigured: arrConfigured, AllowlistCount: len(tags)}, nil
 }
 
+// connectionExists reports whether service has a stored connection —
+// delegates to optionalConnAPI (adultdiscover_stashbox.go) for the actual
+// "not-found is not an error" logic rather than re-implementing it, so
+// package api's "is this connection configured" idiom exists in exactly one
+// place.
 func connectionExists(ctx context.Context, connStore *connections.Store, service string) (bool, error) {
-	_, err := connStore.Get(ctx, service)
-	if errors.Is(err, connections.ErrNotFound) {
-		return false, nil
-	}
+	conn, err := optionalConnAPI(ctx, connStore, service)
 	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return conn != nil, nil
 }
 
 type dismissSetupRequest struct {

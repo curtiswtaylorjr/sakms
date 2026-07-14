@@ -226,6 +226,10 @@ export interface DiscoverItem {
  * row, which the backend produces by re-sorting ONE browse page by this field
  * descending — a page-local ordering, NOT a true global popularity ranking (see
  * internal/tpdbrest.BrowseScenes' doc). May be 0 (absent/unrated).
+ * Source names which upstream catalog the scene came from: "tpdb", "stashdb",
+ * or "fansdb". TPDB's own rows and the merged "Recently Released" feed set it
+ * so the card can show a provenance label; stash-box has no numeric rating, so
+ * a "stashdb"/"fansdb" scene's Rating is always 0.
  */
 export interface AdultDiscoverItem {
   id: string;
@@ -235,6 +239,7 @@ export interface AdultDiscoverItem {
   image: string;
   durationSeconds: number /* int */;
   rating: number /* float64 */;
+  source: string;
 }
 /**
  * StudioSummary is one entry in Adult Discover's Studios row
@@ -249,6 +254,7 @@ export interface StudioSummary {
   id: string;
   name: string;
   image: string;
+  source: string;
 }
 /**
  * PerformerSummary is one entry in Adult Discover's Performers row
@@ -262,6 +268,7 @@ export interface PerformerSummary {
   id: string;
   name: string;
   image: string;
+  source: string;
 }
 /**
  * PosterResponse is GET /api/modes/{mode}/poster's response — the lazily
@@ -436,6 +443,56 @@ export interface AutoGrabResponse {
   message: string;
   grab?: Grab;
   candidates?: AutoGrabCandidate[];
+}
+/**
+ * AvailabilityPreview is the full 4-resolution grid — one upfront fetch backs
+ * every selector combination the popup's UI offers, so switching any
+ * selector re-renders instantly against already-fetched data (no refetch per
+ * selection change).
+ */
+export interface AvailabilityPreview {
+  res2160: ResolutionAvailability;
+  res1080: ResolutionAvailability;
+  res720: ResolutionAvailability;
+  res480: ResolutionAvailability;
+}
+/**
+ * ResolutionAvailability is one resolution bucket's 4-tier grid.
+ */
+export interface ResolutionAvailability {
+  low: TierAvailability;
+  medium: TierAvailability;
+  high: TierAvailability;
+  lossless: TierAvailability;
+}
+/**
+ * TierAvailability is one (resolution, tier) cell's 2-protocol leaf. Usenet/
+ * Torrent are nil when autograb.Select found no qualifying candidate for that
+ * exact (resolution, tier, protocol) combination — the popup's selector
+ * greys out that option.
+ */
+export interface TierAvailability {
+  usenet?: AvailabilityCandidate;
+  torrent?: AvailabilityCandidate;
+}
+/**
+ * AvailabilityCandidate is the winning release for one (resolution, tier,
+ * protocol) combination — everything the popup's Grab button needs to call
+ * the EXISTING POST /api/modes/{mode}/search/grab (no new grab endpoint; see
+ * the plan's "Grab" section). Score is autograb.Grade.Score (the
+ * bitrate-based ranking key), deliberately NOT release.ScoreCandidate — the
+ * same distinct scorer auto-grab already uses for tier-floor gating.
+ */
+export interface AvailabilityCandidate {
+  guid: string;
+  title: string;
+  indexer: string;
+  protocol: string;
+  size: number /* int64 */;
+  seeders: number /* int */;
+  downloadUrl: string;
+  publishDate: string;
+  score: number /* float64 */;
 }
 /**
  * Candidate is one file in a Dedup proposal's duplicate group — the shape the

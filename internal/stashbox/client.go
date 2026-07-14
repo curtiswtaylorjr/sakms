@@ -43,6 +43,17 @@ type Scene struct {
 	Title       string
 	ReleaseDate string
 	StudioName  string
+	// ImageURL, Duration, and PHashes are populated ONLY by the browse path
+	// (QueryScenes), whose GraphQL selection requests images/duration/
+	// fingerprints. The identification paths (SearchScene/FindScene/
+	// FindScenesByFingerprints) don't request those fields, so they leave these
+	// zero-valued — that's expected, not a bug.
+	ImageURL string
+	Duration int
+	// PHashes are the scene's fingerprint hashes whose algorithm is PHASH
+	// (MD5/OSHASH fingerprints are filtered out) — used by the merged-recent
+	// dedup to spot a stash-box scene TPDB already carries.
+	PHashes []string
 }
 
 // rawScene mirrors the GraphQL response shape (studio.name, falling back to
@@ -157,6 +168,116 @@ func (c *Client) FindScenesByFingerprints(ctx context.Context, phashes []string)
 	return out, nil
 }
 
+// SceneSort selects QueryScenes' server-side ordering — a typed subset of
+// stash-box's SceneSortEnum (only the two Adult Discover browses need: DATE for
+// the "recently released" feed, TRENDING for the "trending" feed). Direction is
+// always DESC, hardcoded in QueryScenes, so no direction knob is exposed.
+type SceneSort string
+
+const (
+	SceneSortDate     SceneSort = "DATE"
+	SceneSortTrending SceneSort = "TRENDING"
+)
+
+// defaultBrowsePerPage is the QueryScenes/QueryStudios/QueryPerformers page
+// size when the caller passes a non-positive per-page count — matching
+// tpdbrest.defaultBrowsePerPage so Adult Discover's stash-box rows and its TPDB
+// rows page identically.
+const defaultBrowsePerPage = 20
+
+// rawBrowseScene mirrors the richer GraphQL selection the browse query
+// (QueryScenes) requests — the same studio.name/parent.name fallback as
+// rawScene, plus images/duration/fingerprints. It's separate from rawScene so
+// the identification query paths keep their minimal selection unchanged.
+type rawBrowseScene struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	ReleaseDate string `json:"release_date"`
+	Studio      *struct {
+		Name   string `json:"name"`
+		Parent *struct {
+			Name string `json:"name"`
+		} `json:"parent"`
+	} `json:"studio"`
+	Images []struct {
+		URL string `json:"url"`
+	} `json:"images"`
+	Duration     int `json:"duration"`
+	Fingerprints []struct {
+		Hash      string `json:"hash"`
+		Algorithm string `json:"algorithm"`
+	} `json:"fingerprints"`
+}
+
+func (s rawBrowseScene) toScene() Scene {
+	studioName := ""
+	if s.Studio != nil {
+		studioName = s.Studio.Name
+		if studioName == "" && s.Studio.Parent != nil {
+			studioName = s.Studio.Parent.Name
+		}
+	}
+	imageURL := ""
+	if len(s.Images) > 0 {
+		imageURL = s.Images[0].URL
+	}
+	var phashes []string
+	for _, fp := range s.Fingerprints {
+		if fp.Algorithm == "PHASH" {
+			phashes = append(phashes, fp.Hash)
+		}
+	}
+	return Scene{
+		ID:          s.ID,
+		Title:       s.Title,
+		ReleaseDate: s.ReleaseDate,
+		StudioName:  studioName,
+		ImageURL:    imageURL,
+		Duration:    s.Duration,
+		PHashes:     phashes,
+	}
+}
+
+const queryScenesQuery = `query QueryScenes($input: SceneQueryInput!) {
+  queryScenes(input: $input) {
+    scenes { id title release_date studio { name parent { name } } images { url } duration fingerprints { hash algorithm } }
+  }
+}`
+
+// QueryScenes browses one page of a stash-box's scene catalog, sorted server-side
+// by sort (direction always DESC). page/perPage are clamped to sane minimums
+// (page >= 1; perPage defaults to defaultBrowsePerPage when non-positive), the
+// same lenient contract tpdbrest's browse methods use, so a bad client value
+// never produces a malformed query. Backs Adult Discover's optional StashDB/
+// FansDB scene rows.
+func (c *Client) QueryScenes(ctx context.Context, sort SceneSort, page, perPage int) ([]Scene, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	input := map[string]any{
+		"page":      page,
+		"per_page":  perPage,
+		"sort":      string(sort),
+		"direction": "DESC",
+	}
+	var data struct {
+		QueryScenes struct {
+			Scenes []rawBrowseScene `json:"scenes"`
+		} `json:"queryScenes"`
+	}
+	if err := c.do(ctx, queryScenesQuery, map[string]any{"input": input}, &data); err != nil {
+		return nil, err
+	}
+	out := make([]Scene, len(data.QueryScenes.Scenes))
+	for i, rs := range data.QueryScenes.Scenes {
+		out[i] = rs.toScene()
+	}
+	return out, nil
+}
+
 const searchSceneQuery = `query SearchScene($term: String!) {
   searchScene(term: $term) { id title release_date studio { name parent { name } } }
 }`
@@ -245,6 +366,61 @@ func (c *Client) SubmitSceneDraft(ctx context.Context, title, studio, date strin
 type Performer struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// ImageURL is populated only by the browse path (QueryPerformers), whose
+	// selection requests images; the search path (SearchPerformer) leaves it
+	// empty.
+	ImageURL string `json:"-"`
+}
+
+// rawBrowsePerformer decodes QueryPerformers' images-carrying selection,
+// collapsing images[0].url into Performer.ImageURL (empty when the performer
+// has no art).
+type rawBrowsePerformer struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Images []struct {
+		URL string `json:"url"`
+	} `json:"images"`
+}
+
+func (p rawBrowsePerformer) toPerformer() Performer {
+	imageURL := ""
+	if len(p.Images) > 0 {
+		imageURL = p.Images[0].URL
+	}
+	return Performer{ID: p.ID, Name: p.Name, ImageURL: imageURL}
+}
+
+const queryPerformersQuery = `query QueryPerformers($input: PerformerQueryInput!) {
+  queryPerformers(input: $input) {
+    performers { id name images { url } }
+  }
+}`
+
+// QueryPerformers browses one page of a stash-box's performer catalog. page/
+// perPage are clamped like QueryScenes. Backs Adult Discover's optional
+// StashDB/FansDB Performers rows.
+func (c *Client) QueryPerformers(ctx context.Context, page, perPage int) ([]Performer, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	input := map[string]any{"page": page, "per_page": perPage}
+	var data struct {
+		QueryPerformers struct {
+			Performers []rawBrowsePerformer `json:"performers"`
+		} `json:"queryPerformers"`
+	}
+	if err := c.do(ctx, queryPerformersQuery, map[string]any{"input": input}, &data); err != nil {
+		return nil, err
+	}
+	out := make([]Performer, len(data.QueryPerformers.Performers))
+	for i, rp := range data.QueryPerformers.Performers {
+		out[i] = rp.toPerformer()
+	}
+	return out, nil
 }
 
 const searchPerformerQuery = `query SearchPerformer($term: String!, $limit: Int) {
@@ -267,6 +443,60 @@ func (c *Client) SearchPerformer(ctx context.Context, term string, limit int) ([
 type Studio struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// ImageURL is populated only by the browse path (QueryStudios), whose
+	// selection requests images; the lookup path (FindStudio) leaves it empty.
+	ImageURL string `json:"-"`
+}
+
+// rawBrowseStudio decodes QueryStudios' images-carrying selection, collapsing
+// images[0].url into Studio.ImageURL (empty when the studio has no art).
+type rawBrowseStudio struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Images []struct {
+		URL string `json:"url"`
+	} `json:"images"`
+}
+
+func (s rawBrowseStudio) toStudio() Studio {
+	imageURL := ""
+	if len(s.Images) > 0 {
+		imageURL = s.Images[0].URL
+	}
+	return Studio{ID: s.ID, Name: s.Name, ImageURL: imageURL}
+}
+
+const queryStudiosQuery = `query QueryStudios($input: StudioQueryInput!) {
+  queryStudios(input: $input) {
+    studios { id name images { url } }
+  }
+}`
+
+// QueryStudios browses one page of a stash-box's studio catalog, letting the
+// server apply StudioQueryInput's default NAME sort (no direction override).
+// page/perPage are clamped like QueryScenes. Backs Adult Discover's optional
+// StashDB/FansDB Studios rows.
+func (c *Client) QueryStudios(ctx context.Context, page, perPage int) ([]Studio, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	input := map[string]any{"page": page, "per_page": perPage, "sort": "NAME"}
+	var data struct {
+		QueryStudios struct {
+			Studios []rawBrowseStudio `json:"studios"`
+		} `json:"queryStudios"`
+	}
+	if err := c.do(ctx, queryStudiosQuery, map[string]any{"input": input}, &data); err != nil {
+		return nil, err
+	}
+	out := make([]Studio, len(data.QueryStudios.Studios))
+	for i, rs := range data.QueryStudios.Studios {
+		out[i] = rs.toStudio()
+	}
+	return out, nil
 }
 
 const findStudioQuery = `query FindStudio($name: String) {

@@ -304,3 +304,50 @@ func TestRuntimeMismatch(t *testing.T) {
 		})
 	}
 }
+
+// TestFloorTable480pRatiosConsistentWithExistingRows locks in the plan's
+// explicit design intent for the new 480p floorTable row: its cross-tier step
+// ratios (Low->Medium, Medium->High, High->Lossless) should track the SAME
+// spacing the three pre-existing resolution rows (720/1080/2160) already
+// share — not exact equality (480p's proposed numbers are flagged as tunable
+// starting points, not derived by precise division — see floorTable's doc
+// comment), but within a generous tolerance. A future retune of these numbers
+// is expected to keep passing this test as long as it preserves that same
+// relative spacing; loosening the *tolerance* to force a pass instead of
+// fixing the numbers would defeat the point of this test.
+func TestFloorTable480pRatiosConsistentWithExistingRows(t *testing.T) {
+	const tolerance = 0.15 // 15% — generous margin around the ~2.5x/2x/1.8x steps
+
+	steps := []struct {
+		name          string
+		lower, higher quality.Tier
+	}{
+		{"Low->Medium", quality.Low, quality.Medium},
+		{"Medium->High", quality.Medium, quality.High},
+		{"High->Lossless", quality.High, quality.Lossless},
+	}
+
+	for _, resolution := range []int{720, 1080, 2160} {
+		for _, step := range steps {
+			refRatio := floorTable[step.higher][resolution] / floorTable[step.lower][resolution]
+			gotRatio := floorTable[step.higher][480] / floorTable[step.lower][480]
+			diff := math.Abs(gotRatio-refRatio) / refRatio
+			if diff > tolerance {
+				t.Errorf("480p %s ratio = %.3f, reference (%dp) = %.3f, diff %.1f%% exceeds %.0f%% tolerance",
+					step.name, gotRatio, resolution, refRatio, diff*100, tolerance*100)
+			}
+		}
+	}
+}
+
+// TestFloorTable480pRowPresentForEveryTier is a basic sanity check that the
+// new row exists (no missing-key zero-value silently grading every 480p
+// candidate as StatusUnknownResolution again).
+func TestFloorTable480pRowPresentForEveryTier(t *testing.T) {
+	for _, tier := range []quality.Tier{quality.Low, quality.Medium, quality.High, quality.Lossless} {
+		floor, ok := floorTable[tier][480]
+		if !ok || floor <= 0 {
+			t.Errorf("floorTable[%s][480] missing or non-positive: %v (ok=%v)", tier, floor, ok)
+		}
+	}
+}

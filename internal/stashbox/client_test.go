@@ -312,3 +312,195 @@ func TestFindStudio_NotFound(t *testing.T) {
 		t.Fatalf("expected nil for no match, got %+v", studio)
 	}
 }
+
+func TestQueryScenes_DecodesBrowseFields(t *testing.T) {
+	tests := []struct {
+		name         string
+		responseBody string
+		wantTitle    string
+		wantStudio   string
+		wantImageURL string
+		wantDuration int
+		wantPHashes  []string
+	}{
+		{
+			name: "full scene with image, duration, and a PHASH fingerprint",
+			responseBody: `{"data":{"queryScenes":{"scenes":[{"id":"s1","title":"Full Scene","release_date":"2024-01-01",` +
+				`"studio":{"name":"Vixen","parent":null},"images":[{"url":"http://cdn/scene1.jpg"}],"duration":1800,` +
+				`"fingerprints":[{"hash":"ph1","algorithm":"PHASH"}]}]}}}`,
+			wantTitle:    "Full Scene",
+			wantStudio:   "Vixen",
+			wantImageURL: "http://cdn/scene1.jpg",
+			wantDuration: 1800,
+			wantPHashes:  []string{"ph1"},
+		},
+		{
+			name: "empty images array yields blank ImageURL",
+			responseBody: `{"data":{"queryScenes":{"scenes":[{"id":"s2","title":"Artless Scene","release_date":"2024-02-02",` +
+				`"studio":{"name":"Tushy","parent":null},"images":[],"duration":600,"fingerprints":[]}]}}}`,
+			wantTitle:    "Artless Scene",
+			wantStudio:   "Tushy",
+			wantImageURL: "",
+			wantDuration: 600,
+			wantPHashes:  nil,
+		},
+		{
+			name: "non-PHASH fingerprints (MD5/OSHASH) are excluded from PHashes",
+			responseBody: `{"data":{"queryScenes":{"scenes":[{"id":"s3","title":"Mixed FP Scene","release_date":"2024-03-03",` +
+				`"studio":{"name":"","parent":{"name":"Parent Studio"}},"images":[{"url":"http://cdn/scene3.jpg"}],"duration":0,` +
+				`"fingerprints":[{"hash":"md5hash","algorithm":"MD5"},{"hash":"oshash1","algorithm":"OSHASH"},{"hash":"ph3","algorithm":"PHASH"}]}]}}}`,
+			wantTitle:    "Mixed FP Scene",
+			wantStudio:   "Parent Studio",
+			wantImageURL: "http://cdn/scene3.jpg",
+			wantDuration: 0,
+			wantPHashes:  []string{"ph3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, closeSrv := newTestClient(t, Config{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.responseBody))
+			})
+			defer closeSrv()
+
+			out, err := c.QueryScenes(context.Background(), SceneSortDate, 1, 20)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(out) != 1 {
+				t.Fatalf("expected 1 scene, got %d", len(out))
+			}
+			s := out[0]
+			if s.Title != tt.wantTitle {
+				t.Errorf("Title = %q, want %q", s.Title, tt.wantTitle)
+			}
+			if s.StudioName != tt.wantStudio {
+				t.Errorf("StudioName = %q, want %q", s.StudioName, tt.wantStudio)
+			}
+			if s.ImageURL != tt.wantImageURL {
+				t.Errorf("ImageURL = %q, want %q", s.ImageURL, tt.wantImageURL)
+			}
+			if s.Duration != tt.wantDuration {
+				t.Errorf("Duration = %d, want %d", s.Duration, tt.wantDuration)
+			}
+			if len(s.PHashes) != len(tt.wantPHashes) {
+				t.Fatalf("PHashes = %v, want %v", s.PHashes, tt.wantPHashes)
+			}
+			for i, h := range tt.wantPHashes {
+				if s.PHashes[i] != h {
+					t.Errorf("PHashes[%d] = %q, want %q", i, s.PHashes[i], h)
+				}
+			}
+		})
+	}
+}
+
+// TestQueryScenes_SendsPaginationAndSort proves the input variable carries the
+// clamped page/per_page, the requested sort, and the hardcoded DESC direction.
+func TestQueryScenes_SendsPaginationAndSort(t *testing.T) {
+	var gotInput map[string]any
+	c, closeSrv := newTestClient(t, Config{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotInput = req.Variables.Input
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"queryScenes":{"scenes":[]}}}`))
+	})
+	defer closeSrv()
+
+	// page 0 / perPage -5 must clamp to page 1 / per_page 20 (defaultBrowsePerPage).
+	if _, err := c.QueryScenes(context.Background(), SceneSortTrending, 0, -5); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotInput["page"].(float64) != 1 {
+		t.Errorf("page = %v, want clamped 1", gotInput["page"])
+	}
+	if gotInput["per_page"].(float64) != 20 {
+		t.Errorf("per_page = %v, want defaulted 20", gotInput["per_page"])
+	}
+	if gotInput["sort"] != "TRENDING" {
+		t.Errorf("sort = %v, want TRENDING", gotInput["sort"])
+	}
+	if gotInput["direction"] != "DESC" {
+		t.Errorf("direction = %v, want DESC", gotInput["direction"])
+	}
+}
+
+func TestQueryStudios_DecodesAndPaginates(t *testing.T) {
+	var gotInput map[string]any
+	c, closeSrv := newTestClient(t, Config{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotInput = req.Variables.Input
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"queryStudios":{"studios":[` +
+			`{"id":"st1","name":"With Art","images":[{"url":"http://cdn/studio.png"}]},` +
+			`{"id":"st2","name":"No Art","images":[]}]}}}`))
+	})
+	defer closeSrv()
+
+	out, err := c.QueryStudios(context.Background(), 2, 7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotInput["page"].(float64) != 2 || gotInput["per_page"].(float64) != 7 {
+		t.Errorf("pagination not sent through: %+v", gotInput)
+	}
+	if gotInput["sort"] != "NAME" {
+		t.Errorf("sort = %v, want NAME", gotInput["sort"])
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 studios, got %d", len(out))
+	}
+	if out[0].Name != "With Art" || out[0].ImageURL != "http://cdn/studio.png" {
+		t.Errorf("out[0] = %+v", out[0])
+	}
+	if out[1].ImageURL != "" {
+		t.Errorf("out[1].ImageURL = %q, want empty for no images", out[1].ImageURL)
+	}
+}
+
+func TestQueryPerformers_DecodesAndPaginates(t *testing.T) {
+	var gotInput map[string]any
+	c, closeSrv := newTestClient(t, Config{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotInput = req.Variables.Input
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"queryPerformers":{"performers":[` +
+			`{"id":"pf1","name":"Riley","images":[{"url":"http://cdn/perf.jpg"}]},` +
+			`{"id":"pf2","name":"Artless","images":[]}]}}}`))
+	})
+	defer closeSrv()
+
+	out, err := c.QueryPerformers(context.Background(), 3, 15)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotInput["page"].(float64) != 3 || gotInput["per_page"].(float64) != 15 {
+		t.Errorf("pagination not sent through: %+v", gotInput)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 performers, got %d", len(out))
+	}
+	if out[0].Name != "Riley" || out[0].ImageURL != "http://cdn/perf.jpg" {
+		t.Errorf("out[0] = %+v", out[0])
+	}
+	if out[1].ImageURL != "" {
+		t.Errorf("out[1].ImageURL = %q, want empty for no images", out[1].ImageURL)
+	}
+}

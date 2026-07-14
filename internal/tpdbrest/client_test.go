@@ -405,6 +405,29 @@ func TestGet_MissingDurationIsZero(t *testing.T) {
 	}
 }
 
+// TestGet_ParsesHashes proves a scene's "hashes" array decodes into
+// Scene.Hashes filtered to type=="phash" — the merged-recent dedup's TPDB-side
+// hash set — with non-phash entries (e.g. oshash) excluded.
+func TestGet_ParsesHashes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"_id":"1","title":"Hashed Scene","date":"2024-01-01","site":{"name":"Some Site"},"hashes":[{"hash":"abc123","type":"phash"},{"hash":"def456","type":"oshash"}]}]}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "testkey", &http.Client{Timeout: 5 * time.Second})
+	out, err := c.SearchByHash(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 scene, got %d", len(out))
+	}
+	if len(out[0].Hashes) != 1 || out[0].Hashes[0] != "abc123" {
+		t.Fatalf("expected Hashes=[abc123] (oshash excluded), got %+v", out[0].Hashes)
+	}
+}
+
 func TestGet_EmptySiteFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

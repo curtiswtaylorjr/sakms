@@ -34,6 +34,7 @@ const scene = (over: Partial<AdultDiscoverItem>): AdultDiscoverItem => ({
   image: "https://cdn.theporndb.net/scenes/abc.jpg",
   durationSeconds: 1800,
   rating: 0,
+  source: "tpdb",
   ...over,
 });
 
@@ -50,6 +51,7 @@ const studio = (over: Partial<StudioSummary>): StudioSummary => ({
   id: "st1",
   name: "Vixen",
   image: "https://cdn.theporndb.net/sites/vixen.jpg",
+  source: "tpdb",
   ...over,
 });
 
@@ -57,6 +59,7 @@ const performer = (over: Partial<PerformerSummary>): PerformerSummary => ({
   id: "pf1",
   name: "A Performer",
   image: "",
+  source: "tpdb",
   ...over,
 });
 
@@ -69,13 +72,19 @@ const stubFetch = (handler: Handler) => {
 
 // mainstreamDefaults answers the background fetches the combined Mainstream page
 // fires on mount (category rows + the library row's two tracked calls +
-// per-card poster probes + TraktWatchlistRow's status check) with empties, so
-// each test only has to special-case the calls it actually asserts on.
-// Returns null for anything it doesn't recognize, so the caller can fall
-// through to its own handler / throw. Trakt defaults to "not linked" so
-// TraktWatchlistRow (mounted unconditionally by MainstreamDiscover) stays
-// invisible in every test that doesn't explicitly opt into it.
+// per-card poster probes + TraktWatchlistRow's status check + Adult's
+// fetchConnections call) with empties, so each test only has to special-case
+// the calls it actually asserts on. Returns null for anything it doesn't
+// recognize, so the caller can fall through to its own handler / throw. Trakt
+// defaults to "not linked" so TraktWatchlistRow (mounted unconditionally by
+// MainstreamDiscover) stays invisible in every test that doesn't explicitly
+// opt into it. Adult's StashDB/FansDB rows default to invisible too — no
+// "/api/connections" entries — since the generic "/discover" match below
+// already covers their scene rows AND the merged recent-merged route (a
+// substring of "/discover"), and no test here opts a box in unless it's
+// specifically testing that row.
 const mainstreamDefaults = (url: string): Response | null => {
+  if (url.includes("/api/connections")) return jsonResponse([]);
   if (url.includes("/discover")) return jsonResponse([]);
   if (url.includes("/tracked")) return jsonResponse([]);
   if (url.includes("/poster")) return jsonResponse({ posterPath: "" });
@@ -370,7 +379,7 @@ describe("Discover — Adult tab (row-based browse)", () => {
   it("renders the two scene rows, the Studios row, and the Performers row with proxied art", async () => {
     const { container } = (() => {
       stubFetch((url) => {
-        if (url.includes("/api/modes/adult/discover") && url.includes("category=recent"))
+        if (url.includes("/api/modes/adult/discover/recent-merged"))
           return jsonResponse([scene({ id: "r1", title: "Recent Scene" })]);
         if (url.includes("/api/modes/adult/discover") && url.includes("category=top-rated"))
           return jsonResponse([scene({ id: "t1", title: "Top Scene" })]);
@@ -418,7 +427,7 @@ describe("Discover — Adult tab (row-based browse)", () => {
 
   it("appends the next page to a scene row on Show more (append, not replace)", async () => {
     const fetchMock = stubFetch((url) => {
-      if (url.includes("/api/modes/adult/discover") && url.includes("category=recent")) {
+      if (url.includes("/api/modes/adult/discover/recent-merged")) {
         if (url.includes("page=2"))
           return jsonResponse([scene({ id: "r2", title: "Recent Page Two" })]);
         return jsonResponse([scene({ id: "r1", title: "Recent Page One" })]);
@@ -439,8 +448,7 @@ describe("Discover — Adult tab (row-based browse)", () => {
     expect(screen.getByText("Recent Page One")).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(([u]) =>
-        String(u).includes("/api/modes/adult/discover") &&
-        String(u).includes("category=recent") &&
+        String(u).includes("/api/modes/adult/discover/recent-merged") &&
         String(u).includes("page=2"),
       ),
     ).toBe(true);
@@ -555,6 +563,174 @@ describe("Discover — Adult tab (row-based browse)", () => {
         String(u).includes("/api/modes/adult/performers/pf1/scenes"),
       ),
     ).toBe(true);
+  });
+});
+
+// connectionSummary is the ConnectionSummary DTO factory this describe block
+// uses to drive Adult's fetchConnections()-based row visibility gate.
+const connectionSummary = (service: string): { service: string; url: string; hasApiKey: boolean; updatedAt: string } => ({
+  service,
+  url: "https://example.invalid",
+  hasApiKey: true,
+  updatedAt: "2024-01-01T00:00:00Z",
+});
+
+describe("Discover — Adult optional StashDB/FansDB rows", () => {
+  it("hides the StashDB/FansDB rows entirely when neither connection is configured", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/connections")) return jsonResponse([]);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+
+    // The always-present TPDB rows still render...
+    expect(await screen.findByText("Recently Released")).toBeInTheDocument();
+    // ...but no StashDB/FansDB row header ever appears, not even with an empty
+    // "Nothing here yet" placeholder.
+    expect(screen.queryByText("StashDB Trending")).not.toBeInTheDocument();
+    expect(screen.queryByText("StashDB Studios")).not.toBeInTheDocument();
+    expect(screen.queryByText("StashDB Performers")).not.toBeInTheDocument();
+    expect(screen.queryByText("FansDB Recently Released")).not.toBeInTheDocument();
+    expect(screen.queryByText("FansDB Trending")).not.toBeInTheDocument();
+    expect(screen.queryByText("FansDB Studios")).not.toBeInTheDocument();
+    expect(screen.queryByText("FansDB Performers")).not.toBeInTheDocument();
+  });
+
+  it("shows StashDB's rows (and only StashDB's) when only stashdb is configured", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/connections"))
+        return jsonResponse([connectionSummary("stashdb")]);
+      if (url.includes("/api/modes/adult/discover/stashdb/trending"))
+        return jsonResponse([scene({ id: "sb1", title: "StashDB Trend Scene", source: "stashdb" })]);
+      if (url.includes("/api/modes/adult/discover/stashdb/studios"))
+        return jsonResponse([studio({ id: "sbst1", name: "StashDB Studio", source: "stashdb" })]);
+      if (url.includes("/api/modes/adult/discover/stashdb/performers"))
+        return jsonResponse([
+          performer({
+            id: "sbpf1",
+            name: "StashDB Performer",
+            image: "https://cdn.theporndb.net/performers/sb.jpg",
+            source: "stashdb",
+          }),
+        ]);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+
+    expect(await screen.findByText("StashDB Trending")).toBeInTheDocument();
+    expect(screen.getByText("StashDB Studios")).toBeInTheDocument();
+    expect(screen.getByText("StashDB Performers")).toBeInTheDocument();
+    expect(await screen.findByText("StashDB Trend Scene")).toBeInTheDocument();
+    expect(await screen.findByText("StashDB Studio")).toBeInTheDocument();
+    expect(await screen.findByText("StashDB Performer")).toBeInTheDocument();
+
+    // FansDB stays hidden — only stashdb was in the connections list.
+    expect(screen.queryByText("FansDB Recently Released")).not.toBeInTheDocument();
+  });
+
+  it("shows FansDB's four rows when only fansdb is configured", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/connections"))
+        return jsonResponse([connectionSummary("fansdb")]);
+      if (url.includes("/api/modes/adult/discover/fansdb/recent"))
+        return jsonResponse([scene({ id: "fd1", title: "FansDB Recent Scene", source: "fansdb" })]);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+
+    expect(await screen.findByText("FansDB Recently Released")).toBeInTheDocument();
+    expect(screen.getByText("FansDB Trending")).toBeInTheDocument();
+    expect(screen.getByText("FansDB Studios")).toBeInTheDocument();
+    expect(screen.getByText("FansDB Performers")).toBeInTheDocument();
+    expect(await screen.findByText("FansDB Recent Scene")).toBeInTheDocument();
+    expect(screen.queryByText("StashDB Trending")).not.toBeInTheDocument();
+  });
+
+  it("Recently Released fetches the merged recent-merged endpoint, not the old category=recent one", async () => {
+    const fetchMock = stubFetch((url) => {
+      if (url.includes("/api/modes/adult/discover/recent-merged"))
+        return jsonResponse([scene({ id: "m1", title: "Merged Scene" })]);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+
+    expect(await screen.findByText("Merged Scene")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([u]) =>
+        String(u).includes("/api/modes/adult/discover/recent-merged"),
+      ),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([u]) => {
+        const url = String(u);
+        return (
+          url.includes("/api/modes/adult/discover") &&
+          url.includes("category=recent") &&
+          !url.includes("recent-merged")
+        );
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a StashDB/FansDB provenance label on a merged-in scene's subtitle, but not on a plain TPDB scene", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/adult/discover/recent-merged"))
+        return jsonResponse([
+          scene({ id: "t1", title: "Plain TPDB Scene", studio: "Tushy", source: "tpdb" }),
+          scene({ id: "sb1", title: "Merged StashDB Scene", studio: "Blacked", source: "stashdb" }),
+        ]);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+
+    expect(await screen.findByText("Plain TPDB Scene")).toBeInTheDocument();
+    expect(await screen.findByText("Merged StashDB Scene")).toBeInTheDocument();
+
+    // The TPDB scene's subtitle has no source label. getByText("Plain TPDB
+    // Scene") returns the title <div> itself (Element.closest matches self),
+    // so climb to the card's outer wrapper (the "w-40" card root, a sibling
+    // container of the subtitle <div>) before scoping the query. Scoped to
+    // the dedicated subtitle line (.text-xs.text-muted), not the whole card —
+    // the card's CSS-only hover overlay (DetailPopup wiring) also renders the
+    // same "Tushy · 2023" text for its truncated preview, which a bare
+    // within(card).getByText match would ambiguously match twice.
+    const tpdbCard = screen.getByText("Plain TPDB Scene").closest(".w-40");
+    const tpdbSubtitle = (tpdbCard as HTMLElement).querySelector(
+      ".text-xs.text-muted",
+    );
+    expect(tpdbSubtitle?.textContent).toMatch(/Tushy/);
+    expect(tpdbSubtitle?.textContent).not.toMatch(/StashDB/);
+
+    // The merged-in StashDB scene's subtitle includes the "StashDB" label —
+    // scope to AdultCard's dedicated subtitle line (.text-xs.text-muted)
+    // rather than a text match, since the title itself ("Merged StashDB
+    // Scene") also contains the substring "StashDB" and the subtitle also
+    // carries a year segment (studio · year · source).
+    const stashCard = screen.getByText("Merged StashDB Scene").closest(".w-40");
+    const stashSubtitle = (stashCard as HTMLElement).querySelector(
+      ".text-xs.text-muted",
+    );
+    expect(stashSubtitle?.textContent).toBe("Blacked · 2023 · StashDB");
   });
 });
 
@@ -674,5 +850,146 @@ describe("Discover — TMDB/TPDB not-configured setup pop-up", () => {
 
     expect(await screen.findByText("internal server error")).toBeInTheDocument();
     expect(screen.queryByText(/^Set up/)).not.toBeInTheDocument();
+  });
+});
+
+// availabilityDefaults answers DetailPopup's own fetches (an all-nil
+// availability grid + a neutral quality-prefs response) — checked BEFORE
+// mainstreamDefaults in every test below, since mainstreamDefaults' generic
+// `url.includes("/discover")` branch would otherwise also match
+// "/discover/availability" and hand back `[]`, which isn't the grid shape
+// DetailPopup expects.
+const availabilityDefaults = (url: string): Response | null => {
+  if (url.includes("/discover/availability")) {
+    const emptyTier = { usenet: undefined, torrent: undefined };
+    const emptyRes = { low: emptyTier, medium: emptyTier, high: emptyTier, lossless: emptyTier };
+    return jsonResponse({ res2160: emptyRes, res1080: emptyRes, res720: emptyRes, res480: emptyRes });
+  }
+  if (url.includes("/quality-prefs")) return jsonResponse({ tier: "medium", maxResolution: 0 });
+  return null;
+};
+
+describe("Discover — DetailPopup wiring (hover overlay + click-to-open, PosterCard/AdultCard)", () => {
+  it("PosterCard shows a hover overlay with the item's overview and no longer carries the old title= tooltip", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/movies/discover") && url.includes("trending"))
+        return jsonResponse([movie({ id: 1, title: "Hover Movie", overview: "A hover overview." })]);
+      const av = availabilityDefaults(url);
+      if (av) return av;
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    await screen.findByText("Hover Movie");
+
+    const card = screen.getByText("Hover Movie").closest("div.w-36") as HTMLElement;
+    // The old title=overview tooltip is gone from the card's outer wrapper.
+    expect(card.getAttribute("title")).toBeNull();
+
+    const overlay = within(card).getByText("A hover overview.");
+    expect(overlay.className).toContain("line-clamp");
+    // The overlay's own wrapper is the CSS-only group-hover reveal.
+    expect(overlay.parentElement?.className).toContain("group-hover:opacity-100");
+  });
+
+  it("clicking a PosterCard's body opens DetailPopup; the card's own Grab button still fires the unchanged quick-grab path", async () => {
+    const calls = stubFetch((url) => {
+      if (url.includes("/api/modes/movies/discover") && url.includes("trending"))
+        return jsonResponse([movie({ id: 1, title: "Click Movie" })]);
+      if (url.includes("/api/modes/movies/autograb"))
+        return jsonResponse({
+          grabbed: true,
+          fallback: false,
+          message: "auto-grabbed Click.Movie",
+          grab: { id: 1, mode: "movies", title: "Click Movie", status: "queued" },
+        });
+      const av = availabilityDefaults(url);
+      if (av) return av;
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    await screen.findByText("Click Movie");
+    const card = screen.getByText("Click Movie").closest("div.w-36") as HTMLElement;
+
+    fireEvent.click(within(card).getByText("Click Movie"));
+
+    // DetailPopup opened — its resolution selector (popup-only markup, never
+    // rendered by the card itself) appears.
+    expect(await screen.findByText("480p")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Close"));
+    expect(screen.queryByText("480p")).not.toBeInTheDocument();
+
+    // The card's own Grab button is untouched by the click-to-open wiring —
+    // it still fires the existing one-click auto-grab shortcut directly, not
+    // routed through the popup.
+    fireEvent.click(within(card).getByText("Grab"));
+    expect(await screen.findByText(/auto-grabbed/)).toBeInTheDocument();
+    expect(
+      calls.mock.calls.some(([u]) => String(u).includes("/autograb")),
+    ).toBe(true);
+  });
+
+  it("AdultCard shows a hover overlay (studio/date summary — scenes carry no overview field) and no longer carries the title= tooltip", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/adult/discover/recent-merged"))
+        return jsonResponse([scene({ id: "s1", title: "Hover Scene", studio: "Tushy", date: "2023-02-02" })]);
+      const av = availabilityDefaults(url);
+      if (av) return av;
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+    await screen.findByText("Hover Scene");
+
+    const card = screen.getByText("Hover Scene").closest(".w-40") as HTMLElement;
+    expect(card.getAttribute("title")).toBeNull();
+
+    const overlay = within(card).getByText("Tushy · 2023", { selector: "p" });
+    expect(overlay.parentElement?.className).toContain("group-hover:opacity-100");
+  });
+
+  it("clicking an AdultCard's body opens DetailPopup; the card's own Grab button still fires the unchanged quick-grab path", async () => {
+    const calls = stubFetch((url) => {
+      if (url.includes("/api/modes/adult/discover/recent-merged"))
+        return jsonResponse([scene({ id: "s1", title: "Click Scene", studio: "Tushy" })]);
+      if (url.includes("/api/modes/adult/autograb"))
+        return jsonResponse({
+          grabbed: true,
+          fallback: false,
+          message: "auto-grabbed Click.Scene",
+          grab: { id: 2, mode: "adult", title: "Click Scene", status: "queued" },
+        });
+      const av = availabilityDefaults(url);
+      if (av) return av;
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Discover />);
+    fireEvent.click(await screen.findByText("Adult"));
+    await screen.findByText("Click Scene");
+    const card = screen.getByText("Click Scene").closest(".w-40") as HTMLElement;
+
+    fireEvent.click(within(card).getByText("Click Scene"));
+    expect(await screen.findByText("480p")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Close"));
+    expect(screen.queryByText("480p")).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByText("Grab"));
+    expect(await screen.findByText(/auto-grabbed/)).toBeInTheDocument();
+    expect(
+      calls.mock.calls.some(([u]) => String(u).includes("/autograb")),
+    ).toBe(true);
   });
 });

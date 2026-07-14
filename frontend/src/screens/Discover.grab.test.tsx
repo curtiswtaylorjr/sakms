@@ -35,6 +35,7 @@ const scene = (over: Partial<AdultDiscoverItem>): AdultDiscoverItem => ({
   image: "",
   durationSeconds: 1800,
   rating: 0,
+  source: "tpdb",
   ...over,
 });
 
@@ -62,9 +63,12 @@ const autograbCalls = (calls: Call[]) =>
 // mainstreamDefaults quiets the combined page's background fetches (the
 // three category rows, the library row, per-card poster probes,
 // TraktWatchlistRow's status check) plus the Adult browse rows
-// (studios/performers) so each test only special-cases the mode + call it
+// (studios/performers, and fetchConnections for the StashDB/FansDB row gate —
+// defaulting to [] keeps those optional rows invisible in every test here
+// that doesn't opt in) so each test only special-cases the mode + call it
 // asserts on.
 const mainstreamDefaults = (url: string): Response | null => {
+  if (url.includes("/api/connections")) return jsonResponse([]);
   if (url.includes("/discover")) return jsonResponse([]);
   if (url.includes("/tracked")) return jsonResponse([]);
   if (url.includes("/poster")) return jsonResponse({ posterPath: "" });
@@ -325,9 +329,10 @@ describe("Discover auto-grab — Adult (runtime-sourced)", () => {
   it("grabs a scene sourcing durationSeconds as the scorer runtime", async () => {
     const calls = stubFetch((url) => {
       // The Adult browse now stacks two scene rows (Recently Released,
-      // Highest Rated). Return the scene from ONLY the recent row so exactly one
-      // "Grab" button renders — the grab-flow assertions below are unchanged.
-      if (url.includes("/api/modes/adult/discover") && url.includes("category=recent"))
+      // Highest Rated). Return the scene from ONLY the recent-merged row so
+      // exactly one "Grab" button renders — the grab-flow assertions below are
+      // unchanged.
+      if (url.includes("/api/modes/adult/discover/recent-merged"))
         return jsonResponse([scene({ id: "s1", title: "Scene One", studio: "Vixen", durationSeconds: 2400 })]);
       if (url.includes("/api/modes/adult/autograb"))
         return jsonResponse({

@@ -309,6 +309,18 @@ above, so don't drop them for convenience:
     this fix — the old handler used `availability.Result` directly). Left
     alone since removing it means regenerating `ts/dto.gen.ts`; fine to clean
     up in a future pass.
+  - **Clarification, not a reversal (2026-07-14):** the Discover detail
+    popup's `GET /api/modes/{mode}/discover/availability`
+    (`internal/api/discover_availability.go`) does call Prowlarr, but this
+    is not the badge that was removed above. The removed feature fired
+    automatically, per-card, on every page load — hundreds of concurrent
+    queries with a populated library. This endpoint fires once, for one
+    title, only when an operator explicitly clicks a card to open its
+    detail popup — the same trigger shape (a human action, not an automatic
+    probe) as the pre-existing manual Search screen already had. If a
+    future change makes this fire without an explicit click, or fires for
+    more than the one clicked title, that's the rule being broken again —
+    treat it the same way the original badge was treated.
 
 - **Mainstream Discover — Seerr-parity expansion (2026-07-14)**: supersedes
   this section's earlier "paginated Trending/Popular rows" description —

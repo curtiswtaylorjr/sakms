@@ -43,6 +43,13 @@ type Scene struct {
 	// re-sorts one browse page by this field server-side (that ordering is NOT
 	// a true global popularity ranking — see BrowseScenes' doc).
 	Rating float64
+	// Hashes are the scene's pHash values — TPDB's per-scene "hashes" array
+	// filtered to type=="phash" (see rawScene.Hashes). Present on every scene
+	// response (browse and search), populated for free by every caller through
+	// the shared toScene() path. Backs the merged-recent dedup, which drops a
+	// stash-box scene whose pHash TPDB already carries. May be empty (a scene
+	// with no submitted fingerprints).
+	Hashes []string
 }
 
 type rawSite struct {
@@ -104,14 +111,33 @@ func (f *flexID) UnmarshalJSON(b []byte) error {
 // integer 5. It is decoded into a float64 so either an integer or a fractional
 // score round-trips without a type error, and defaults to 0 when absent
 // (unrated). This is the field Adult Discover's "Highest Rated" row sorts on.
+//
+// Hashes is TPDB's per-scene "hashes" array (SceneHashBasicResponse objects,
+// each carrying a hash string and a type). Confirmed present on SceneResource
+// in TPDB's live OpenAPI schema (fetched/parsed from
+// https://api.theporndb.net/openapi.json, same source as Rating above) — both
+// the array's existence on the browse/search response shape AND its per-entry
+// `hash`/`type` fields are directly confirmed there, not merely modeled from
+// third-party documentation. toScene filters it to type=="phash" (the
+// confirmed lowercase enum value SearchByHash already sends as hash_type) and
+// collects just the pHash strings into Scene.Hashes — the merged-recent
+// dedup's TPDB-side hash set.
 type rawScene struct {
-	ID       flexID   `json:"_id"`
-	Title    string   `json:"title"`
-	Date     string   `json:"date"`
-	Site     *rawSite `json:"site"`
-	Image    string   `json:"image"`
-	Duration int      `json:"duration"`
-	Rating   float64  `json:"rating"`
+	ID       flexID         `json:"_id"`
+	Title    string         `json:"title"`
+	Date     string         `json:"date"`
+	Site     *rawSite       `json:"site"`
+	Image    string         `json:"image"`
+	Duration int            `json:"duration"`
+	Rating   float64        `json:"rating"`
+	Hashes   []rawSceneHash `json:"hashes"`
+}
+
+// rawSceneHash mirrors one entry of a TPDB scene's "hashes" array — only the
+// hash string and its type are consumed (type distinguishes phash from oshash).
+type rawSceneHash struct {
+	Hash string `json:"hash"`
+	Type string `json:"type"`
 }
 
 func (s rawScene) toScene() Scene {
@@ -119,7 +145,13 @@ func (s rawScene) toScene() Scene {
 	if s.Site != nil {
 		site = s.Site.Name
 	}
-	return Scene{ID: string(s.ID), Title: s.Title, Date: s.Date, Site: site, Image: s.Image, Duration: s.Duration, Rating: s.Rating}
+	var phashes []string
+	for _, h := range s.Hashes {
+		if h.Type == "phash" {
+			phashes = append(phashes, h.Hash)
+		}
+	}
+	return Scene{ID: string(s.ID), Title: s.Title, Date: s.Date, Site: site, Image: s.Image, Duration: s.Duration, Rating: s.Rating, Hashes: phashes}
 }
 
 // firstNonEmpty returns the first non-empty string from vals, or "" if all are

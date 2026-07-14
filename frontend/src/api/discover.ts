@@ -10,13 +10,20 @@
 import { api } from "./client";
 import type {
   AdultDiscoverItem,
+  AvailabilityPreview,
   DiscoverItem,
   PerformerSummary,
   PosterResponse,
   StudioSummary,
 } from "@dto";
 
-export type { AdultDiscoverItem, DiscoverItem, PerformerSummary, StudioSummary };
+export type {
+  AdultDiscoverItem,
+  AvailabilityPreview,
+  DiscoverItem,
+  PerformerSummary,
+  StudioSummary,
+};
 
 // AdultCategory selects which ordered TPDB scene feed a row renders — the two
 // the Adult discoverHandler accepts alongside its plain browse: "recent" (TPDB's
@@ -136,6 +143,62 @@ export function fetchAdultDiscoverCategory(
   );
 }
 
+// StashBox names the two OPTIONAL Adult Discover sources (StashDB, FansDB) —
+// stash-box-protocol catalogs shown only when that connection is configured
+// (unlike TPDB, the required core source). The backend returns [] (200) for an
+// unconfigured box, so the frontend hides the row rather than showing an error.
+export type StashBox = "stashdb" | "fansdb";
+
+// fetchAdultDiscoverMergedRecent returns one page of the merged, deduped
+// "Recently Released" feed: always TPDB, plus StashDB's exclusive scenes when
+// StashDB is configured (TPDB-only otherwise). Replaces the old
+// fetchAdultDiscoverCategory("recent", …) call for the Recently Released row —
+// see internal/api/adultdiscover_stashbox.go's merged handler.
+export function fetchAdultDiscoverMergedRecent(
+  page = 1,
+): Promise<AdultDiscoverItem[]> {
+  return api<AdultDiscoverItem[]>(
+    `/api/modes/adult/discover/recent-merged?page=${page}&perPage=20`,
+  );
+}
+
+// fetchStashBoxScenes returns one page of an optional stash-box source's scene
+// feed — kind "recent" (date-sorted) or "trending" (stash-box's server-side
+// TRENDING order). An unconfigured box yields [] (the caller only renders the
+// row when the connection exists, so this is a defensive fallback).
+export function fetchStashBoxScenes(
+  box: StashBox,
+  kind: "recent" | "trending",
+  page = 1,
+): Promise<AdultDiscoverItem[]> {
+  return api<AdultDiscoverItem[]>(
+    `/api/modes/adult/discover/${box}/${kind}?page=${page}&perPage=20`,
+  );
+}
+
+// fetchStashBoxStudios returns one page of an optional stash-box source's studio
+// catalog. Same shape/drill-down contract as fetchAdultStudios (TPDB), just a
+// different source.
+export function fetchStashBoxStudios(
+  box: StashBox,
+  page = 1,
+): Promise<StudioSummary[]> {
+  return api<StudioSummary[]>(
+    `/api/modes/adult/discover/${box}/studios?page=${page}&perPage=20`,
+  );
+}
+
+// fetchStashBoxPerformers returns one page of an optional stash-box source's
+// performer catalog. Same shape as fetchAdultPerformers (TPDB).
+export function fetchStashBoxPerformers(
+  box: StashBox,
+  page = 1,
+): Promise<PerformerSummary[]> {
+  return api<PerformerSummary[]>(
+    `/api/modes/adult/discover/${box}/performers?page=${page}&perPage=20`,
+  );
+}
+
 // fetchAdultStudios returns one page of TPDB's studio (site) catalog for the
 // Studios browse row. Each card's opaque id doubles as the {id} path segment of
 // fetchAdultStudioScenes below.
@@ -171,5 +234,55 @@ export function fetchAdultPerformerScenes(
 ): Promise<AdultDiscoverItem[]> {
   return api<AdultDiscoverItem[]>(
     `/api/modes/adult/performers/${encodeURIComponent(id)}/scenes?page=${page}`,
+  );
+}
+
+// AvailabilityPreviewParams is the union of every query param
+// discoverAvailabilityHandler (internal/api/discover_availability.go) reads
+// across all three modes. Every mode requires `title` (the backend's fast
+// title-match filter pass needs a known canonical title to compare release
+// titles against — the Discover card already has it client-side, cheaper
+// than an extra TMDB call solely to recover it). Movies uses tmdbId; Series
+// additionally needs season/episode (episode 0 = season pack, matching
+// grabs.Grab.SeasonSpecified's convention); Adult uses studio +
+// durationSeconds instead of a TMDB id.
+export interface AvailabilityPreviewParams {
+  title: string;
+  tmdbId?: number;
+  season?: number;
+  episode?: number;
+  studio?: string;
+  durationSeconds?: number;
+}
+
+// fetchAvailabilityPreview runs DetailPopup's one upfront, user-click-
+// triggered Prowlarr search for one title/scene — GET /api/modes/{mode}/
+// discover/availability — and returns the full 4-resolution × 4-tier ×
+// 2-protocol grid backing every selector combination the popup offers, so
+// switching any selector re-renders instantly against already-fetched data
+// (no refetch per selection change). This is NOT a reintroduction of the
+// removed automatic per-card Discover→Prowlarr probe: it fires once, only
+// when an operator explicitly opens a card's detail popup (see CLAUDE.md's
+// "Discover never queries Prowlarr" note and its 2026-07-14 clarification).
+export function fetchAvailabilityPreview(
+  mode: Mode,
+  params: AvailabilityPreviewParams,
+): Promise<AvailabilityPreview> {
+  const q = new URLSearchParams();
+  q.set("title", params.title);
+  if (mode === "adult") {
+    if (params.studio) q.set("studio", params.studio);
+    if (params.durationSeconds != null) {
+      q.set("durationSeconds", String(params.durationSeconds));
+    }
+  } else {
+    if (params.tmdbId != null) q.set("tmdbId", String(params.tmdbId));
+    if (mode === "series") {
+      if (params.season != null) q.set("season", String(params.season));
+      if (params.episode != null) q.set("episode", String(params.episode));
+    }
+  }
+  return api<AvailabilityPreview>(
+    `/api/modes/${mode}/discover/availability?${q.toString()}`,
   );
 }

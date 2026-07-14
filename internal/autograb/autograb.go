@@ -85,11 +85,26 @@ var CodecMultipliers = map[string]float64{
 // quality.go's decoupling principle — not derived by scaling one row.
 // Lossless additionally qualifies on a remux/bluray source flag alone,
 // bypassing the bitrate floor (see gradeQuality).
+//
+// The 480p row is a later addition (the Discover detail-popup plan's
+// resolution axis) — explicitly documented as tunable starting points,
+// matching this file's own DefaultMinSeeders/NonAV1PaddingFactor convention,
+// NOT a claim that these exact numbers are validated against real releases.
+// Confirmed with the project owner that adding a real 480p row (rather than
+// excluding 480p from any caller) is correct: before this, a 480p candidate
+// always graded StatusUnknownResolution regardless of tier — a real gap in
+// production auto-grab-gating data, not just a new-feature-only concern.
+// Derived by following the same relationship the existing 720→1080 step
+// already establishes (pixel-area ratio ≈0.444/0.445 at both 480p:720p and
+// 720p:1080p): divide each tier's 720p floor by ~2.5, preserving the same
+// cross-tier ratios (~2.5×/2×/1.8× between adjacent tiers) the table already
+// has at every other resolution — see
+// TestFloorTable480pRatiosConsistentWithExistingRows.
 var floorTable = map[quality.Tier]map[int]float64{
-	quality.Low:      {720: 0.8, 1080: 2, 2160: 8},
-	quality.Medium:   {720: 2, 1080: 5, 2160: 20},
-	quality.High:     {720: 4, 1080: 10, 2160: 40},
-	quality.Lossless: {720: 7, 1080: 18, 2160: 70},
+	quality.Low:      {480: 0.3, 720: 0.8, 1080: 2, 2160: 8},
+	quality.Medium:   {480: 0.8, 720: 2, 1080: 5, 2160: 20},
+	quality.High:     {480: 1.6, 720: 4, 1080: 10, 2160: 40},
+	quality.Lossless: {480: 2.8, 720: 7, 1080: 18, 2160: 70},
 }
 
 // Status is why a candidate did or didn't auto-qualify — carried through so

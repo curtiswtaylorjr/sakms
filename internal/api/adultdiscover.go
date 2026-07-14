@@ -36,6 +36,11 @@ import (
 // produces by re-sorting one browse page by this value descending — a
 // page-local ordering, honestly NOT a true global popularity ranking (TPDB has
 // no server-side popularity sort; see tpdbrest.BrowseScenes' doc). May be 0.
+//
+// Source names the upstream catalog this scene came from ("tpdb", "stashdb",
+// or "fansdb") so the card can show a provenance label — see
+// adultdiscover_stashbox.go for the optional stash-box sources and the merged
+// "Recently Released" feed. TPDB's own handlers here always set "tpdb".
 type adultScene struct {
 	ID              string  `json:"id"`
 	Title           string  `json:"title"`
@@ -44,23 +49,26 @@ type adultScene struct {
 	Image           string  `json:"image"`
 	DurationSeconds int     `json:"durationSeconds"`
 	Rating          float64 `json:"rating"`
+	Source          string  `json:"source"`
 }
 
 // adultStudio mirrors apidto.StudioSummary — one TPDB site (studio) reduced to
 // a browse card's fields (id/name/image). See tpdbrest.Site for how Image is
 // chosen from TPDB's several nullable site image fields.
 type adultStudio struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Source string `json:"source"`
 }
 
 // adultPerformer mirrors apidto.PerformerSummary — one TPDB performer reduced
 // to a browse card's fields (id/name/image). See tpdbrest.Performer for Image.
 type adultPerformer struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Source string `json:"source"`
 }
 
 // adultTPDBClient builds a standalone tpdbrest client from the stored "tpdb"
@@ -95,13 +103,22 @@ func adultPagination(r *http.Request) (page, perPage int) {
 	return page, perPage
 }
 
+// tpdbSceneToAdultScene converts one tpdbrest.Scene into the adultScene wire
+// shape — shared by writeAdultScenes (every plain TPDB response) and
+// adultDiscoverMergedRecentHandler (adultdiscover_stashbox.go), which needs
+// the same conversion applied per-item while it accumulates a merged slice
+// rather than encoding scenes straight off a single tpdbrest call.
+func tpdbSceneToAdultScene(s tpdbrest.Scene) adultScene {
+	return adultScene{ID: s.ID, Title: s.Title, Studio: s.Site, Date: s.Date, Image: s.Image, DurationSeconds: s.Duration, Rating: s.Rating, Source: "tpdb"}
+}
+
 // writeAdultScenes converts a tpdbrest scene slice into the adultScene wire
 // shape and encodes it — the one internal→JSON scene conversion every Adult
 // Discover scene response (browse, category rows, and both drill-downs) shares.
 func writeAdultScenes(w http.ResponseWriter, scenes []tpdbrest.Scene) {
 	out := make([]adultScene, len(scenes))
 	for i, s := range scenes {
-		out[i] = adultScene{ID: s.ID, Title: s.Title, Studio: s.Site, Date: s.Date, Image: s.Image, DurationSeconds: s.Duration, Rating: s.Rating}
+		out[i] = tpdbSceneToAdultScene(s)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
@@ -186,7 +203,7 @@ func adultStudiosHandler(httpClient *http.Client, connStore *connections.Store) 
 		}
 		out := make([]adultStudio, len(sites))
 		for i, s := range sites {
-			out[i] = adultStudio{ID: s.ID, Name: s.Name, Image: s.Image}
+			out[i] = adultStudio{ID: s.ID, Name: s.Name, Image: s.Image, Source: "tpdb"}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(out)
@@ -211,7 +228,7 @@ func adultPerformersHandler(httpClient *http.Client, connStore *connections.Stor
 		}
 		out := make([]adultPerformer, len(performers))
 		for i, p := range performers {
-			out[i] = adultPerformer{ID: p.ID, Name: p.Name, Image: p.Image}
+			out[i] = adultPerformer{ID: p.ID, Name: p.Name, Image: p.Image, Source: "tpdb"}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(out)

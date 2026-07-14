@@ -217,6 +217,11 @@ type DiscoverItem struct {
 // row, which the backend produces by re-sorting ONE browse page by this field
 // descending — a page-local ordering, NOT a true global popularity ranking (see
 // internal/tpdbrest.BrowseScenes' doc). May be 0 (absent/unrated).
+//
+// Source names which upstream catalog the scene came from: "tpdb", "stashdb",
+// or "fansdb". TPDB's own rows and the merged "Recently Released" feed set it
+// so the card can show a provenance label; stash-box has no numeric rating, so
+// a "stashdb"/"fansdb" scene's Rating is always 0.
 type AdultDiscoverItem struct {
 	ID              string  `json:"id"`
 	Title           string  `json:"title"`
@@ -225,6 +230,7 @@ type AdultDiscoverItem struct {
 	Image           string  `json:"image"`
 	DurationSeconds int     `json:"durationSeconds"`
 	Rating          float64 `json:"rating"`
+	Source          string  `json:"source"`
 }
 
 // StudioSummary is one entry in Adult Discover's Studios row
@@ -235,9 +241,10 @@ type AdultDiscoverItem struct {
 // favicon), frequently empty (no art) — render a text-only card when blank and
 // route non-empty values through the image proxy, never hot-link TPDB directly.
 type StudioSummary struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Source string `json:"source"`
 }
 
 // PerformerSummary is one entry in Adult Discover's Performers row
@@ -247,9 +254,10 @@ type StudioSummary struct {
 // performer image URL (first non-empty of TPDB's image/thumbnail/face),
 // frequently empty — same text-fallback + image-proxy rule as StudioSummary.
 type PerformerSummary struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Source string `json:"source"`
 }
 
 // PosterResponse is GET /api/modes/{mode}/poster's response — the lazily
@@ -425,6 +433,61 @@ type AutoGrabResponse struct {
 	Message    string              `json:"message"`
 	Grab       *Grab               `json:"grab,omitempty"`
 	Candidates []AutoGrabCandidate `json:"candidates,omitempty"`
+}
+
+// --- Discover detail popup: on-demand per-resolution/tier/protocol availability -
+//
+// GET /api/modes/{mode}/discover/availability's response — the popup's one
+// upfront preview fetch (a single, user-click-triggered Prowlarr search,
+// filtered and graded — see internal/api/discover_availability.go's doc
+// comment for the full flow). Flat structs, not a Go map: every existing DTO
+// in this file is a flat struct, and it's unconfirmed whether cmd/gendto's
+// TS codegen handles map types, so this avoids that risk (see the plan).
+
+// AvailabilityPreview is the full 4-resolution grid — one upfront fetch backs
+// every selector combination the popup's UI offers, so switching any
+// selector re-renders instantly against already-fetched data (no refetch per
+// selection change).
+type AvailabilityPreview struct {
+	Res2160 ResolutionAvailability `json:"res2160"`
+	Res1080 ResolutionAvailability `json:"res1080"`
+	Res720  ResolutionAvailability `json:"res720"`
+	Res480  ResolutionAvailability `json:"res480"`
+}
+
+// ResolutionAvailability is one resolution bucket's 4-tier grid.
+type ResolutionAvailability struct {
+	Low      TierAvailability `json:"low"`
+	Medium   TierAvailability `json:"medium"`
+	High     TierAvailability `json:"high"`
+	Lossless TierAvailability `json:"lossless"`
+}
+
+// TierAvailability is one (resolution, tier) cell's 2-protocol leaf. Usenet/
+// Torrent are nil when autograb.Select found no qualifying candidate for that
+// exact (resolution, tier, protocol) combination — the popup's selector
+// greys out that option.
+type TierAvailability struct {
+	Usenet  *AvailabilityCandidate `json:"usenet"`
+	Torrent *AvailabilityCandidate `json:"torrent"`
+}
+
+// AvailabilityCandidate is the winning release for one (resolution, tier,
+// protocol) combination — everything the popup's Grab button needs to call
+// the EXISTING POST /api/modes/{mode}/search/grab (no new grab endpoint; see
+// the plan's "Grab" section). Score is autograb.Grade.Score (the
+// bitrate-based ranking key), deliberately NOT release.ScoreCandidate — the
+// same distinct scorer auto-grab already uses for tier-floor gating.
+type AvailabilityCandidate struct {
+	GUID        string  `json:"guid"`
+	Title       string  `json:"title"`
+	Indexer     string  `json:"indexer"`
+	Protocol    string  `json:"protocol"`
+	Size        int64   `json:"size"`
+	Seeders     int     `json:"seeders"`
+	DownloadURL string  `json:"downloadUrl"`
+	PublishDate string  `json:"publishDate"`
+	Score       float64 `json:"score"`
 }
 
 // --- Review-queue proposals: Rename (Stage 3) -----------------------------

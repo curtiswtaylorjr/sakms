@@ -52,8 +52,10 @@ const STATUS_COPY: Record<string, string> = {
 };
 
 // Modal is a lightweight centered overlay for the grab dialog. Clicking the
-// backdrop or Close dismisses it; clicks inside don't bubble out.
-const Modal: Component<{
+// backdrop or Close dismisses it; clicks inside don't bubble out. Exported
+// (was module-private) so DetailPopup.tsx — the third overlay in this
+// codebase — builds on the same primitive instead of a second one.
+export const Modal: Component<{
   title: string;
   onClose: () => void;
   children: JSX.Element;
