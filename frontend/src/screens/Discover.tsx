@@ -589,36 +589,36 @@ const GrabDialog: Component<{ target: GrabTarget; onClose: () => void }> = (
             <GrabError error={result.error as Error} onConfigured={refetch} />
           }
         >
-        <Show when={result()}>
-          {(r) => (
-            <Switch>
-              <Match when={r().grabbed}>
-                <div class="text-sm text-ok">{r().message}</div>
-                <Muted class="mt-1">
-                  Tracked in the Grabs view — check import there once it finishes
-                  downloading.
-                </Muted>
-              </Match>
-              <Match when={r().fallback}>
-                <Show
-                  when={manualGrabbed()}
-                  fallback={
-                    <FallbackPickList
-                      response={r()}
-                      onPick={pickManual}
-                      grabbing={grabbing()}
-                      error={manualError()}
-                    />
-                  }
-                >
-                  <div class="text-sm text-ok">
-                    Grabbed “{manualGrabbed()}”. Tracked in the Grabs view.
-                  </div>
-                </Show>
-              </Match>
-            </Switch>
-          )}
-        </Show>
+          <Show when={result()}>
+            {(r) => (
+              <Switch>
+                <Match when={r().grabbed}>
+                  <div class="text-sm text-ok">{r().message}</div>
+                  <Muted class="mt-1">
+                    Tracked in the Grabs view — check import there once it
+                    finishes downloading.
+                  </Muted>
+                </Match>
+                <Match when={r().fallback}>
+                  <Show
+                    when={manualGrabbed()}
+                    fallback={
+                      <FallbackPickList
+                        response={r()}
+                        onPick={pickManual}
+                        grabbing={grabbing()}
+                        error={manualError()}
+                      />
+                    }
+                  >
+                    <div class="text-sm text-ok">
+                      Grabbed “{manualGrabbed()}”. Tracked in the Grabs view.
+                    </div>
+                  </Show>
+                </Match>
+              </Switch>
+            )}
+          </Show>
         </Show>
       </Show>
     </Modal>
