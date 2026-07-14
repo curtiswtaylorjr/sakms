@@ -36,6 +36,13 @@ type Scene struct {
 	// implied bitrate (Size×8/runtime) MUST treat 0 as "unknown, skip the
 	// check," never as a real zero-length runtime or a divide-by-zero input.
 	Duration int
+	// Rating is the scene's own numeric rating — see rawScene.Rating for
+	// sourcing. Modeled as float64 to tolerate either an integer (the spec's
+	// example value is 5) or a fractional score without a decode error; may be
+	// 0 (absent/unrated). Used by Adult Discover's "Highest Rated" row, which
+	// re-sorts one browse page by this field server-side (that ordering is NOT
+	// a true global popularity ranking — see BrowseScenes' doc).
+	Rating float64
 }
 
 type rawSite struct {
@@ -85,11 +92,18 @@ func (f *flexID) UnmarshalJSON(b []byte) error {
 // GraphQL endpoint implements (github.com/stashapp/stash-box) declares
 // `duration: Int` on its Scene type; (2) github.com/lusoris/goenvoy's TPDB
 // REST client (actively maintained, last verified 2026-06-14) models
-// `Duration int `json:"duration"`` on Scene/Movie/Jav, with a passing test
+// `Duration int `json:"duration"“ on Scene/Movie/Jav, with a passing test
 // fixture (1800 for a scene) — and that library's other field names
 // (_id/title/date/site.name/image) match this client's own rawScene
 // byte-for-byte, indicating it targets the same API version. Confidence:
 // documented-shape + strong corroboration, NOT live-confirmed.
+//
+// Rating ("rating") is the scene object's own numeric rating field, confirmed
+// present in TPDB's live OpenAPI SceneResource schema (fetched/parsed from
+// https://api.theporndb.net/openapi.json), whose example value is the bare
+// integer 5. It is decoded into a float64 so either an integer or a fractional
+// score round-trips without a type error, and defaults to 0 when absent
+// (unrated). This is the field Adult Discover's "Highest Rated" row sorts on.
 type rawScene struct {
 	ID       flexID   `json:"_id"`
 	Title    string   `json:"title"`
@@ -97,6 +111,7 @@ type rawScene struct {
 	Site     *rawSite `json:"site"`
 	Image    string   `json:"image"`
 	Duration int      `json:"duration"`
+	Rating   float64  `json:"rating"`
 }
 
 func (s rawScene) toScene() Scene {
@@ -104,7 +119,20 @@ func (s rawScene) toScene() Scene {
 	if s.Site != nil {
 		site = s.Site.Name
 	}
-	return Scene{ID: string(s.ID), Title: s.Title, Date: s.Date, Site: site, Image: s.Image, Duration: s.Duration}
+	return Scene{ID: string(s.ID), Title: s.Title, Date: s.Date, Site: site, Image: s.Image, Duration: s.Duration, Rating: s.Rating}
+}
+
+// firstNonEmpty returns the first non-empty string from vals, or "" if all are
+// empty — the "pick the first present image URL in preference order" helper the
+// performer/site image-field selection below shares (TPDB exposes several
+// nullable image fields per entity and this client exposes exactly one).
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 type scenesResponse struct {
@@ -125,8 +153,19 @@ func (c *Client) doGet(ctx context.Context, path string, params url.Values, out 
 }
 
 func (c *Client) get(ctx context.Context, params url.Values) ([]Scene, error) {
+	return c.getScenes(ctx, "/scenes", params)
+}
+
+// getScenes is the shared scenes-decode path for any endpoint that returns
+// TPDB's {"data":[...scenes...]} envelope — the top-level /scenes browse/search
+// AND the dedicated per-entity drill-downs (/sites/{id}/scenes,
+// /performers/{id}/scenes), all of which the live OpenAPI spec documents as
+// returning that same SceneResource array shape. Kept path-scoped so each
+// caller passes its own already-escaped path rather than reaching into a shared
+// /scenes endpoint.
+func (c *Client) getScenes(ctx context.Context, path string, params url.Values) ([]Scene, error) {
 	var sr scenesResponse
-	if err := c.doGet(ctx, "/scenes", params, &sr); err != nil {
+	if err := c.doGet(ctx, path, params, &sr); err != nil {
 		return nil, err
 	}
 	out := make([]Scene, len(sr.Data))
@@ -156,9 +195,24 @@ const defaultBrowsePerPage = 20
 // the exact bare-pagination call shape Ping already proved works (per_page/page,
 // no q). page and perPage are clamped to sane minimums (page >= 1; perPage
 // defaults to defaultBrowsePerPage when non-positive) so a bad client value can
-// never produce a malformed query. Ordering/trending params are deliberately
-// NOT sent — v1 is plain browse only (see the plan's Stage 7 deferral).
-func (c *Client) BrowseScenes(ctx context.Context, page, perPage int) ([]Scene, error) {
+// never produce a malformed query.
+//
+// orderBy selects GET /scenes' server-side sort. Pass "" for the historical
+// plain-browse behavior (no ordering param sent at all). Pass a value from
+// TPDB's SearchOrderEnum to sort server-side — Adult Discover's "Recently
+// Released" row passes "recently_released". The query param is named exactly
+// "orderBy" (confirmed casing from the live OpenAPI spec at
+// https://api.theporndb.net/openapi.json — NOT order_by or sort).
+//
+// IMPORTANT — there is deliberately no "top rated"/"trending" orderBy here,
+// because the live spec's SearchOrderEnum has no popularity/rating sort (only
+// duration_*, former_*, most_relevant, recently_created/released/updated).
+// Discover's "Highest Rated" row is therefore implemented by the caller as a
+// plain BrowseScenes(orderBy: "") followed by a server-side re-sort of that ONE
+// page by each scene's own Scene.Rating — a client-visible-but-page-local
+// ordering, NOT a true global popularity ranking. Be honest about that limit;
+// don't dress a same-page re-sort up as a real "top rated" feed.
+func (c *Client) BrowseScenes(ctx context.Context, page, perPage int, orderBy string) ([]Scene, error) {
 	if perPage <= 0 {
 		perPage = defaultBrowsePerPage
 	}
@@ -168,6 +222,9 @@ func (c *Client) BrowseScenes(ctx context.Context, page, perPage int) ([]Scene, 
 	params := url.Values{
 		"per_page": {strconv.Itoa(perPage)},
 		"page":     {strconv.Itoa(page)},
+	}
+	if orderBy != "" {
+		params.Set("orderBy", orderBy)
 	}
 	return c.get(ctx, params)
 }
@@ -191,59 +248,185 @@ func (c *Client) SearchByTitle(ctx context.Context, title, site string) ([]Scene
 }
 
 // Performer mirrors a subset of ThePornDB's REST performer response shape.
+// Image is the single chosen image URL — see rawPerformer for how it's picked
+// from TPDB's several nullable image fields; may be empty (no art on file), so
+// consumers must degrade gracefully.
 type Performer struct {
-	ID   string
-	Name string
+	ID    string
+	Name  string
+	Image string
 }
 
+// rawPerformer mirrors the fields this client consumes from a TPDB
+// PerformerResource. Per the live OpenAPI schema
+// (https://api.theporndb.net/openapi.json) a performer carries three nullable
+// image fields — "image", "thumbnail", "face" (there is NO field literally
+// named "avatar") — and toPerformer collapses them into the single Image field
+// above by first-non-empty preference: image, then thumbnail, then face.
 type rawPerformer struct {
-	ID   flexID `json:"_id"`
-	Name string `json:"name"`
+	ID        flexID `json:"_id"`
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+	Thumbnail string `json:"thumbnail"`
+	Face      string `json:"face"`
+}
+
+func (rp rawPerformer) toPerformer() Performer {
+	return Performer{ID: string(rp.ID), Name: rp.Name, Image: firstNonEmpty(rp.Image, rp.Thumbnail, rp.Face)}
 }
 
 type performersResponse struct {
 	Data []rawPerformer `json:"data"`
 }
 
-// SearchPerformers text-searches performers by name. Similarity filtering of
-// results is business logic that belongs in internal/identify, not here —
-// same convention as SearchByTitle.
-func (c *Client) SearchPerformers(ctx context.Context, term string) ([]Performer, error) {
+func (c *Client) getPerformers(ctx context.Context, params url.Values) ([]Performer, error) {
 	var pr performersResponse
-	if err := c.doGet(ctx, "/performers", url.Values{"q": {term}}, &pr); err != nil {
+	if err := c.doGet(ctx, "/performers", params, &pr); err != nil {
 		return nil, err
 	}
 	out := make([]Performer, len(pr.Data))
 	for i, rp := range pr.Data {
-		out[i] = Performer{ID: string(rp.ID), Name: rp.Name}
+		out[i] = rp.toPerformer()
 	}
 	return out, nil
 }
 
-// Site mirrors a subset of ThePornDB's REST site (studio) response shape.
-type Site struct {
-	ID   string
-	Name string
+// SearchPerformers text-searches performers by name. Similarity filtering of
+// results is business logic that belongs in internal/identify, not here —
+// same convention as SearchByTitle.
+func (c *Client) SearchPerformers(ctx context.Context, term string) ([]Performer, error) {
+	return c.getPerformers(ctx, url.Values{"q": {term}})
 }
 
+// BrowsePerformers returns one page of TPDB's performer catalog with NO search
+// term — the plain paginated browse backing Adult Discover's Performers row.
+// The live OpenAPI spec confirms GET /performers requires no "q" (it's absent
+// from that endpoint's required params); page/per_page alone are a valid browse,
+// exactly like BrowseScenes. page/perPage are clamped the same way (page >= 1;
+// perPage defaults to defaultBrowsePerPage when non-positive). The spec's
+// optional "letter" first-initial filter is deliberately not used here.
+func (c *Client) BrowsePerformers(ctx context.Context, page, perPage int) ([]Performer, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	return c.getPerformers(ctx, url.Values{
+		"per_page": {strconv.Itoa(perPage)},
+		"page":     {strconv.Itoa(page)},
+	})
+}
+
+// ScenesByPerformer returns one page of a single performer's scenes via TPDB's
+// dedicated GET /performers/{identifier}/scenes endpoint (confirmed in the live
+// OpenAPI path list; it accepts only identifier (path) + page + per_page (query)
+// — no other filter params). performerID is the opaque id string this client
+// already returns from Performer.ID (the flexID-decoded _id); it's URL-path
+// escaped and used directly, never parsed as an int. page/perPage are clamped
+// like the browse methods. This is preferred over filtering /scenes by a
+// performer_id query param — the dedicated endpoint is what the spec provides
+// for exactly this drill-down.
+func (c *Client) ScenesByPerformer(ctx context.Context, performerID string, page, perPage int) ([]Scene, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	params := url.Values{
+		"per_page": {strconv.Itoa(perPage)},
+		"page":     {strconv.Itoa(page)},
+	}
+	return c.getScenes(ctx, "/performers/"+url.PathEscape(performerID)+"/scenes", params)
+}
+
+// Site mirrors a subset of ThePornDB's REST site (studio) response shape.
+// Image is the single chosen image URL — see rawSiteEntry for how it's picked
+// from TPDB's several nullable image fields; may be empty, so consumers must
+// degrade gracefully.
+type Site struct {
+	ID    string
+	Name  string
+	Image string
+}
+
+// rawSiteEntry mirrors the fields this client consumes from a TPDB
+// SiteResource. Per the live OpenAPI schema
+// (https://api.theporndb.net/openapi.json) a site carries three nullable image
+// fields — "logo", "favicon", "poster" — and toSite collapses them into the
+// single Image field above by first-non-empty preference: logo, then poster,
+// then favicon (favicon last as it's the least presentable at grid size).
 type rawSiteEntry struct {
-	ID   flexID `json:"_id"`
-	Name string `json:"name"`
+	ID      flexID `json:"_id"`
+	Name    string `json:"name"`
+	Logo    string `json:"logo"`
+	Favicon string `json:"favicon"`
+	Poster  string `json:"poster"`
+}
+
+func (rs rawSiteEntry) toSite() Site {
+	return Site{ID: string(rs.ID), Name: rs.Name, Image: firstNonEmpty(rs.Logo, rs.Poster, rs.Favicon)}
 }
 
 type sitesResponse struct {
 	Data []rawSiteEntry `json:"data"`
 }
 
-// SearchSites text-searches sites (studios) by name.
-func (c *Client) SearchSites(ctx context.Context, term string) ([]Site, error) {
+func (c *Client) getSites(ctx context.Context, params url.Values) ([]Site, error) {
 	var sr sitesResponse
-	if err := c.doGet(ctx, "/sites", url.Values{"q": {term}}, &sr); err != nil {
+	if err := c.doGet(ctx, "/sites", params, &sr); err != nil {
 		return nil, err
 	}
 	out := make([]Site, len(sr.Data))
 	for i, rs := range sr.Data {
-		out[i] = Site{ID: string(rs.ID), Name: rs.Name}
+		out[i] = rs.toSite()
 	}
 	return out, nil
+}
+
+// SearchSites text-searches sites (studios) by name.
+func (c *Client) SearchSites(ctx context.Context, term string) ([]Site, error) {
+	return c.getSites(ctx, url.Values{"q": {term}})
+}
+
+// BrowseSites returns one page of TPDB's site (studio) catalog with NO search
+// term — the plain paginated browse backing Adult Discover's Studios row. The
+// live OpenAPI spec confirms GET /sites requires no "q" (absent from its
+// required params); page/per_page alone are a valid browse. page/perPage are
+// clamped like the other browse methods (page >= 1; perPage defaults to
+// defaultBrowsePerPage). The spec's optional "letter" filter is not used here.
+func (c *Client) BrowseSites(ctx context.Context, page, perPage int) ([]Site, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	return c.getSites(ctx, url.Values{
+		"per_page": {strconv.Itoa(perPage)},
+		"page":     {strconv.Itoa(page)},
+	})
+}
+
+// ScenesBySite returns one page of a single site's scenes via TPDB's dedicated
+// GET /sites/{identifier}/scenes endpoint (confirmed in the live OpenAPI path
+// list; it accepts only identifier (path) + page + per_page (query) — no other
+// filter params). siteID is the opaque id string this client already returns
+// from Site.ID (the flexID-decoded _id); it's URL-path escaped and used
+// directly, never parsed as an int. Preferred over filtering /scenes by a
+// site_id query param — the dedicated endpoint is what the spec provides for
+// exactly this drill-down.
+func (c *Client) ScenesBySite(ctx context.Context, siteID string, page, perPage int) ([]Scene, error) {
+	if perPage <= 0 {
+		perPage = defaultBrowsePerPage
+	}
+	if page <= 0 {
+		page = 1
+	}
+	params := url.Values{
+		"per_page": {strconv.Itoa(perPage)},
+		"page":     {strconv.Itoa(page)},
+	}
+	return c.getScenes(ctx, "/sites/"+url.PathEscape(siteID)+"/scenes", params)
 }

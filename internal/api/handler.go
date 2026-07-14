@@ -99,6 +99,14 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	// concrete path wins over the {mode} wildcard above for Adult (see
 	// adultDiscoverHandler).
 	mux.HandleFunc("GET /api/modes/adult/discover", adultDiscoverHandler(httpClient, connStore))
+	// Adult Discover's row-based surface (parallel to Mainstream's rows): a
+	// Studios row and a Performers row (plain TPDB browse), each with a
+	// drill-down showing just that studio's/performer's scenes. All TPDB-backed
+	// and registered on concrete "adult" paths, same as the discover route above.
+	mux.HandleFunc("GET /api/modes/adult/studios", adultStudiosHandler(httpClient, connStore))
+	mux.HandleFunc("GET /api/modes/adult/studios/{id}/scenes", adultStudioScenesHandler(httpClient, connStore))
+	mux.HandleFunc("GET /api/modes/adult/performers", adultPerformersHandler(httpClient, connStore))
+	mux.HandleFunc("GET /api/modes/adult/performers/{id}/scenes", adultPerformerScenesHandler(httpClient, connStore))
 	// Image proxy: server-side-fetch + cache poster/thumbnail art from the
 	// allowlisted TMDB/TPDB image hosts so the browser never hot-links them
 	// (see images.go / internal/imageproxy). Read-only, auth-gated like every

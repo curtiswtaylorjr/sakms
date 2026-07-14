@@ -221,6 +221,11 @@ export interface DiscoverItem {
  * may be 0 (unknown), which the auto-grab bitrate scorer (Stage 2) must
  * treat as "skip the pre-grab bitrate check," never a real zero-length
  * runtime or a divide-by-zero input.
+ * Rating is the scene's own numeric rating (TPDB's "rating" field; the spec's
+ * example value is the integer 5). It backs Adult Discover's "Highest Rated"
+ * row, which the backend produces by re-sorting ONE browse page by this field
+ * descending — a page-local ordering, NOT a true global popularity ranking (see
+ * internal/tpdbrest.BrowseScenes' doc). May be 0 (absent/unrated).
  */
 export interface AdultDiscoverItem {
   id: string;
@@ -229,6 +234,34 @@ export interface AdultDiscoverItem {
   date: string;
   image: string;
   durationSeconds: number /* int */;
+  rating: number /* float64 */;
+}
+/**
+ * StudioSummary is one entry in Adult Discover's Studios row
+ * (GET /api/modes/adult/studios) — a TPDB site (studio) reduced to just what a
+ * browse card and its drill-down link need. ID is the opaque TPDB site id (used
+ * as the {id} path segment of GET /api/modes/adult/studios/{id}/scenes). Image
+ * is a single chosen studio image URL (first non-empty of TPDB's logo/poster/
+ * favicon), frequently empty (no art) — render a text-only card when blank and
+ * route non-empty values through the image proxy, never hot-link TPDB directly.
+ */
+export interface StudioSummary {
+  id: string;
+  name: string;
+  image: string;
+}
+/**
+ * PerformerSummary is one entry in Adult Discover's Performers row
+ * (GET /api/modes/adult/performers) — a TPDB performer reduced to browse-card
+ * fields. ID is the opaque TPDB performer id (the {id} path segment of
+ * GET /api/modes/adult/performers/{id}/scenes). Image is a single chosen
+ * performer image URL (first non-empty of TPDB's image/thumbnail/face),
+ * frequently empty — same text-fallback + image-proxy rule as StudioSummary.
+ */
+export interface PerformerSummary {
+  id: string;
+  name: string;
+  image: string;
 }
 /**
  * PosterResponse is GET /api/modes/{mode}/poster's response — the lazily

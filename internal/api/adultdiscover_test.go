@@ -102,6 +102,229 @@ func TestAdultDiscoverHandler_SearchByTerm(t *testing.T) {
 	}
 }
 
+// TestAdultDiscoverHandler_CategoryRecent proves category=recent asks TPDB for
+// the recently_released server-side ordering.
+func TestAdultDiscoverHandler_CategoryRecent(t *testing.T) {
+	var gotOrderBy string
+	tpdb := fakeTPDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotOrderBy = r.URL.Query().Get("orderBy")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"_id":"s1","title":"Recent Scene","date":"2024-01-01","site":{"name":"Tushy"}}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tpdb", tpdb.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/adult/discover?category=recent")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotOrderBy != "recently_released" {
+		t.Errorf("expected orderBy=recently_released for category=recent, got %q", gotOrderBy)
+	}
+}
+
+// TestAdultDiscoverHandler_CategoryTopRated proves category=top-rated makes a
+// plain (unordered) browse and then re-sorts the returned page by rating
+// descending, server-side — the documented same-page re-sort, not a server sort.
+func TestAdultDiscoverHandler_CategoryTopRated(t *testing.T) {
+	var gotOrderBy string
+	var hadOrderBy bool
+	tpdb := fakeTPDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotOrderBy = r.URL.Query().Get("orderBy")
+		_, hadOrderBy = r.URL.Query()["orderBy"]
+		w.Header().Set("Content-Type", "application/json")
+		// Deliberately out of rating order in the response.
+		w.Write([]byte(`{"data":[
+			{"_id":"low","title":"Low","date":"2024-01-01","site":{"name":"S"},"rating":2},
+			{"_id":"high","title":"High","date":"2024-01-01","site":{"name":"S"},"rating":9},
+			{"_id":"mid","title":"Mid","date":"2024-01-01","site":{"name":"S"},"rating":5}
+		]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tpdb", tpdb.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/adult/discover?category=top-rated")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	// Honesty check: no server-side ordering is requested for top-rated.
+	if hadOrderBy {
+		t.Errorf("expected NO orderBy param for category=top-rated (it's a same-page re-sort), got %q", gotOrderBy)
+	}
+	var items []adultScene
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(items) != 3 || items[0].ID != "high" || items[1].ID != "mid" || items[2].ID != "low" {
+		t.Errorf("expected scenes re-sorted by rating desc (high,mid,low), got %+v", items)
+	}
+	if items[0].Rating != 9 {
+		t.Errorf("expected rating to be exposed on the wire, got %v", items[0].Rating)
+	}
+}
+
+func TestAdultStudiosHandler_Browse(t *testing.T) {
+	var gotPath, gotPage, gotPerPage string
+	tpdb := fakeTPDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotPage, gotPerPage = r.URL.Query().Get("page"), r.URL.Query().Get("per_page")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"_id":"st1","name":"Tushy","logo":"http://cdn/logo.png"}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tpdb", tpdb.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/adult/studios?page=2&perPage=15")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/sites" {
+		t.Errorf("expected browse to hit /sites, got %q", gotPath)
+	}
+	if gotPage != "2" || gotPerPage != "15" {
+		t.Errorf("expected page=2 per_page=15, got page=%q per_page=%q", gotPage, gotPerPage)
+	}
+	var studios []adultStudio
+	if err := json.NewDecoder(resp.Body).Decode(&studios); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(studios) != 1 || studios[0].ID != "st1" || studios[0].Name != "Tushy" || studios[0].Image != "http://cdn/logo.png" {
+		t.Errorf("unexpected studios: %+v", studios)
+	}
+}
+
+func TestAdultPerformersHandler_Browse(t *testing.T) {
+	var gotPath string
+	tpdb := fakeTPDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"_id":"pf1","name":"Riley Reid","thumbnail":"http://cdn/thumb.jpg"}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tpdb", tpdb.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/adult/performers")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/performers" {
+		t.Errorf("expected browse to hit /performers, got %q", gotPath)
+	}
+	var performers []adultPerformer
+	if err := json.NewDecoder(resp.Body).Decode(&performers); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(performers) != 1 || performers[0].ID != "pf1" || performers[0].Name != "Riley Reid" || performers[0].Image != "http://cdn/thumb.jpg" {
+		t.Errorf("unexpected performers: %+v", performers)
+	}
+}
+
+func TestAdultStudioScenesHandler_DrillDown(t *testing.T) {
+	var gotPath string
+	tpdb := fakeTPDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"_id":"sc1","title":"Studio Scene","date":"2024-01-01","site":{"name":"Tushy"}}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tpdb", tpdb.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/adult/studios/st1/scenes")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/sites/st1/scenes" {
+		t.Errorf("expected drill-down to hit /sites/st1/scenes, got %q", gotPath)
+	}
+	var scenes []adultScene
+	if err := json.NewDecoder(resp.Body).Decode(&scenes); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(scenes) != 1 || scenes[0].Title != "Studio Scene" || scenes[0].Studio != "Tushy" {
+		t.Errorf("unexpected scenes: %+v", scenes)
+	}
+}
+
+func TestAdultPerformerScenesHandler_DrillDown(t *testing.T) {
+	var gotPath string
+	tpdb := fakeTPDB(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"_id":"sc2","title":"Performer Scene","date":"2024-01-01","site":{"name":"Vixen"}}]}`))
+	})
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
+	if err := connStore.Upsert(context.Background(), "tpdb", tpdb.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/modes/adult/performers/pf1/scenes")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotPath != "/performers/pf1/scenes" {
+		t.Errorf("expected drill-down to hit /performers/pf1/scenes, got %q", gotPath)
+	}
+	var scenes []adultScene
+	if err := json.NewDecoder(resp.Body).Decode(&scenes); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(scenes) != 1 || scenes[0].Title != "Performer Scene" {
+		t.Errorf("unexpected scenes: %+v", scenes)
+	}
+}
+
 func TestAdultDiscoverHandler_TPDBNotConfigured(t *testing.T) {
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore := testStores(t)
 	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore))
