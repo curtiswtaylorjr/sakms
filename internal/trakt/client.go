@@ -8,6 +8,14 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/httpx"
 )
 
+// DefaultBaseURL is Trakt's real API host — a constant, not an
+// operator-configurable field (unlike TMDB/TPDB, Trakt's stored connection
+// has no URL column of its own; see store.go's Connection). Callers still
+// set Config.BaseURL explicitly from this constant rather than a literal,
+// so tests can override it to a httptest.NewServer URL the same way
+// tmdb/tpdbrest tests do.
+const DefaultBaseURL = "https://api.trakt.tv"
+
 // Config parameterizes the client. BaseURL is normally https://api.trakt.tv,
 // stored explicitly rather than hardcoded, same convention as tmdb.Config.
 // ClientID/ClientSecret are the operator-registered Trakt application
