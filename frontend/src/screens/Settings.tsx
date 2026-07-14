@@ -31,12 +31,12 @@
 
 import {
   type Component,
-  type JSX,
   createEffect,
   createResource,
   createSignal,
   For,
   on,
+  onCleanup,
   Show,
 } from "solid-js";
 import type { Mode } from "../api/discover";
@@ -84,15 +84,28 @@ import {
 } from "../api/settings";
 import type { ConnectionSummary, NetscanFinding } from "../api/settings";
 import {
+  buildTraktCredentialsBody,
+  disconnectTrakt,
+  fetchTraktStatus,
+  pollTraktDevice,
+  saveTraktCredentials,
+  startTraktDeviceFlow,
+  type TraktDeviceStartResponse,
+} from "../api/trakt";
+import { SliderAdminSection } from "./SliderAdmin";
+import {
   Button,
+  Card,
   ErrorText,
   MODES,
   Muted,
+  SaveStatus,
   ScreenTabBar,
   ScreenTabs,
   type TabDef,
   inputClass,
   labelClass,
+  useSaveStatus,
 } from "../components/ui";
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -101,38 +114,9 @@ const MODE_LABELS: Record<Mode, string> = {
   adult: "Adult",
 };
 
-// Card is the fieldset frame every settings panel shares.
-const Card: Component<{ title: string; children: JSX.Element }> = (props) => (
-  <fieldset class="mb-4 rounded-xl border border-border bg-surface p-4">
-    <legend class="px-2 text-sm font-semibold text-fg">{props.title}</legend>
-    {props.children}
-  </fieldset>
-);
-
-// SaveStatus renders the inline "saved" / error line every panel's Save button
-// pairs with. text is empty until an action runs.
-const SaveStatus: Component<{ text: string; error: boolean }> = (props) => (
-  <Show when={props.text}>
-    <span class={`text-sm ${props.error ? "text-danger" : "text-muted"}`}>
-      {props.text}
-    </span>
-  </Show>
-);
-
-// useSaveStatus is the tiny per-panel status signal helper.
-function useSaveStatus() {
-  const [status, setStatus] = createSignal<{ text: string; error: boolean }>({
-    text: "",
-    error: false,
-  });
-  return {
-    status,
-    saved: () => setStatus({ text: "saved", error: false }),
-    failed: (e: unknown) =>
-      setStatus({ text: (e as Error).message, error: true }),
-    set: (text: string) => setStatus({ text, error: false }),
-  };
-}
+// Card/SaveStatus/useSaveStatus moved to components/ui.tsx (2026-07-14) so the
+// admin slider editor can share the same panel frame/status-line convention
+// instead of duplicating it — imported from "../components/ui" below.
 
 // ---- Connections ----------------------------------------------------------
 
@@ -450,6 +434,249 @@ const ConnectionsSection: Component = () => {
           </tbody>
         </table>
       </div>
+    </Card>
+  );
+};
+
+// ---- Trakt (Watchlist connection) ------------------------------------------
+//
+// Trakt is NOT a row in the generic Connections table above — it needs an
+// OAuth device-code flow (user_code + verification_url + poll-until-linked)
+// on top of the plain client_id/client_secret save, which the generic table
+// has no room for. Its own Card, same section tab, same three-state secret
+// convention (buildTraktCredentialsBody mirrors buildConnectionUpsertBody).
+//
+// PLACEHOLDER: every endpoint this section calls (src/api/trakt.ts) is a
+// proposed contract, not yet confirmed — task #5 (worker-1) is still wiring
+// the real backend routes/DTOs as of this writing. See trakt.ts's file doc
+// comment for the full list of what's provisional.
+const TraktConnectionSection: Component = () => {
+  const [status, { refetch }] = createResource(fetchTraktStatus);
+  const [clientId, setClientId] = createSignal("");
+  const [clientSecret, setClientSecret] = createSignal("");
+  const [secretTouched, setSecretTouched] = createSignal(false);
+  createEffect(() => {
+    const s = status();
+    if (s?.clientId !== undefined) setClientId(s.clientId);
+  });
+  const saveStatus = useSaveStatus();
+
+  const hasExistingSecret = () => !!status()?.configured;
+  const secretPlaceholder = () =>
+    hasExistingSecret() ? "unchanged (configured)" : "client secret";
+
+  const saveCredentials = async () => {
+    if (!clientId().trim()) {
+      saveStatus.failed(new Error("client id is required"));
+      return;
+    }
+    try {
+      await saveTraktCredentials(
+        buildTraktCredentialsBody({
+          clientId: clientId(),
+          secretTouched: secretTouched(),
+          secretValue: clientSecret(),
+        }),
+      );
+      setClientSecret("");
+      setSecretTouched(false);
+      saveStatus.saved();
+      await refetch();
+    } catch (e) {
+      saveStatus.failed(e);
+    }
+  };
+
+  // --- Device-code OAuth flow ---
+  const [device, setDevice] = createSignal<TraktDeviceStartResponse | null>(
+    null,
+  );
+  const [connecting, setConnecting] = createSignal(false);
+  const [connectError, setConnectError] = createSignal("");
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollDeadline = 0;
+
+  const stopPolling = () => {
+    if (pollTimer !== undefined) clearTimeout(pollTimer);
+    pollTimer = undefined;
+  };
+  onCleanup(stopPolling);
+
+  const schedulePoll = (intervalSeconds: number) => {
+    stopPolling();
+    pollTimer = setTimeout(() => void doPoll(), Math.max(1, intervalSeconds) * 1000);
+  };
+
+  const doPoll = async () => {
+    if (Date.now() > pollDeadline) {
+      setConnecting(false);
+      setDevice(null);
+      setConnectError("device code expired — click Connect to try again");
+      return;
+    }
+    try {
+      const r = await pollTraktDevice();
+      if (r.linked) {
+        setConnecting(false);
+        setDevice(null);
+        await refetch();
+        return;
+      }
+      schedulePoll(device()?.interval ?? 5);
+    } catch (e) {
+      setConnecting(false);
+      setDevice(null);
+      setConnectError((e as Error).message);
+    }
+  };
+
+  const connect = async () => {
+    setConnectError("");
+    setConnecting(true);
+    try {
+      const dc = await startTraktDeviceFlow();
+      setDevice(dc);
+      pollDeadline = Date.now() + dc.expiresIn * 1000;
+      schedulePoll(dc.interval);
+    } catch (e) {
+      setConnecting(false);
+      setConnectError((e as Error).message);
+    }
+  };
+
+  const cancelConnect = () => {
+    stopPolling();
+    setConnecting(false);
+    setDevice(null);
+    setConnectError("");
+  };
+
+  const disconnect = async () => {
+    if (!confirm("Disconnect Trakt? The Watchlist row will stop appearing until you reconnect.")) return;
+    try {
+      await disconnectTrakt();
+      await refetch();
+    } catch (e) {
+      saveStatus.failed(e);
+    }
+  };
+
+  return (
+    <Card title="Trakt (Watchlist)">
+      <Show when={status.error}>
+        <ErrorText>{(status.error as Error)?.message}</ErrorText>
+      </Show>
+      <Muted class="mb-3">
+        Connect a Trakt.tv application to surface a "Trakt Watchlist" row on
+        Discover — titles marked "want to watch" there but not yet in your
+        library. Create an application at trakt.tv/oauth/applications, then
+        paste its client ID/secret below.
+      </Muted>
+
+      <form
+        class="mb-3"
+        onSubmit={(e) => (e.preventDefault(), void saveCredentials())}
+      >
+        <label class="mb-2 block">
+          <span class={labelClass}>Client ID</span>
+          <input
+            type="text"
+            class={`${inputClass} mt-1`}
+            aria-label="Trakt client ID"
+            value={clientId()}
+            onInput={(e) => setClientId(e.currentTarget.value)}
+          />
+        </label>
+        <label class="mb-2 block">
+          <span class={labelClass}>Client secret</span>
+          <input
+            type="password"
+            class={`${inputClass} mt-1`}
+            placeholder={secretPlaceholder()}
+            aria-label="Trakt client secret"
+            value={clientSecret()}
+            onInput={(e) => {
+              setClientSecret(e.currentTarget.value);
+              setSecretTouched(true);
+            }}
+          />
+        </label>
+        <div class="flex items-center gap-2">
+          <Button variant="primary" type="submit">
+            Save credentials
+          </Button>
+          <SaveStatus
+            text={saveStatus.status().text}
+            error={saveStatus.status().error}
+          />
+        </div>
+      </form>
+
+      <Show when={status() && !status()!.linked}>
+        <div class="rounded-md border border-dashed border-border p-3">
+          <Show
+            when={device()}
+            fallback={
+              <div class="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  disabled={!status()!.configured || connecting()}
+                  onClick={() => void connect()}
+                >
+                  {connecting() ? "Starting…" : "Connect"}
+                </Button>
+                <Show when={!status()!.configured}>
+                  <Muted>Save credentials first.</Muted>
+                </Show>
+              </div>
+            }
+          >
+            {(dc) => (
+              <div>
+                <p class="text-sm text-fg">
+                  Go to{" "}
+                  <a
+                    href={dc().verificationUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="text-accent underline"
+                  >
+                    {dc().verificationUrl}
+                  </a>{" "}
+                  and enter this code:
+                </p>
+                <div class="my-2 text-2xl font-bold tracking-widest text-fg">
+                  {dc().userCode}
+                </div>
+                <div class="flex items-center gap-2">
+                  <Muted>Waiting for approval…</Muted>
+                  <Button class="!px-2 !py-1 !text-xs" onClick={cancelConnect}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Show>
+          <Show when={connectError()}>
+            <ErrorText>{connectError()}</ErrorText>
+          </Show>
+        </div>
+      </Show>
+
+      <Show when={status()?.linked}>
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-ok">✓ Connected</span>
+          <Show when={status()?.tokenExpiresAt}>
+            <Muted>
+              Token valid until{" "}
+              {new Date(status()!.tokenExpiresAt!).toLocaleString()}
+            </Muted>
+          </Show>
+          <Button class="!px-2 !py-1 !text-xs" onClick={() => void disconnect()}>
+            Disconnect
+          </Button>
+        </div>
+      </Show>
     </Card>
   );
 };
@@ -1179,6 +1406,7 @@ const SECTION_TABS: TabDef[] = [
   { id: "ai", label: "AI" },
   { id: "library", label: "Library" },
   { id: "advanced", label: "Advanced" },
+  { id: "sliders", label: "Sliders" },
 ];
 
 // ModeSelector is the inline Movies/Series/Adult tab bar shared by the Library
@@ -1209,6 +1437,7 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
 
       <Show when={section() === "connections"}>
         <ConnectionsSection />
+        <TraktConnectionSection />
       </Show>
 
       <Show when={section() === "auth"}>
@@ -1242,6 +1471,10 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
       <Show when={section() === "advanced"}>
         <ModeSelector mode={mode} onSelect={setMode} />
         <AdvancedSection mode={mode} />
+      </Show>
+
+      <Show when={section() === "sliders"}>
+        <SliderAdminSection />
       </Show>
     </div>
   );

@@ -16,6 +16,7 @@ import {
   within,
 } from "@solidjs/testing-library";
 import { buildConnectionUpsertBody } from "../api/settings";
+import { buildTraktCredentialsBody } from "../api/trakt";
 import { Settings } from "./Settings";
 
 const jsonResponse = (obj: unknown): Response =>
@@ -62,6 +63,9 @@ function defaultGet(url: string): Response | undefined {
   if (url.includes("/match-confidence-threshold"))
     return jsonResponse({ threshold: 70 });
   if (url.includes("/identify-enabled")) return jsonResponse({ enabled: true });
+  if (url.includes("/api/trakt/status"))
+    return jsonResponse({ configured: false, linked: false });
+  if (url.includes("/api/discover/sliders")) return jsonResponse([]);
   return undefined;
 }
 
@@ -98,8 +102,9 @@ const renderSettings = () => render(() => <Settings onReboot={() => {}} />);
 // Connections panel must navigate there first. Section-tab buttons are queried
 // by role+name so they never collide with a Card's <legend> of the same text
 // (legends aren't buttons) nor with the Movies/Series/Adult mode buttons.
-const goToSection = (name: "Connections" | "Auth" | "AI" | "Library" | "Advanced") =>
-  fireEvent.click(screen.getByRole("button", { name }));
+const goToSection = (
+  name: "Connections" | "Auth" | "AI" | "Library" | "Advanced" | "Sliders",
+) => fireEvent.click(screen.getByRole("button", { name }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -338,6 +343,171 @@ describe("Connections — netscan LAN-discovery hints", () => {
       url: "http://prowlarr:9696",
       apiKey: "fetched-key",
     });
+  });
+});
+
+// --- Trakt (Watchlist connection) -------------------------------------------
+//
+// PLACEHOLDER CONTRACT: /api/trakt/* is a proposed shape (src/api/trakt.ts),
+// not yet confirmed against task #5's real backend routes. These tests pin
+// down this component's OWN logic (three-state secret gate, device-flow
+// polling, disconnect) against that proposed contract — not fidelity to
+// whatever worker-1 ultimately ships.
+
+describe("buildTraktCredentialsBody — three-state secret semantics", () => {
+  it("OMITS clientSecret when untouched", () => {
+    const body = buildTraktCredentialsBody({
+      clientId: "abc123",
+      secretTouched: false,
+      secretValue: "",
+    });
+    expect(body).not.toHaveProperty("clientSecret");
+    expect(body).toEqual({ clientId: "abc123" });
+  });
+
+  it("sends the new value when touched", () => {
+    const body = buildTraktCredentialsBody({
+      clientId: "abc123",
+      secretTouched: true,
+      secretValue: "s3cr3t",
+    });
+    expect(body).toEqual({ clientId: "abc123", clientSecret: "s3cr3t" });
+  });
+
+  it('sends "" when touched and cleared', () => {
+    const body = buildTraktCredentialsBody({
+      clientId: "abc123",
+      secretTouched: true,
+      secretValue: "",
+    });
+    expect(body).toHaveProperty("clientSecret");
+    expect(body.clientSecret).toBe("");
+  });
+});
+
+describe("Trakt connection section", () => {
+  it("saving credentials without touching the secret omits clientSecret", async () => {
+    const calls = stubFetch();
+    renderSettings();
+    const clientIdInput = await screen.findByLabelText("Trakt client ID");
+    fireEvent.input(clientIdInput, { target: { value: "my-client-id" } });
+    fireEvent.click(screen.getByText("Save credentials"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.method === "PUT" && c.url.includes("/api/trakt/credentials"),
+        ),
+      ).toBe(true),
+    );
+    const put = calls.find(
+      (c) => c.method === "PUT" && c.url.includes("/api/trakt/credentials"),
+    )!;
+    expect(put.body).toEqual({ clientId: "my-client-id" });
+  });
+
+  it("saving with a secret entered sends clientSecret", async () => {
+    const calls = stubFetch();
+    renderSettings();
+    fireEvent.input(await screen.findByLabelText("Trakt client ID"), {
+      target: { value: "my-client-id" },
+    });
+    fireEvent.input(screen.getByLabelText("Trakt client secret"), {
+      target: { value: "my-secret" },
+    });
+    fireEvent.click(screen.getByText("Save credentials"));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "PUT")).toBe(true),
+    );
+    const put = calls.find(
+      (c) => c.method === "PUT" && c.url.includes("/api/trakt/credentials"),
+    )!;
+    expect(put.body).toEqual({
+      clientId: "my-client-id",
+      clientSecret: "my-secret",
+    });
+  });
+
+  it("Connect is disabled until credentials are configured", async () => {
+    stubFetch();
+    renderSettings();
+    expect(await screen.findByText("Connect")).toBeDisabled();
+  });
+
+  it("Connect starts the device flow and shows the user code + verification link", async () => {
+    stubFetch((url, init) => {
+      if (url.includes("/api/trakt/status"))
+        return jsonResponse({ configured: true, linked: false });
+      if (url.includes("/api/trakt/device/start") && init?.method === "POST")
+        return jsonResponse({
+          userCode: "ABCD-1234",
+          verificationUrl: "https://trakt.tv/activate",
+          expiresIn: 600,
+          interval: 5,
+        });
+      return undefined;
+    });
+    renderSettings();
+    const connectBtn = await screen.findByText("Connect");
+    fireEvent.click(connectBtn);
+    expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "https://trakt.tv/activate" }),
+    ).toHaveAttribute("href", "https://trakt.tv/activate");
+  });
+
+  it("polling picks up a completed link and shows Connected", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let statusCalls = 0;
+    stubFetch((url, init) => {
+      if (url.includes("/api/trakt/status")) {
+        statusCalls += 1;
+        // First status call (mount) is unlinked/configured; every call after
+        // the device flow completes reports linked.
+        return jsonResponse(
+          statusCalls === 1
+            ? { configured: true, linked: false }
+            : { configured: true, linked: true, tokenExpiresAt: "2026-08-01T00:00:00Z" },
+        );
+      }
+      if (url.includes("/api/trakt/device/start") && init?.method === "POST")
+        return jsonResponse({
+          userCode: "ABCD-1234",
+          verificationUrl: "https://trakt.tv/activate",
+          expiresIn: 600,
+          interval: 5,
+        });
+      if (url.includes("/api/trakt/device/poll") && init?.method === "POST")
+        return jsonResponse({ linked: true, pending: false });
+      return undefined;
+    });
+    renderSettings();
+    fireEvent.click(await screen.findByText("Connect"));
+    await screen.findByText("ABCD-1234");
+    // Advance past one poll interval (5s) so the scheduled poll fires.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await screen.findByText("✓ Connected")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("Disconnect calls the disconnect endpoint", async () => {
+    const calls = stubFetch((url) => {
+      if (url.includes("/api/trakt/status"))
+        return jsonResponse({
+          configured: true,
+          linked: true,
+          tokenExpiresAt: "2026-08-01T00:00:00Z",
+        });
+      return undefined;
+    });
+    renderSettings();
+    fireEvent.click(await screen.findByText("Disconnect"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.method === "POST" && c.url.includes("/api/trakt/disconnect"),
+        ),
+      ).toBe(true),
+    );
   });
 });
 
@@ -713,6 +883,14 @@ describe("Section tabs", () => {
     expect(
       screen.queryByLabelText("Background recheck interval (seconds) — global"),
     ).toBeNull(); // Advanced
+  });
+
+  it("Sliders tab shows the admin slider editor, hiding Connections", async () => {
+    stubFetch();
+    renderSettings();
+    goToSection("Sliders");
+    expect(await screen.findByText("+ New slider")).toBeInTheDocument();
+    expect(screen.queryByText("API Key / Password")).toBeNull();
   });
 
   it("Auth tab groups Authentication mode AND API Access, hiding Connections", async () => {
