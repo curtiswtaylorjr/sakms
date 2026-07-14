@@ -147,12 +147,21 @@ const NAV_ITEMS: NavItem[] = [
 // caller owns (and persists) the state; `onToggle` flips it. Collapsed hides
 // the labels and narrows the column while keeping icons + native `title`
 // tooltips. Must be rendered inside a <Router> — <A> needs router context.
+//
+// bg-fixed here and on the header below is load-bearing, not decoration:
+// `background-attachment: fixed` anchors each element's gradient to the
+// VIEWPORT rather than its own box, so both panels sample the same
+// continuous diagonal field instead of two independently-scaled gradients.
+// Without it, the sidebar's gradient runs its own top-left→bottom-right
+// across ~192px while the header's runs across the full remaining width —
+// different scales meeting at their shared corner reads as a visible seam,
+// not the single blended surface this is supposed to look like.
 export const Sidebar: Component<{
   collapsed: () => boolean;
   onToggle: () => void;
 }> = (props) => (
   <nav
-    class="z-10 flex shrink-0 flex-col gap-1 bg-gradient-to-r from-chrome to-chrome-2 p-2 shadow-xl transition-all"
+    class="z-10 flex shrink-0 flex-col gap-1 bg-fixed bg-gradient-to-br from-chrome to-chrome-2 p-2 shadow-xl transition-all"
     classList={{ "w-48": !props.collapsed(), "w-14": props.collapsed() }}
     aria-label="Primary"
   >
@@ -226,7 +235,7 @@ export const AppShell: Component<{
         <div class="flex min-h-screen">
           <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed())} />
           <div class="flex min-w-0 flex-1 flex-col">
-            <header class="z-10 flex items-center gap-4 bg-gradient-to-b from-chrome to-chrome-2 px-6 py-3 shadow-xl">
+            <header class="z-10 flex items-center gap-4 bg-fixed bg-gradient-to-br from-chrome to-chrome-2 px-6 py-3 shadow-xl">
               <img src="/favicon.svg" alt="" class="h-6 w-6 shrink-0" />
               <span class="font-semibold text-chrome-fg">SAK Media Server</span>
               <div class="ml-auto">
