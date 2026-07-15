@@ -98,6 +98,52 @@ func TestAutoGrabHandler_Movies_QualifiedGrabsExactlyOne(t *testing.T) {
 	}
 }
 
+// TestAutoGrabHandler_Movies_SearchIncludesQueryAlongsideIDs is the
+// production-path regression test for a real "nothing is being found to
+// grab" investigation: autoGrabSearch's Prowlarr call for Movies (and
+// Series) sent ONLY id params (tmdbid/imdbid, type=movie) with no query
+// text — several indexers don't reliably honor that as a precise filter,
+// falling back to Torznab's "empty query = list recent releases" RSS-style
+// behavior and silently ignoring the ids. Confirmed live: a real search
+// for a Moana-shaped request returned 164 unrelated releases (The Mummy,
+// Starship Troopers, ...). The title must travel alongside the id params,
+// not replace them — this is the same production code path
+// TestAutoGrabHandler_Movies_QualifiedGrabsExactlyOne exercises, just
+// asserting on the outgoing request instead of the grab outcome.
+func TestAutoGrabHandler_Movies_SearchIncludesQueryAlongsideIDs(t *testing.T) {
+	tmdbSrv := fakeTMDBMovieRuntime(t, 100)
+	prowlarr, lastQuery := fakeProwlarrRecording(t, `[]`)
+
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore := testStores(t)
+	ctx := context.Background()
+	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := connStore.Upsert(ctx, "prowlarr", prowlarr.URL, "key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore))
+	defer srv.Close()
+
+	body, _ := json.Marshal(apidto.AutoGrabRequest{Title: "Some Movie", TMDBID: 42})
+	resp, err := http.Post(srv.URL+"/api/modes/movies/autograb", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if got := lastQuery.Get("tmdbid"); got != "42" {
+		t.Errorf("expected the id-scoped search to still carry tmdbid=42, got query %v", lastQuery)
+	}
+	if got := lastQuery.Get("query"); got != "Some Movie" {
+		t.Errorf("expected the title to travel alongside the id params as query=, got %q (full query: %v)", got, lastQuery)
+	}
+}
+
 // TestAutoGrabHandler_Movies_FallbackGrabsNothing is the fallback path: a
 // tiny, mislabeled-looking release clears nothing, so auto-grab must NOT touch
 // the download client and must return the ranked manual pick list instead of

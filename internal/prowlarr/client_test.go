@@ -141,7 +141,20 @@ func TestSearchByID(t *testing.T) {
 			params:      SearchByIDParams{TMDBID: 550, Categories: []int{2000}},
 			wantType:    "type=movie",
 			wantPresent: []string{"tmdbid=550", "categories=2000"},
-			wantAbsent:  []string{"type=tvsearch", "imdbid", "tvdbid", "season", "ep="},
+			wantAbsent:  []string{"type=tvsearch", "imdbid", "tvdbid", "season", "ep=", "query="},
+		},
+		{
+			// Regression for a real "nothing is being found to grab" bug: an
+			// id-only request (no query text) wasn't reliably honored as a
+			// precise filter by every indexer — some fall back to Torznab's
+			// "empty query = list recent releases" RSS-style behavior,
+			// silently ignoring the id params. Query must travel ALONGSIDE
+			// the id params, not replace them.
+			name:        "Query travels alongside id params, not instead of them",
+			params:      SearchByIDParams{Query: "Moana", TMDBID: 550, Categories: []int{2000}},
+			wantType:    "type=movie",
+			wantPresent: []string{"query=Moana", "tmdbid=550", "categories=2000"},
+			wantAbsent:  []string{"type=tvsearch"},
 		},
 		{
 			name:        "IMDBID only strips tt prefix and routes to movie search",

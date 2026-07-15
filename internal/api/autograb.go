@@ -151,6 +151,7 @@ func autoGrabSearch(ctx context.Context, sess *mode.Session, m mode.Mode, req ap
 			return nil, 0, err
 		}
 		releases, err := sess.Prowlarr.SearchByID(ctx, prowlarr.SearchByIDParams{
+			Query:  req.Title,
 			TVDBID: tvdbID, Season: req.SeasonNumber, Episode: req.EpisodeNumber,
 			Categories: categoriesForSearch(mode.Series),
 		})
@@ -161,6 +162,7 @@ func autoGrabSearch(ctx context.Context, sess *mode.Session, m mode.Mode, req ap
 			return nil, 0, err
 		}
 		releases, err := sess.Prowlarr.SearchByID(ctx, prowlarr.SearchByIDParams{
+			Query:  req.Title,
 			TMDBID: req.TMDBID, IMDBID: details.IMDBID,
 			Categories: categoriesForSearch(mode.Movies),
 		})

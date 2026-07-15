@@ -63,6 +63,12 @@ func TestDiscoverAvailabilityHandler_Movies_BasicFetch(t *testing.T) {
 	if got := lastQuery.Get("tmdbid"); got != "42" {
 		t.Errorf("expected an id-scoped search carrying tmdbid=42, got query %v", lastQuery)
 	}
+	// Regression: the id params alone weren't reliably honored as a precise
+	// filter by every indexer (see prowlarr.SearchByIDParams' Query field
+	// doc) — the title must travel alongside them.
+	if got := lastQuery.Get("query"); got != "Some Movie" {
+		t.Errorf("expected the title to travel alongside the id params as query=, got %q", got)
+	}
 	if got := lastQuery.Get("type"); got != "movie" {
 		t.Errorf("expected type=movie for a Movies id-scoped search, got %q", got)
 	}
@@ -119,6 +125,9 @@ func TestDiscoverAvailabilityHandler_Series_SeasonEpisodeParams(t *testing.T) {
 
 	if got := lastQuery.Get("tvdbid"); got != "789" { // fakeTMDBSeriesRuntime's external_ids stub
 		t.Errorf("expected an id-scoped tvsearch carrying tvdbid=789, got query %v", lastQuery)
+	}
+	if got := lastQuery.Get("query"); got != "Some Show" {
+		t.Errorf("expected the title to travel alongside the id params as query=, got %q", got)
 	}
 	if got := lastQuery.Get("season"); got != "3" {
 		t.Errorf("expected season=3, got %q", got)

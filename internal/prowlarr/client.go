@@ -115,7 +115,21 @@ func (c *Client) Search(ctx context.Context, query string, categories []int) ([]
 // Only non-zero/non-empty fields are sent — this is how Radarr/Sonarr query
 // Prowlarr internally (a precise id-scoped search rather than a fuzzy title
 // match), which is what makes availability probing exact.
+//
+// Query matters more than its name suggests: found via a real "nothing is
+// being found to grab" investigation (164 raw releases came back for a
+// Moana search, none of them Moana — The Mummy, Starship Troopers,
+// Fractured...). An id-only request (type=movie&tmdbid=X&imdbid=Y, no query
+// text) isn't reliably honored as a precise filter by every indexer —
+// several fall back to Torznab's "empty query = list recent releases in
+// this category" RSS-style behavior when there's no query string to anchor
+// the search, silently ignoring the id params entirely. Radarr/Sonarr
+// themselves send the title as query text ALONGSIDE the id params for
+// exactly this reason (broader indexer compatibility, not redundancy) —
+// SearchByID previously didn't, which was the actual bug. Always send the
+// title here; there is no real caller that has ids but not a title.
 type SearchByIDParams struct {
+	Query      string // the title — see the field's own doc comment above
 	TMDBID     int    // 0 if not applicable
 	IMDBID     string // "" if not applicable ("tt" prefix is stripped — see SearchByID)
 	TVDBID     int    // 0 if not applicable (Series only)
@@ -163,6 +177,9 @@ func (c *Client) SearchByID(ctx context.Context, params SearchByIDParams) ([]Rel
 		q.Set("type", "movie")
 	}
 
+	if params.Query != "" {
+		q.Set("query", params.Query)
+	}
 	if params.TMDBID != 0 {
 		q.Set("tmdbid", strconv.Itoa(params.TMDBID))
 	}
