@@ -239,6 +239,25 @@ func (s *ReleaseStore) DistinctGenres(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// ClearAll deletes every matched-entity row and every seen-release record —
+// a one-off reset for the FirstSeenReleaseTitle rollout (2026-07-15):
+// entities matched before that field existed have no raw release title to
+// search by, and there's no way to backfill one after the fact (the
+// original release is long gone from the scan pass). Clearing lets the next
+// scan cycle repopulate everything with the field correctly set, rather
+// than leaving old entries stuck as they were. Temporary — used once via a
+// one-off endpoint, then both should be removed (same "build once, remove
+// once done" precedent as the poster/duration backfills).
+func (s *ReleaseStore) ClearAll(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM adult_newest_seen`); err != nil {
+		return fmt.Errorf("clearing seen releases: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM adult_newest_releases`); err != nil {
+		return fmt.Errorf("clearing matched entities: %w", err)
+	}
+	return nil
+}
+
 // PurgeStale deletes matched-entity rows (adult_newest_releases, by
 // first_seen_at) and seen-release records (adult_newest_seen, by seen_at)
 // older than before — bounds both tables' otherwise-indefinite growth and
