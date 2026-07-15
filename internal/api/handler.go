@@ -183,10 +183,6 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("POST /api/modes/adult/newest-rows/reorder", reorderAdultNewestRowsHandler(adultNewestRowStore))
 	mux.HandleFunc("GET /api/modes/adult/newest-rows/{id}/resolve", resolveAdultNewestRowHandler(adultNewestRowStore, adultNewestReleaseStore))
 	mux.HandleFunc("GET /api/modes/adult/newest-rows/genres", adultNewestGenresHandler(adultNewestReleaseStore))
-	// TEMPORARY one-off migration route — see adult_newest_clear.go's
-	// package doc. Remove both this line and that file once the
-	// FirstSeenReleaseTitle rollout's cache reset has run against production.
-	mux.HandleFunc("POST /api/modes/adult/newest-rows/clear-all", clearAdultNewestHandler(adultNewestReleaseStore))
 	// Image proxy: server-side-fetch + cache poster/thumbnail art from the
 	// allowlisted TMDB/TPDB image hosts so the browser never hot-links them
 	// (see images.go / internal/imageproxy). Read-only, auth-gated like every
