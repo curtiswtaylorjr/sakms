@@ -27,6 +27,7 @@ import type {
   APIKeyStatusResponse,
   AuthModeRequest,
   AuthModeResponse,
+  BrowseResponse,
   ConfidenceThresholdRequest,
   ConfidenceThresholdResponse,
   ConnectionSummary,
@@ -75,19 +76,18 @@ export const SERVICES_WITH_USERNAME = ["qbittorrent", "nzbget"];
 // CONNECTION_SERVICES is the full ordered set the Connections table lists, one
 // row each (verbatim from index.html). There is no radarr/sonarr/whisparr — SAK
 // owns those libraries now (see internal/library's package doc).
+// The AI providers (ollama/openai/gemini/anthropic) and Brave web-search
+// grounding are deliberately NOT here — they live in the AI tab instead
+// (rendered via the same ConnectionRow so their save path stays identical),
+// scoped to the currently-selected provider plus the always-visible Brave row.
 export const CONNECTION_SERVICES = [
   "prowlarr",
   "qbittorrent",
   "nzbget",
   "tmdb",
-  "ollama",
-  "openai",
-  "gemini",
-  "anthropic",
   "stashdb",
   "fansdb",
   "tpdb",
-  "brave",
   "stash",
   "jellyfin",
 ];
@@ -185,6 +185,16 @@ export function fetchProwlarrKey(url: string): Promise<string> {
     method: "POST",
     body: JSON.stringify(body),
   }).then((r) => r.apiKey);
+}
+
+// --- Folder browse (root-folder picker autocomplete) -----------------------
+
+// fetchBrowse lists the subdirectories of a path for the Settings root-folder
+// pickers. An empty path is valid — the backend returns the fixed set of
+// browsable roots. A resolved-but-nonexistent path returns 200 with no
+// entries (graceful degradation while the operator types), never an error.
+export function fetchBrowse(path: string): Promise<BrowseResponse> {
+  return api<BrowseResponse>(`/api/browse?path=${encodeURIComponent(path)}`);
 }
 
 // --- API Access (break-glass key) ------------------------------------------

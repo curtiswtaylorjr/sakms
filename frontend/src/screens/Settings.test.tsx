@@ -66,6 +66,17 @@ function defaultGet(url: string): Response | undefined {
   if (url.includes("/api/trakt/status"))
     return jsonResponse({ configured: false, linked: false });
   if (url.includes("/api/discover/sliders")) return jsonResponse([]);
+  // FolderPicker's as-you-type fetch; the empty-path case returns the fixed
+  // browsable roots, matching the real backend.
+  if (url.includes("/api/browse"))
+    return jsonResponse({
+      path: "",
+      entries: [
+        { name: "/media", path: "/media" },
+        { name: "/downloads", path: "/downloads" },
+        { name: "/adult", path: "/adult" },
+      ],
+    });
   return undefined;
 }
 
@@ -246,6 +257,16 @@ describe("Connections table — untouched key is never sent (Acceptance Criterio
     );
     const put = calls.find((c) => c.method === "PUT")!;
     expect(put.body).toEqual({ url: "http://prowlarr:9696", apiKey: "sk-rotated" });
+  });
+
+  it("no longer lists the AI provider / Brave rows (moved to the AI tab)", async () => {
+    stubFetch();
+    renderSettings();
+    // Connections is the default tab; a still-listed service confirms it mounted.
+    expect(await screen.findByLabelText("prowlarr URL")).toBeInTheDocument();
+    for (const moved of ["ollama", "openai", "gemini", "anthropic", "brave"]) {
+      expect(screen.queryByLabelText(`${moved} URL`)).toBeNull();
+    }
   });
 
   it("Delete calls DELETE for that service", async () => {
@@ -648,6 +669,36 @@ describe("AI provider/model", () => {
     )!;
     expect(modelPut.body).toEqual({ model: "gpt-4o-mini" });
   });
+
+  it("renders connection fields for the selected provider AND a separate always-visible Brave row", async () => {
+    stubFetch();
+    renderSettings();
+    goToSection("AI");
+    // The default provider (ollama) is the one whose connection fields show —
+    // the other providers' fields are NOT rendered at once.
+    expect(await screen.findByLabelText("ollama URL")).toBeInTheDocument();
+    expect(screen.queryByLabelText("openai URL")).toBeNull();
+    expect(screen.queryByLabelText("gemini URL")).toBeNull();
+    expect(screen.queryByLabelText("anthropic URL")).toBeNull();
+    // Brave is always visible, independent of the provider dropdown.
+    expect(screen.getByLabelText("brave URL")).toBeInTheDocument();
+  });
+
+  it("switching the provider dropdown swaps which service's connection fields show", async () => {
+    stubFetch();
+    renderSettings();
+    goToSection("AI");
+    await screen.findByLabelText("ollama URL");
+    const select = (await screen.findByLabelText(
+      "AI provider",
+    )) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "anthropic" } });
+    // The provider row remounts against the newly-selected service...
+    expect(await screen.findByLabelText("anthropic URL")).toBeInTheDocument();
+    expect(screen.queryByLabelText("ollama URL")).toBeNull();
+    // ...while Brave stays put regardless of the dropdown.
+    expect(screen.getByLabelText("brave URL")).toBeInTheDocument();
+  });
 });
 
 // --- Per-mode panels -------------------------------------------------------
@@ -700,19 +751,21 @@ describe("Per-mode panels", () => {
     );
   });
 
-  it("Adult hides Movies/Series-only panels (no library/quality/naming/kids)", async () => {
+  it("Adult keeps the root folder but hides quality/naming/kids", async () => {
     stubFetch();
     renderSettings();
     goToSection("Library");
-    // Movies (default mode) shows the per-mode panels on the Library tab...
+    // Movies (default mode) shows all four per-mode panels on the Library tab...
     await screen.findByLabelText("Library root folder");
-    // ...and switching to Adult hides them (the mode logic, verified while the
-    // Library tab is active — not because the tab itself is hidden).
+    expect(screen.getByLabelText("Kids root folder path")).toBeInTheDocument();
+    // ...and switching to Adult keeps the root-folder field (Adult has its own
+    // free-typed root folder, backend-wired) while hiding the other three.
     fireEvent.click(screen.getByText("Adult"));
-    await waitFor(() =>
-      expect(screen.queryByLabelText("Library root folder")).toBeNull(),
-    );
+    await screen.findByText(/grades every quality tier automatically/);
+    expect(screen.getByLabelText("Library root folder")).toBeInTheDocument();
     expect(screen.queryByLabelText("Kids root folder path")).toBeNull();
+    expect(screen.queryByText(/Search quality preferences/)).toBeNull();
+    expect(screen.queryByText(/File\/folder naming/)).toBeNull();
   });
 });
 
@@ -904,13 +957,16 @@ describe("Section tabs", () => {
     expect(screen.queryByText("API Key / Password")).toBeNull();
   });
 
-  it("AI tab shows the provider/model panel only", async () => {
+  it("AI tab shows the provider/model panel plus its connection sub-tables", async () => {
     stubFetch();
     renderSettings();
     goToSection("AI");
     expect(await screen.findByPlaceholderText(/qwen2.5vl/)).toBeInTheDocument();
     expect(screen.queryByText("Switch to this mode")).toBeNull();
-    expect(screen.queryByText("API Key / Password")).toBeNull();
+    // The connection sub-tables live on this tab now — the selected provider's
+    // fields (ollama by default) and the always-visible Brave row.
+    expect(await screen.findByLabelText("ollama URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("brave URL")).toBeInTheDocument();
   });
 
   it("Library tab shows per-mode panels beside its own mode selector", async () => {
@@ -948,11 +1004,10 @@ describe("Section tabs", () => {
     stubFetch();
     renderSettings();
     goToSection("Library");
-    // Pick Adult on the Library tab — its per-mode panels vanish there.
+    // Pick Adult on the Library tab — its quality/naming/kids panels vanish
+    // there (the root folder stays), confirming Adult is the active mode.
     fireEvent.click(await screen.findByText("Adult"));
-    await waitFor(() =>
-      expect(screen.queryByLabelText("Library root folder")).toBeNull(),
-    );
+    await screen.findByText(/grades every quality tier automatically/);
     // Cross to Advanced: Adult must still be the active mode, so the Adult-only
     // identify toggle shows and the Movies/Series-only confidence field doesn't.
     goToSection("Advanced");

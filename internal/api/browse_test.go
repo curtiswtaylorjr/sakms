@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/curtiswtaylorjr/sakms/internal/apidto"
 )
 
 func TestResolveBrowsablePath(t *testing.T) {
@@ -65,7 +67,7 @@ func TestBrowseHandler_RootsWhenPathEmpty(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	var resp browseResponse
+	var resp apidto.BrowseResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestBrowseHandler_ListsDirsOnly(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
 	}
-	var resp browseResponse
+	var resp apidto.BrowseResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -162,7 +164,7 @@ func TestBrowseHandler_NonExistentValidPath(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	var resp browseResponse
+	var resp apidto.BrowseResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

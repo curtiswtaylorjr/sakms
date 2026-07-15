@@ -8,6 +8,7 @@
 
 import {
   type Component,
+  type JSX,
   createEffect,
   createResource,
   createSignal,
@@ -52,7 +53,7 @@ import { Card, SaveStatus, useSaveStatus } from "./shared";
 // Fetch-key button) actually edited the key field — the input for a configured
 // connection is blank (the real key is never sent back), so an untouched blank
 // key must NOT be persisted as "".
-const ConnectionRow: Component<{
+export const ConnectionRow: Component<{
   service: string;
   existing: ConnectionSummary | undefined;
   finding: NetscanFinding | undefined;
@@ -180,7 +181,7 @@ const ConnectionRow: Component<{
       <td class="px-2 py-2">
         <input
           type="text"
-          class={`${inputClass} !w-52`}
+          class={`${inputClass} !w-72`}
           placeholder="https://..."
           aria-label={`${props.service} URL`}
           value={url()}
@@ -191,7 +192,7 @@ const ConnectionRow: Component<{
             href="https://wiki.servarr.com/en/prowlarr"
             target="_blank"
             rel="noreferrer"
-            class="mt-1 block text-xs text-accent underline"
+            class="mt-1 block text-xs text-fg underline decoration-accent underline-offset-2"
           >
             wiki.servarr.com/en/prowlarr
           </a>
@@ -262,7 +263,7 @@ const ConnectionRow: Component<{
         <Show when={needsUsername}>
           <input
             type="text"
-            class={`${inputClass} !w-32`}
+            class={`${inputClass} !w-40`}
             placeholder="username"
             aria-label={`${props.service} username`}
             value={username()}
@@ -273,7 +274,7 @@ const ConnectionRow: Component<{
       <td class="px-2 py-2">
         <input
           type="password"
-          class={`${inputClass} !w-52`}
+          class={`${inputClass} !w-64`}
           placeholder={keyPlaceholder()}
           aria-label={`${props.service} API key`}
           value={key()}
@@ -316,6 +317,31 @@ const ConnectionRow: Component<{
     </tr>
   );
 };
+
+// ConnectionMiniTable is the shared <table> chrome (the overflow wrapper +
+// the Service/URL/Username/API-Key header row) that wraps one or more
+// ConnectionRows. The big Connections table renders this shape inline; the AI
+// tab reuses it for its per-provider and Brave single-row tables so the column
+// layout stays identical without duplicating the markup.
+export const ConnectionMiniTable: Component<{ children: JSX.Element }> = (
+  props,
+) => (
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-sm">
+      <thead>
+        <tr class="border-b border-border text-xs uppercase tracking-wide text-muted">
+          <th class="px-2 py-2 font-medium">Service</th>
+          <th class="px-2 py-2 font-medium">URL</th>
+          <th class="px-2 py-2 font-medium">Username</th>
+          <th class="px-2 py-2 font-medium">API Key / Password</th>
+          <th class="px-2 py-2 font-medium" />
+          <th class="px-2 py-2 font-medium" />
+        </tr>
+      </thead>
+      <tbody>{props.children}</tbody>
+    </table>
+  </div>
+);
 
 // ---- Trakt (Watchlist connection) ------------------------------------------
 //
@@ -513,7 +539,7 @@ const TraktConnectionSection: Component = () => {
                     href={dc().verificationUrl}
                     target="_blank"
                     rel="noreferrer"
-                    class="text-accent underline"
+                    class="text-fg underline decoration-accent underline-offset-2"
                   >
                     {dc().verificationUrl}
                   </a>{" "}

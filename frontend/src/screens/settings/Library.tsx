@@ -25,6 +25,7 @@ import {
   putQualityPrefs,
 } from "../../api/settings";
 import { Button, Muted, inputClass, labelClass } from "../../components/ui";
+import { FolderPicker } from "../../components/FolderPicker";
 import { Card, MODE_LABELS, SaveStatus, useSaveStatus } from "./shared";
 
 // ---- Per-mode: library root folder ----------------------------------------
@@ -53,13 +54,11 @@ export const LibraryRootFolderSection: Component<{ mode: () => Mode }> = (
       <form onSubmit={(e) => (e.preventDefault(), void save())}>
         <label class="block">
           <span class={labelClass}>Root folder</span>
-          <input
-            type="text"
-            class={`${inputClass} mt-1`}
+          <FolderPicker
+            value={path}
+            onChange={setPath}
+            ariaLabel="Library root folder"
             placeholder={`/path/to/${MODE_LABELS[props.mode()]}`}
-            aria-label="Library root folder"
-            value={path()}
-            onInput={(e) => setPath(e.currentTarget.value)}
           />
         </label>
         <div class="mt-3 flex items-center gap-2">
@@ -75,7 +74,12 @@ export const LibraryRootFolderSection: Component<{ mode: () => Mode }> = (
       <Muted class="mt-2">
         Where Rename/Purge/Dedup and Search's Check &amp; Import look for and
         place {MODE_LABELS[props.mode()]} files — no{" "}
-        {props.mode() === "movies" ? "Radarr" : "Sonarr"} involved.
+        {props.mode() === "movies"
+          ? "Radarr"
+          : props.mode() === "series"
+            ? "Sonarr"
+            : "Whisparr"}{" "}
+        involved.
       </Muted>
     </Card>
   );
@@ -233,13 +237,11 @@ export const KidsRootPathSection: Component<{ mode: () => Mode }> = (props) => {
       <form onSubmit={(e) => (e.preventDefault(), void save())}>
         <label class="block">
           <span class={labelClass}>Kids root folder path</span>
-          <input
-            type="text"
-            class={`${inputClass} mt-1`}
+          <FolderPicker
+            value={path}
+            onChange={setPath}
+            ariaLabel="Kids root folder path"
             placeholder={`/path/to/${MODE_LABELS[props.mode()]} (Kids)`}
-            aria-label="Kids root folder path"
-            value={path()}
-            onInput={(e) => setPath(e.currentTarget.value)}
           />
         </label>
         <div class="mt-3 flex items-center gap-2">

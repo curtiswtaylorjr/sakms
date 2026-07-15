@@ -19,7 +19,7 @@ import {
 import type { Mode } from "../api/discover";
 
 export const inputClass =
-  "w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg " +
+  "w-full truncate rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg " +
   "outline-none focus:border-accent";
 
 export const labelClass = "block text-xs font-medium text-muted";

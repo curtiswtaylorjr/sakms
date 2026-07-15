@@ -72,7 +72,6 @@ const ModeSelector: Component<{
 export const Settings: Component<{ onReboot: () => void }> = (props) => {
   const [section, setSection] = createSignal<string>("connections");
   const [mode, setMode] = createSignal<Mode>("movies");
-  const perModeApplies = () => mode() !== "adult"; // library/quality/naming/kids
 
   return (
     <div>
@@ -95,17 +94,17 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
 
       <Show when={section() === "library"}>
         <ModeSelector mode={mode} onSelect={setMode} />
+        <LibraryRootFolderSection mode={mode} />
         <Show
-          when={perModeApplies()}
+          when={mode() !== "adult"}
           fallback={
             <Muted>
-              Adult has no per-mode library, quality, naming, or kids settings —
-              those apply to Movies and Series only. Adult's own settings live in
-              the Advanced tab.
+              Adult has no quality or naming preferences (it grades every quality
+              tier automatically and uses a fixed naming scheme) and no kids
+              classification. Adult's identify toggle lives in the Advanced tab.
             </Muted>
           }
         >
-          <LibraryRootFolderSection mode={mode} />
           <QualityPrefsSection mode={mode} />
           <NamingPresetSection mode={mode} />
           <KidsRootPathSection mode={mode} />

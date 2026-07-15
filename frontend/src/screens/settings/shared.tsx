@@ -12,14 +12,20 @@ export const MODE_LABELS: Record<Mode, string> = {
   adult: "Adult",
 };
 
-// Card is the fieldset frame every settings panel shares.
+// Card is the bordered panel frame every settings panel shares. Deliberately
+// NOT a <fieldset>/<legend> pair: browsers render <legend> straddling the
+// fieldset's own top border by default (half above it, half below) — with
+// this card's rounded border and bg-surface fill, that reads as the title
+// text bleeding out of the box into the page background behind it, on
+// every single Card across every Settings tab. A plain div + heading avoids
+// that native straddle-the-border behavior entirely.
 export const Card: Component<{ title: string; children: JSX.Element }> = (
   props,
 ) => (
-  <fieldset class="mb-4 rounded-xl border border-border bg-surface p-4">
-    <legend class="px-2 text-sm font-semibold text-fg">{props.title}</legend>
+  <div class="mb-4 rounded-xl border border-border bg-surface p-4">
+    <h3 class="mb-2 px-2 text-sm font-semibold text-fg">{props.title}</h3>
     {props.children}
-  </fieldset>
+  </div>
 );
 
 // SaveStatus renders the inline "saved" / error line every panel's Save button

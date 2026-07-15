@@ -956,3 +956,23 @@ export interface TraktWatchlistItem {
   year?: number /* int */;
   tmdbId: number /* int */;
 }
+/**
+ * BrowseEntry is one directory GET /api/browse's response lists — a
+ * subdirectory of the requested path, never a file (the endpoint's root-
+ * folder picker use case has no reason to surface files).
+ */
+export interface BrowseEntry {
+  name: string;
+  path: string;
+}
+/**
+ * BrowseResponse is GET /api/browse's response — Path echoes back the
+ * resolved, cleaned directory that was listed (empty when no path was
+ * requested, in which case Entries is the fixed set of browsable roots
+ * themselves). See internal/api/browse.go for the allowlist and validation
+ * this endpoint enforces.
+ */
+export interface BrowseResponse {
+  path: string;
+  entries: BrowseEntry[];
+}

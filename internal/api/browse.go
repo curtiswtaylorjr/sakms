@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/curtiswtaylorjr/sakms/internal/apidto"
 )
 
 // browsableRoots are the only directory subtrees the Browse endpoint will
@@ -50,16 +52,6 @@ type browseError struct{ msg string }
 
 func (e *browseError) Error() string { return e.msg }
 
-type browseEntry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-}
-
-type browseResponse struct {
-	Path    string        `json:"path"`
-	Entries []browseEntry `json:"entries"`
-}
-
 // browseHandler lists the sub-directories of a path under one of the
 // browsable roots, for the Settings UI's root-folder picker and its
 // as-you-type autocomplete (both hit this same endpoint). Directories only
@@ -73,11 +65,11 @@ func browseHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := r.URL.Query().Get("path")
 		if raw == "" {
-			entries := make([]browseEntry, 0, len(browsableRoots))
+			entries := make([]apidto.BrowseEntry, 0, len(browsableRoots))
 			for _, root := range browsableRoots {
-				entries = append(entries, browseEntry{Name: root, Path: root})
+				entries = append(entries, apidto.BrowseEntry{Name: root, Path: root})
 			}
-			writeJSON(w, browseResponse{Path: "", Entries: entries})
+			writeJSON(w, apidto.BrowseResponse{Path: "", Entries: entries})
 			return
 		}
 
@@ -90,26 +82,26 @@ func browseHandler() http.HandlerFunc {
 		infos, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				writeJSON(w, browseResponse{Path: dir, Entries: []browseEntry{}})
+				writeJSON(w, apidto.BrowseResponse{Path: dir, Entries: []apidto.BrowseEntry{}})
 				return
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		entries := make([]browseEntry, 0, len(infos))
+		entries := make([]apidto.BrowseEntry, 0, len(infos))
 		for _, info := range infos {
 			if !info.IsDir() {
 				continue
 			}
-			entries = append(entries, browseEntry{
+			entries = append(entries, apidto.BrowseEntry{
 				Name: info.Name(),
 				Path: filepath.Join(dir, info.Name()),
 			})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 
-		writeJSON(w, browseResponse{Path: dir, Entries: entries})
+		writeJSON(w, apidto.BrowseResponse{Path: dir, Entries: entries})
 	}
 }
 
