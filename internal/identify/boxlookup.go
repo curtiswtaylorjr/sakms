@@ -171,23 +171,6 @@ func (b *BoxSearcher) SearchTPDBMovies(ctx context.Context, title string) (*Matc
 	})
 }
 
-// RefreshSceneDuration is a one-off migration helper for
-// internal/adultnewest's duration backfill (2026-07-15, same shape as the
-// poster backfill that preceded it) — re-fetches a TPDB scene/movie's
-// CURRENT duration by id for already-cached entities stuck at 0 from before
-// resolveTPDBDuration existed. Not cached (unlike the other BoxSearcher
-// methods) — a one-off backfill runs each id exactly once.
-func (b *BoxSearcher) RefreshSceneDuration(ctx context.Context, id string) (int, error) {
-	if b.tpdb == nil {
-		return 0, nil
-	}
-	scene, err := b.tpdb.GetSceneByID(ctx, id)
-	if err != nil || scene == nil {
-		return 0, err
-	}
-	return scene.Duration, nil
-}
-
 // SceneByID looks up a scene directly by its stash-box UUID (StashDB/FansDB).
 func (b *BoxSearcher) SceneByID(ctx context.Context, box, sceneID string) (*MatchResult, error) {
 	client := b.stashBoxes[box]
