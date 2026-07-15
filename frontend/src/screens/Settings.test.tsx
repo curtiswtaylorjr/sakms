@@ -56,7 +56,7 @@ function defaultGet(url: string): Response | undefined {
     return jsonResponse({ intervalSeconds: 0 });
   if (url.includes("/library/root-folder")) return jsonResponse({ path: "" });
   if (url.includes("/quality-prefs"))
-    return jsonResponse({ tier: "high", maxResolution: 0 });
+    return jsonResponse({ tier: "high", maxResolution: 0, protocol: "" });
   if (url.includes("/naming-preset")) return jsonResponse({ preset: "jellyfin" });
   if (url.includes("/rename/kids-root-path")) return jsonResponse({ path: "" });
   if (url.includes("/phash-threshold")) return jsonResponse({ threshold: 8 });
@@ -751,20 +751,23 @@ describe("Per-mode panels", () => {
     );
   });
 
-  it("Adult keeps the root folder but hides quality/naming/kids", async () => {
+  it("Adult keeps root folder AND quality prefs but hides naming/kids", async () => {
     stubFetch();
     renderSettings();
     goToSection("Library");
     // Movies (default mode) shows all four per-mode panels on the Library tab...
     await screen.findByLabelText("Library root folder");
     expect(screen.getByLabelText("Kids root folder path")).toBeInTheDocument();
+    expect(screen.getByText(/Search quality preferences/)).toBeInTheDocument();
     // ...and switching to Adult keeps the root-folder field (Adult has its own
-    // free-typed root folder, backend-wired) while hiding the other three.
+    // free-typed root folder, backend-wired) AND quality prefs (the Discover
+    // popup's availability grid applies to Adult too now), while hiding
+    // naming/kids (Adult has a fixed naming scheme, no kids classification).
     fireEvent.click(screen.getByText("Adult"));
-    await screen.findByText(/grades every quality tier automatically/);
+    await screen.findByText(/no naming preferences/);
     expect(screen.getByLabelText("Library root folder")).toBeInTheDocument();
     expect(screen.queryByLabelText("Kids root folder path")).toBeNull();
-    expect(screen.queryByText(/Search quality preferences/)).toBeNull();
+    expect(screen.getByText(/Search quality preferences/)).toBeInTheDocument();
     expect(screen.queryByText(/File\/folder naming/)).toBeNull();
   });
 });
@@ -1004,10 +1007,11 @@ describe("Section tabs", () => {
     stubFetch();
     renderSettings();
     goToSection("Library");
-    // Pick Adult on the Library tab — its quality/naming/kids panels vanish
-    // there (the root folder stays), confirming Adult is the active mode.
+    // Pick Adult on the Library tab — its naming/kids panels vanish there
+    // (root folder and quality prefs stay), confirming Adult is the active
+    // mode.
     fireEvent.click(await screen.findByText("Adult"));
-    await screen.findByText(/grades every quality tier automatically/);
+    await screen.findByText(/no naming preferences/);
     // Cross to Advanced: Adult must still be the active mode, so the Adult-only
     // identify toggle shows and the Movies/Series-only confidence field doesn't.
     goToSection("Advanced");

@@ -27,21 +27,19 @@ import {
   createEffect,
   createResource,
   createSignal,
-  For,
   Show,
 } from "solid-js";
 import type { AvailabilityCandidate, AvailabilityPreview } from "@dto";
 import {
   type AdultDiscoverItem,
   type DiscoverItem,
-  type Mode,
   fetchAvailabilityPreview,
   proxyImage,
   tmdbPoster,
 } from "../../api/discover";
 import { libraryRootFolder, manualGrab } from "../../api/grab";
 import { fetchQualityPrefs } from "../../api/settings";
-import { Button, ErrorText, Muted, labelClass, yearOf } from "../../components/ui";
+import { Button, ErrorText, Muted, PillSelector, yearOf } from "../../components/ui";
 import { Modal, TextPoster } from "./shared";
 import { SeasonEpisodePicker } from "./Mainstream";
 
@@ -67,6 +65,15 @@ const RESOLUTION_LABELS: Record<number, string> = {
   720: "720p",
   480: "480p",
 };
+// String-keyed mirrors of RESOLUTION_DISPLAY/RESOLUTION_LABELS — PillSelector
+// is generic over `T extends string` (its selected-state comparisons and
+// Record lookups need a string key), but resolution is numeric everywhere
+// else in this file (candidateAt, RES_KEYS, the resolution/setResolution
+// signal). These convert at the PillSelector call site only.
+const RESOLUTION_DISPLAY_STR = RESOLUTION_DISPLAY.map(String) as string[];
+const RESOLUTION_LABELS_STR: Record<string, string> = Object.fromEntries(
+  RESOLUTION_DISPLAY.map((r) => [String(r), RESOLUTION_LABELS[r] ?? String(r)]),
+);
 
 const TIERS: TierKey[] = ["low", "medium", "high", "lossless"];
 const TIER_LABELS: Record<TierKey, string> = {
@@ -134,31 +141,65 @@ function pickProtocol(
 
 const isTierKey = (t: string): t is TierKey =>
   (TIERS as string[]).includes(t);
+const isProtocolKey = (p: string): p is ProtocolKey =>
+  (PROTOCOLS as string[]).includes(p);
+
+// pickProtocolPreferring is pickProtocol, but tries a configured protocol
+// preference first — falling back to pickProtocol's own torrent-preferred
+// default when the preference is absent, unrecognized, or has no candidate
+// at this (resolution, tier) cell.
+function pickProtocolPreferring(
+  preview: AvailabilityPreview,
+  resolution: number,
+  tier: TierKey,
+  preferredProtocol?: string,
+): { protocol: ProtocolKey; candidate: AvailabilityCandidate } | undefined {
+  if (preferredProtocol && isProtocolKey(preferredProtocol)) {
+    const c = candidateAt(preview, resolution, tier, preferredProtocol);
+    if (c) return { protocol: preferredProtocol, candidate: c };
+  }
+  return pickProtocol(preview, resolution, tier);
+}
 
 // computeDefaults picks the popup's initial (resolution, tier, protocol)
-// selection: first try the mode's configured quality-prefs combination
-// (Movies/Series only — Adult has no quality-prefs endpoint, see
-// QualityPrefsResponse's doc comment: "Movies/Series only — Adult has no
-// Search workflow"); prefs.maxResolution of 0 means "no cap," which has no
-// single exact resolution to try, so that also falls through. If that exact
-// combination has no candidate (or prefs are absent/inapplicable), fall back
-// to the first available combination in the grid — never an all-nil
-// default when a better one exists. Scan order (own judgment call, the plan
-// doesn't specify one): resolution descending (highest quality first), then
-// tier in the fixed low→lossless order, protocol torrent-preferred.
+// selection: try the mode's configured tier across resolutions in
+// cap-respecting order — at-or-below the configured maxResolution cap first
+// (highest first), then anything above the cap as a fallback — matching
+// maxResolution's own documented "soft cap" semantics (Library.tsx's
+// QualityPrefsSection help text: "softly prefers at-or-below-cap results,
+// falling back to whatever's available"). A maxResolution of 0 means "no
+// cap," so every resolution is in the at-or-below-cap group.
+//
+// This fixes a real bug: the previous version only tried the configured tier
+// when maxResolution was ALSO an exact 480/720/1080/2160 value — leaving it
+// at 0 (the field's own default, and the overwhelmingly likely case for
+// anyone who set a tier but never touched the resolution cap) skipped the
+// configured-tier branch entirely and fell straight to the "first available
+// combination" scan, which starts from the Low tier — silently ignoring a
+// configured High/Lossless tier.
+//
+// If no usable prefs exist (or the configured tier has no candidate at any
+// resolution), fall back to the first available combination in the grid —
+// never an all-nil default when a better one exists. Fallback scan order
+// (own judgment call, the plan doesn't specify one): resolution descending
+// (highest quality first), then tier in the fixed low→lossless order,
+// protocol torrent-preferred.
 export function computeDefaults(
   preview: AvailabilityPreview,
-  prefs?: { tier: string; maxResolution: number },
+  prefs?: { tier: string; maxResolution: number; protocol?: string },
 ): { resolution: number; tier: TierKey; protocol: ProtocolKey } | undefined {
-  if (
-    prefs &&
-    prefs.maxResolution !== 0 &&
-    prefs.maxResolution in RES_KEYS &&
-    isTierKey(prefs.tier)
-  ) {
-    const found = pickProtocol(preview, prefs.maxResolution, prefs.tier);
-    if (found) {
-      return { resolution: prefs.maxResolution, tier: prefs.tier, protocol: found.protocol };
+  if (prefs && isTierKey(prefs.tier)) {
+    const capped =
+      prefs.maxResolution > 0
+        ? RESOLUTIONS_DESC.filter((r) => r <= prefs.maxResolution)
+        : RESOLUTIONS_DESC;
+    const aboveCap =
+      prefs.maxResolution > 0
+        ? RESOLUTIONS_DESC.filter((r) => r > prefs.maxResolution)
+        : [];
+    for (const r of [...capped, ...aboveCap]) {
+      const found = pickProtocolPreferring(preview, r, prefs.tier, prefs.protocol);
+      if (found) return { resolution: r, tier: prefs.tier, protocol: found.protocol };
     }
   }
   for (const r of RESOLUTIONS_DESC) {
@@ -168,6 +209,48 @@ export function computeDefaults(
     }
   }
   return undefined;
+}
+
+// ADULT_SOURCE_URL maps an AdultDiscoverItem's `source` field ("tpdb",
+// "stashdb", "fansdb" — see adultdiscover.go/adultdiscover_stashbox.go, the
+// only three values ever stamped) to that source's own scene-detail page
+// base URL and a short display label for the "More on …" link.
+//
+// UNVERIFIED ASSUMPTION for the `/scenes/{id}` path shape (per this
+// project's honesty-about-unverified-assumptions convention): StashDB and
+// FansDB run the identical open-source stash-box software, so both using
+// `/scenes/{id}` is a reasonably confident inference — not confirmed live,
+// since both are JS-rendered SPAs that don't expose their route table to a
+// static fetch. TPDB's `/scenes/{id}` pattern is a lower-confidence guess at
+// the same shape. Verify by clicking through once this ships.
+const ADULT_SOURCE_URL: Record<string, { base: string; label: string }> = {
+  tpdb: { base: "https://theporndb.net/scenes/", label: "TPDB" },
+  stashdb: { base: "https://stashdb.org/scenes/", label: "StashDB" },
+  fansdb: { base: "https://fansdb.cc/scenes/", label: "FansDB" },
+};
+
+// externalDetailURL builds the link to this title's page on its source
+// database — TMDB for Movies/Series (DiscoverItem.id is TMDB's own numeric
+// id, already used as tmdbId in the grab call, so no backend change is
+// needed); one of TPDB/StashDB/FansDB for Adult, per the scene's own
+// `source` field (see ADULT_SOURCE_URL above). Returns undefined only if an
+// Adult scene's `source` is somehow none of the three known values.
+export function externalDetailURL(target: DetailTarget): string | undefined {
+  if (target.mode === "adult") {
+    const scene = target.item;
+    const src = ADULT_SOURCE_URL[scene.source];
+    return src ? `${src.base}${scene.id}` : undefined;
+  }
+  return `https://www.themoviedb.org/${target.mode === "movies" ? "movie" : "tv"}/${target.item.id}`;
+}
+
+// sourceLabel names the site externalDetailURL points at, for the "More on
+// …" link's text.
+export function sourceLabel(target: DetailTarget): string {
+  if (target.mode === "adult") {
+    return ADULT_SOURCE_URL[target.item.source]?.label ?? "source";
+  }
+  return "TMDB";
 }
 
 export const DetailPopup: Component<{
@@ -183,20 +266,16 @@ export const DetailPopup: Component<{
   >(null);
   const ready = () => mode() !== "series" || seasonEpisode() !== null;
 
-  // Movies/Series' configured quality-tier/max-resolution prefs seed the
-  // default selection. Adult has no quality-prefs endpoint at all, so this
-  // resource never fetches for Adult (source returns null) — computeDefaults
-  // then falls straight to its "first available combination" scan.
-  const [prefs] = createResource(
-    () => (mode() !== "adult" ? mode() : null),
-    async (m) => {
-      try {
-        return await fetchQualityPrefs(m as Exclude<Mode, "adult">);
-      } catch {
-        return undefined;
-      }
-    },
-  );
+  // Configured quality-tier/max-resolution/protocol prefs seed the default
+  // selection — Movies, Series, and Adult all have a real quality-prefs
+  // endpoint now (see internal/apidto/dto.go's updated doc comment).
+  const [prefs] = createResource(mode, async (m) => {
+    try {
+      return await fetchQualityPrefs(m);
+    } catch {
+      return undefined;
+    }
+  });
 
   const [preview] = createResource(
     () => (ready() ? { m: mode(), i: item(), se: seasonEpisode() } : null),
@@ -224,12 +303,12 @@ export const DetailPopup: Component<{
   const [protocol, setProtocol] = createSignal<ProtocolKey | null>(null);
   const [defaulted, setDefaulted] = createSignal(false);
 
-  // Seed the three selectors once, the first time the preview grid AND (for
-  // Movies/Series) the quality-prefs fetch have both settled — never again
-  // afterward, so an operator's own later clicks aren't overwritten.
+  // Seed the three selectors once, the first time the preview grid AND the
+  // quality-prefs fetch have both settled — never again afterward, so an
+  // operator's own later clicks aren't overwritten.
   createEffect(() => {
     if (defaulted()) return;
-    if (mode() !== "adult" && prefs.loading) return;
+    if (prefs.loading) return;
     const p = preview();
     if (!p) return;
     const d = computeDefaults(p, prefs());
@@ -348,7 +427,12 @@ export const DetailPopup: Component<{
         }
       >
         <div class="flex gap-3">
-          <div class="h-28 w-20 shrink-0 overflow-hidden rounded-lg border border-border bg-surface-2">
+          <a
+            href={externalDetailURL(props.target)}
+            target="_blank"
+            rel="noreferrer"
+            class="h-28 w-20 shrink-0 overflow-hidden rounded-lg border border-border bg-surface-2"
+          >
             <Show when={posterSrc()} fallback={<TextPoster label={item().title} />}>
               <img
                 src={posterSrc()}
@@ -356,12 +440,20 @@ export const DetailPopup: Component<{
                 class="h-full w-full object-cover"
               />
             </Show>
-          </div>
+          </a>
           <div class="min-w-0 flex-1">
             <Show when={ratingValue() > 0}>
               <div class="text-xs text-muted">★ {ratingValue().toFixed(1)}</div>
             </Show>
             <p class="mt-1 line-clamp-4 text-sm text-muted">{overviewText()}</p>
+            <a
+              href={externalDetailURL(props.target)}
+              target="_blank"
+              rel="noreferrer"
+              class="mt-1 inline-block text-xs text-fg underline decoration-accent underline-offset-2"
+            >
+              More on {sourceLabel(props.target)} →
+            </a>
           </div>
         </div>
 
@@ -381,71 +473,32 @@ export const DetailPopup: Component<{
                 protocolEnabled/selectedCandidate all independently
                 null-guard against a transient unsettled read anyway. */}
             <div class="mt-3">
-              <div class="mb-2">
-                <div class={labelClass}>Resolution</div>
-                <div class="mt-1 flex flex-wrap gap-1.5">
-                  <For each={RESOLUTION_DISPLAY}>
-                    {(r) => (
-                      <button
-                        type="button"
-                        class="rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-40"
-                        classList={{
-                          "border-accent bg-accent text-accent-fg": resolution() === r,
-                          "border-border bg-surface-2 text-fg": resolution() !== r,
-                        }}
-                        disabled={!resolutionEnabled(r)}
-                        onClick={() => setResolution(r)}
-                      >
-                        {RESOLUTION_LABELS[r]}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
+              <PillSelector
+                label="Resolution"
+                options={RESOLUTION_DISPLAY_STR}
+                optionLabels={RESOLUTION_LABELS_STR}
+                selected={resolution() !== null ? String(resolution()) : null}
+                onSelect={(r) => setResolution(Number(r))}
+                isDisabled={(r) => !resolutionEnabled(Number(r))}
+              />
 
-              <div class="mb-2">
-                <div class={labelClass}>Quality tier</div>
-                <div class="mt-1 flex flex-wrap gap-1.5">
-                  <For each={TIERS}>
-                    {(t) => (
-                      <button
-                        type="button"
-                        class="rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-40"
-                        classList={{
-                          "border-accent bg-accent text-accent-fg": tier() === t,
-                          "border-border bg-surface-2 text-fg": tier() !== t,
-                        }}
-                        disabled={!tierEnabled(t)}
-                        onClick={() => setTier(t)}
-                      >
-                        {TIER_LABELS[t]}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
+              <PillSelector
+                label="Quality tier"
+                options={TIERS}
+                optionLabels={TIER_LABELS}
+                selected={tier()}
+                onSelect={setTier}
+                isDisabled={(t) => !tierEnabled(t)}
+              />
 
-              <div class="mb-2">
-                <div class={labelClass}>Protocol</div>
-                <div class="mt-1 flex flex-wrap gap-1.5">
-                  <For each={PROTOCOLS}>
-                    {(pr) => (
-                      <button
-                        type="button"
-                        class="rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-40"
-                        classList={{
-                          "border-accent bg-accent text-accent-fg": protocol() === pr,
-                          "border-border bg-surface-2 text-fg": protocol() !== pr,
-                        }}
-                        disabled={!protocolEnabled(pr)}
-                        onClick={() => setProtocol(pr)}
-                      >
-                        {PROTOCOL_LABELS[pr]}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
+              <PillSelector
+                label="Protocol"
+                options={PROTOCOLS}
+                optionLabels={PROTOCOL_LABELS}
+                selected={protocol()}
+                onSelect={setProtocol}
+                isDisabled={(pr) => !protocolEnabled(pr)}
+              />
 
               <div class="mt-4 flex items-center justify-end gap-3">
                 <Show when={grabError()}>

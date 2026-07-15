@@ -8,7 +8,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import type { AdultDiscoverItem, AvailabilityCandidate, AvailabilityPreview, DiscoverItem } from "@dto";
-import { DetailPopup, type DetailTarget, candidateAt, computeDefaults } from "./DetailPopup";
+import {
+  DetailPopup,
+  type DetailTarget,
+  candidateAt,
+  computeDefaults,
+  externalDetailURL,
+  sourceLabel,
+} from "./DetailPopup";
 
 const jsonResponse = (obj: unknown): Response =>
   new Response(JSON.stringify(obj), {
@@ -135,15 +142,67 @@ describe("DetailPopup — availability grid derivation (pure logic)", () => {
     });
   });
 
-  it("computeDefaults treats maxResolution 0 (no cap) as having no exact combination to try — straight to the grid scan", () => {
+  // Regression test for the real reported bug: a configured tier was ignored
+  // whenever maxResolution was left at its default 0 ("no cap") — the
+  // overwhelmingly likely case for anyone who set a tier but never touched
+  // the resolution cap. The buggy code required an EXACT (maxResolution,
+  // tier) match to honor the tier at all; leaving maxResolution at 0 skipped
+  // the configured-tier branch entirely and fell straight to the
+  // first-available-combination scan, which starts from the Low tier.
+  it("computeDefaults honors the configured tier even when maxResolution is 0 (no cap) — the reported bug", () => {
     const preview = emptyPreview();
-    preview.res480.low.usenet = candidate({ title: "OnlyOption" });
+    // The old buggy fallback scan (resolution descending, tier low-first)
+    // would hit this Low-tier candidate at the highest resolution FIRST.
+    preview.res2160.low.torrent = candidate({ title: "WouldWinUnderTheBug" });
+    // The configured tier ("high") only qualifies at a lower resolution.
+    preview.res1080.high.torrent = candidate({ title: "ConfiguredTier" });
 
     expect(computeDefaults(preview, { tier: "high", maxResolution: 0 })).toEqual({
-      resolution: 480,
-      tier: "low",
-      protocol: "usenet",
+      resolution: 1080,
+      tier: "high",
+      protocol: "torrent",
     });
+  });
+
+  // maxResolution is documented elsewhere (Library.tsx's QualityPrefsSection
+  // help text) as a SOFT cap: "softly prefers at-or-below-cap results,
+  // falling back to whatever's available." This proves computeDefaults keeps
+  // searching the configured TIER above the cap before ever abandoning the
+  // tier for a resolution-only match — the old code had no such above-cap
+  // extension at all, and its fallback scan (resolution descending, ANY
+  // tier) would have picked the very-high-resolution wrong-tier candidate
+  // below instead.
+  it("computeDefaults searches above the resolution cap for the configured tier before abandoning it", () => {
+    const preview = emptyPreview();
+    // Above the cap AND the wrong tier — the old fallback scan's first hit.
+    preview.res2160.low.torrent = candidate({ title: "WrongTierVeryHighRes" });
+    // Above the cap, but the RIGHT tier, at a lower (still above-cap) res.
+    preview.res1080.high.torrent = candidate({ title: "RightTierAboveCap" });
+
+    expect(computeDefaults(preview, { tier: "high", maxResolution: 480 })).toEqual({
+      resolution: 1080,
+      tier: "high",
+      protocol: "torrent",
+    });
+  });
+
+  it("computeDefaults prefers a configured protocol over the default torrent-first pick", () => {
+    const preview = emptyPreview();
+    preview.res1080.high.torrent = candidate({ title: "DefaultTorrent" });
+    preview.res1080.high.usenet = candidate({ title: "PreferredUsenet" });
+
+    expect(
+      computeDefaults(preview, { tier: "high", maxResolution: 1080, protocol: "usenet" }),
+    ).toEqual({ resolution: 1080, tier: "high", protocol: "usenet" });
+  });
+
+  it("computeDefaults falls back to torrent-preferred when the configured protocol has no candidate at that cell", () => {
+    const preview = emptyPreview();
+    preview.res1080.high.torrent = candidate({ title: "OnlyTorrent" });
+
+    expect(
+      computeDefaults(preview, { tier: "high", maxResolution: 1080, protocol: "usenet" }),
+    ).toEqual({ resolution: 1080, tier: "high", protocol: "torrent" });
   });
 
   it("computeDefaults returns undefined when nothing in the grid has a candidate anywhere", () => {
@@ -262,15 +321,17 @@ describe("DetailPopup — selector disabled-state derivation (rendered)", () => 
     expect(availCall?.url).toContain("episode=4");
   });
 
-  it("Adult never calls quality-prefs (Movies/Series-only endpoint) and defaults from the first available grid combination instead", async () => {
+  it("Adult now also fetches and honors quality-prefs, same as Movies/Series", async () => {
     const preview = emptyPreview();
-    preview.res720.medium.usenet = candidate({ title: "AdultOnlyOption" });
+    // The old fallback-scan-only result the bug would have produced.
+    preview.res2160.low.torrent = candidate({ title: "WouldWinUnderTheOldPath" });
+    // The configured tier, which Adult must now honor.
+    preview.res1080.high.torrent = candidate({ title: "ConfiguredTierForAdult" });
 
     const calls = stubFetch((url) => {
       if (url.includes("/discover/availability")) return jsonResponse(preview);
-      if (url.includes("/quality-prefs")) {
-        throw new Error("must not call quality-prefs for Adult");
-      }
+      if (url.includes("/quality-prefs"))
+        return jsonResponse({ tier: "high", maxResolution: 0, protocol: "" });
       throw new Error("unexpected fetch: " + url);
     });
 
@@ -278,14 +339,74 @@ describe("DetailPopup — selector disabled-state derivation (rendered)", () => 
     render(() => <DetailPopup target={target} onClose={() => {}} />);
 
     expect(await screen.findByRole("button", { name: "Grab" })).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: "720p" })).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: "Medium" })).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: "Usenet" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "1080p" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "High" })).not.toBeDisabled();
 
+    expect(calls.some((c) => c.url.includes("/api/modes/adult/quality-prefs"))).toBe(true);
     const availCall = calls.find((c) => c.url.includes("/discover/availability"));
     expect(availCall?.url).toContain("studio=Vixen");
     expect(availCall?.url).toContain("durationSeconds=1800");
     expect(availCall?.url).not.toContain("tmdbId");
+  });
+});
+
+describe("DetailPopup — external database link (poster + \"More on …\")", () => {
+  it("externalDetailURL builds the TMDB movie URL from the item's TMDB id", () => {
+    const target: DetailTarget = { mode: "movies", item: movie({ id: 42 }) };
+    expect(externalDetailURL(target)).toBe("https://www.themoviedb.org/movie/42");
+    expect(sourceLabel(target)).toBe("TMDB");
+  });
+
+  it("externalDetailURL builds the TMDB tv URL for Series", () => {
+    const target: DetailTarget = {
+      mode: "series",
+      item: movie({ id: 7, mediaType: "tv" }),
+    };
+    expect(externalDetailURL(target)).toBe("https://www.themoviedb.org/tv/7");
+  });
+
+  it("externalDetailURL maps each Adult source to its own site", () => {
+    expect(
+      externalDetailURL({ mode: "adult", item: adultScene({ id: "s1", source: "tpdb" }) }),
+    ).toBe("https://theporndb.net/scenes/s1");
+    expect(
+      externalDetailURL({ mode: "adult", item: adultScene({ id: "s2", source: "stashdb" }) }),
+    ).toBe("https://stashdb.org/scenes/s2");
+    expect(
+      externalDetailURL({ mode: "adult", item: adultScene({ id: "s3", source: "fansdb" }) }),
+    ).toBe("https://fansdb.cc/scenes/s3");
+    expect(sourceLabel({ mode: "adult", item: adultScene({ source: "stashdb" }) })).toBe(
+      "StashDB",
+    );
+  });
+
+  it("externalDetailURL returns undefined for an unrecognized Adult source", () => {
+    expect(
+      externalDetailURL({ mode: "adult", item: adultScene({ source: "unknown-source" }) }),
+    ).toBeUndefined();
+  });
+
+  it("renders the poster as a link and a \"More on TMDB\" link below the description", async () => {
+    const preview = emptyPreview();
+    preview.res1080.high.torrent = candidate();
+    stubFetch((url) => {
+      if (url.includes("/discover/availability")) return jsonResponse(preview);
+      if (url.includes("/quality-prefs"))
+        return jsonResponse({ tier: "high", maxResolution: 1080, protocol: "" });
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    const target: DetailTarget = { mode: "movies", item: movie({ id: 42, title: "Hero Movie" }) };
+    render(() => <DetailPopup target={target} onClose={() => {}} />);
+    await screen.findByRole("button", { name: "Grab" });
+
+    const moreLink = screen.getByText(/More on TMDB/);
+    expect(moreLink.closest("a")).toHaveAttribute(
+      "href",
+      "https://www.themoviedb.org/movie/42",
+    );
+    const posterLink = screen.getByAltText("Hero Movie").closest("a");
+    expect(posterLink).toHaveAttribute("href", "https://www.themoviedb.org/movie/42");
   });
 });
 

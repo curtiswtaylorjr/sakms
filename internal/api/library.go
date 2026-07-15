@@ -99,25 +99,32 @@ func putLibraryRootFolderHandler(settingsStore *settings.Store) http.HandlerFunc
 	}
 }
 
-// qualityTierKey and maxResolutionKey are per-mode — Movies and Series each
-// get their own tier/cap (Adult has no Search workflow, so no key exists
-// for it).
-func qualityTierKey(m mode.Mode) string   { return string(m) + "_quality_tier" }
-func maxResolutionKey(m mode.Mode) string { return string(m) + "_max_resolution" }
+// qualityTierKey, maxResolutionKey, and protocolPreferenceKey are per-mode —
+// Movies, Series, and Adult each get their own tier/cap/protocol default
+// (the Discover detail popup's availability grid applies to all three, so
+// all three get a configurable default — this used to say Adult had no key
+// since it had no Search workflow; that stopped being true once Adult grew
+// its own availability-popup search path).
+func qualityTierKey(m mode.Mode) string        { return string(m) + "_quality_tier" }
+func maxResolutionKey(m mode.Mode) string      { return string(m) + "_max_resolution" }
+func protocolPreferenceKey(m mode.Mode) string { return string(m) + "_protocol_preference" }
 
 type qualityPrefsResponse struct {
 	Tier          string `json:"tier"`
 	MaxResolution int    `json:"maxResolution"`
+	Protocol      string `json:"protocol"`
 }
 
 type qualityPrefsRequest struct {
 	Tier          string `json:"tier"`
 	MaxResolution int    `json:"maxResolution"`
+	Protocol      string `json:"protocol"`
 }
 
 // getQualityPrefsHandler returns {mode}'s Search scoring preferences —
-// defaults to quality.Default ("high") and maxResolution=0 (no cap) when
-// unset, matching quality.ProfileFor's own zero-config fallback exactly.
+// defaults to quality.Default ("high"), maxResolution=0 (no cap), and
+// protocol="" (no preference) when unset, matching quality.ProfileFor's own
+// zero-config fallback exactly for the first two.
 func getQualityPrefsHandler(settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -142,8 +149,14 @@ func getQualityPrefsHandler(settingsStore *settings.Store) http.HandlerFunc {
 			maxRes, _ = strconv.Atoi(maxResStr) // stored only via putQualityPrefsHandler, which validates first
 		}
 
+		protocol, err := settingsStore.Get(ctx, protocolPreferenceKey(m))
+		if err != nil && !errors.Is(err, settings.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(qualityPrefsResponse{Tier: tier, MaxResolution: maxRes})
+		json.NewEncoder(w).Encode(qualityPrefsResponse{Tier: tier, MaxResolution: maxRes, Protocol: protocol})
 	}
 }
 
@@ -152,10 +165,18 @@ var validQualityTiers = map[string]bool{
 	string(quality.High): true, string(quality.Lossless): true,
 }
 
+var validProtocolPreferences = map[string]bool{
+	"": true, "usenet": true, "torrent": true,
+}
+
 // putQualityPrefsHandler stores {mode}'s Search scoring preferences.
 // maxResolution must be one of the resolutions internal/release actually
 // recognizes, or 0 (no cap) — an arbitrary number would silently never
-// match anything in quality.ProfileFor's ladder.
+// match anything in quality.ProfileFor's ladder. protocol is "" (no
+// preference), "usenet", or "torrent" — matching prowlarr.Protocol's own
+// values, kept as a plain string here the same way every other package that
+// touches protocol does (release.Candidate, autograb.Candidate), rather than
+// importing the prowlarr package solely for its two constants.
 func putQualityPrefsHandler(settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -174,6 +195,10 @@ func putQualityPrefsHandler(settingsStore *settings.Store) http.HandlerFunc {
 			http.Error(w, "maxResolution must be one of 480, 720, 1080, 2160, or 0 for no cap", http.StatusBadRequest)
 			return
 		}
+		if !validProtocolPreferences[req.Protocol] {
+			http.Error(w, "protocol must be one of: \"\" (no preference), usenet, torrent", http.StatusBadRequest)
+			return
+		}
 
 		ctx := r.Context()
 		if err := settingsStore.Set(ctx, qualityTierKey(m), req.Tier); err != nil {
@@ -181,6 +206,10 @@ func putQualityPrefsHandler(settingsStore *settings.Store) http.HandlerFunc {
 			return
 		}
 		if err := settingsStore.Set(ctx, maxResolutionKey(m), strconv.Itoa(req.MaxResolution)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := settingsStore.Set(ctx, protocolPreferenceKey(m), req.Protocol); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -3,9 +3,11 @@
 // ScreenTabs, so the shell draws the bar in its one consistent location; inline
 // fallback when rendered standalone in a unit test): Connections; Auth
 // (Authentication mode + API Access break-glass key together); AI; Library
-// (per-mode root folder, quality prefs, naming preset, kids path — Movies/Series
-// only); Advanced (per-mode phash-threshold; match-confidence-threshold for
-// Movies/Series; identify-enabled for Adult only; recheck-interval is global).
+// (per-mode root folder + quality prefs for all three modes; naming preset and
+// kids path for Movies/Series only — Adult has a fixed naming scheme and no
+// kids classification); Advanced (per-mode phash-threshold; match-confidence-
+// threshold for Movies/Series; identify-enabled for Adult only;
+// recheck-interval is global).
 //
 // There are TWO INDEPENDENT selectors here and they must not be conflated: the
 // section-tab selector (SECTION_TABS below), and a Movies/Series/Adult MODE
@@ -95,17 +97,17 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
       <Show when={section() === "library"}>
         <ModeSelector mode={mode} onSelect={setMode} />
         <LibraryRootFolderSection mode={mode} />
+        <QualityPrefsSection mode={mode} />
         <Show
           when={mode() !== "adult"}
           fallback={
             <Muted>
-              Adult has no quality or naming preferences (it grades every quality
-              tier automatically and uses a fixed naming scheme) and no kids
-              classification. Adult's identify toggle lives in the Advanced tab.
+              Adult has no naming preferences (it uses a fixed naming scheme)
+              and no kids classification. Adult's identify toggle lives in the
+              Advanced tab.
             </Muted>
           }
         >
-          <QualityPrefsSection mode={mode} />
           <NamingPresetSection mode={mode} />
           <KidsRootPathSection mode={mode} />
         </Show>

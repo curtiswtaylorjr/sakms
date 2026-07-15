@@ -666,17 +666,25 @@ export interface AIModelRequest {
 }
 /**
  * QualityPrefsResponse / QualityPrefsRequest back
- * GET/PUT /api/modes/{mode}/quality-prefs (Movies/Series only — Adult has no
- * Search workflow). Tier is one of "low", "medium", "high", "lossless";
- * MaxResolution is one of 480/720/1080/2160, or 0 for "no cap".
+ * GET/PUT /api/modes/{mode}/quality-prefs — Movies, Series, and Adult (the
+ * Discover detail popup's availability grid applies to all three, so all
+ * three get a configurable default; this used to say "Movies/Series only,
+ * Adult has no Search workflow," which stopped being true once Adult grew
+ * its own availability-popup search path). Tier is one of "low", "medium",
+ * "high", "lossless"; MaxResolution is one of 480/720/1080/2160, or 0 for
+ * "no cap" (a SOFT cap — see internal/quality's own package doc: it never
+ * excludes a result outside the cap, only prefers at-or-below-cap when
+ * choosing). Protocol is "usenet", "torrent", or "" for no preference.
  */
 export interface QualityPrefsResponse {
   tier: string;
   maxResolution: number /* int */;
+  protocol: string;
 }
 export interface QualityPrefsRequest {
   tier: string;
   maxResolution: number /* int */;
+  protocol: string;
 }
 /**
  * NamingPresetResponse / NamingPresetRequest back

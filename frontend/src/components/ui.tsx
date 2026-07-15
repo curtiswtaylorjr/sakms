@@ -293,6 +293,50 @@ export const StatusPill: Component<{ status: string }> = (props) => (
   </span>
 );
 
+// PillSelector is the labeled row of pill buttons shared by the Discover
+// detail popup's resolution/tier/protocol selectors and Settings' per-mode
+// quality-preference pickers — the same visual/interaction pattern
+// (`rounded-md border px-2 py-1 text-xs font-medium`, accent fill when
+// selected, `disabled:opacity-40` when not selectable) used identically in
+// both places. `isDisabled(v)` returns true when that option should be
+// disabled — absent means every option is always enabled (Settings' case;
+// there's no live availability grid to grey against at config time). The
+// popup passes `(v) => !resolutionEnabled(v)` etc. — its own predicates are
+// phrased as "enabled," so they're inverted at the call site to match this
+// prop's "disabled" phrasing.
+export function PillSelector<T extends string>(props: {
+  label: string;
+  options: T[];
+  optionLabels: Record<T, string>;
+  selected: T | null;
+  onSelect: (v: T) => void;
+  isDisabled?: (v: T) => boolean;
+}): JSX.Element {
+  return (
+    <div class="mb-2">
+      <div class={labelClass}>{props.label}</div>
+      <div class="mt-1 flex flex-wrap gap-1.5">
+        <For each={props.options}>
+          {(opt) => (
+            <button
+              type="button"
+              class="rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-40"
+              classList={{
+                "border-accent bg-accent text-accent-fg": props.selected === opt,
+                "border-border bg-surface-2 text-fg": props.selected !== opt,
+              }}
+              disabled={props.isDisabled ? props.isDisabled(opt) : false}
+              onClick={() => props.onSelect(opt)}
+            >
+              {props.optionLabels[opt]}
+            </button>
+          )}
+        </For>
+      </div>
+    </div>
+  );
+}
+
 // yearOf pulls the leading 4-digit year from a TMDB/TPDB date string
 // ("YYYY-.."), as a number — undefined when there is no parseable year. Shared
 // by Discover (display) and Rename's Re-pick (the numeric year sent with a new
