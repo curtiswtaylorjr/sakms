@@ -15,8 +15,14 @@ import {
   waitFor,
   within,
 } from "@solidjs/testing-library";
+import { createSignal, Show } from "solid-js";
 import { buildConnectionUpsertBody } from "../api/settings";
 import { buildTraktCredentialsBody } from "../api/trakt";
+import {
+  ScreenTabBar,
+  ScreenTabsContext,
+  type ScreenTabsRegistration,
+} from "../components/ui";
 import { Settings } from "./Settings";
 
 const jsonResponse = (obj: unknown): Response =>
@@ -68,6 +74,11 @@ function defaultGet(url: string): Response | undefined {
   if (url.includes("/api/trakt/status"))
     return jsonResponse({ configured: false, linked: false });
   if (url.includes("/api/discover/sliders")) return jsonResponse([]);
+  // AdultRowAdminSection (UI > Discover > Adult) mount GETs. One includes()
+  // covers both the row list and the /genres picker (both arrays).
+  if (url.includes("/api/settings/adult-newest-scan-interval"))
+    return jsonResponse({ intervalSeconds: 0 });
+  if (url.includes("/api/modes/adult/newest-rows")) return jsonResponse([]);
   // FolderPicker's as-you-type fetch; the empty-path case returns the fixed
   // browsable roots, matching the real backend.
   if (url.includes("/api/browse"))
@@ -116,7 +127,7 @@ const renderSettings = () => render(() => <Settings onReboot={() => {}} />);
 // by role+name so they never collide with a Card's <legend> of the same text
 // (legends aren't buttons) nor with the Movies/Series/Adult mode buttons.
 const goToSection = (
-  name: "Connections" | "Auth" | "AI" | "Library" | "Advanced" | "Sliders",
+  name: "Connections" | "Auth" | "AI" | "Library" | "Advanced" | "UI",
 ) => fireEvent.click(screen.getByRole("button", { name }));
 
 // clickSectionSave clicks the one section-level Save button per tab. The batched-
@@ -1043,12 +1054,30 @@ describe("Section tabs", () => {
     ).toBeNull(); // Advanced
   });
 
-  it("Sliders tab shows the admin slider editor, hiding Connections", async () => {
+  it("UI tab shows the Discover subsection with Mainstream/Adult sub-tabs, hiding Connections", async () => {
     stubFetch();
     renderSettings();
-    goToSection("Sliders");
+    goToSection("UI");
+    // Mainstream is the default inner sub-tab: the slider editor is on screen.
     expect(await screen.findByText("+ New slider")).toBeInTheDocument();
+    // Both inner sub-tabs render; the Discover subsection heading is present.
+    expect(screen.getByText("Discover")).toBeInTheDocument();
+    expect(screen.getByText("Mainstream")).toBeInTheDocument();
+    expect(screen.getByText("Adult")).toBeInTheDocument();
+    // Connections is no longer mounted.
     expect(screen.queryByText("API Key / Password")).toBeNull();
+  });
+
+  it("UI tab's inner Adult sub-tab swaps the slider editor for the Adult-newest-row editor", async () => {
+    stubFetch();
+    renderSettings();
+    goToSection("UI");
+    await screen.findByText("+ New slider");
+    // Switching the inner sub-tab to Adult swaps in the Adult-newest-row editor
+    // and drops the Mainstream slider editor.
+    fireEvent.click(screen.getByText("Adult"));
+    expect(await screen.findByText("+ New row")).toBeInTheDocument();
+    expect(screen.queryByText("+ New slider")).toBeNull();
   });
 
   it("Auth tab groups Authentication mode AND API Access, hiding Connections", async () => {
@@ -1123,6 +1152,81 @@ describe("Section tabs", () => {
     expect(
       screen.queryByLabelText("Rename match-confidence threshold (0–100)"),
     ).toBeNull();
+  });
+});
+
+// --- UI tab's inner tab bar must not steal the shell's tab slot ------------
+//
+// The regression this guards: Settings' own SECTION_TABS register with the app
+// shell's single global tab slot (ScreenTabsContext). The UI tab's inner
+// Mainstream/Adult switch is deliberately a plain ScreenTabBar, NOT ScreenTabs —
+// if it were ScreenTabs it would call the shell's registration setter and
+// REPLACE the section tabs with Mainstream/Adult, wiping Settings' top-level nav.
+// A bare render() can't catch this (with no shell context ScreenTabs falls back
+// to inline and never registers), so this suite mounts Settings inside a
+// ScreenTabsContext.Provider exactly the way AppShell does — rendering the ONE
+// registered tab set in the shell's slot — and asserts that slot keeps holding
+// the section tabs even after the inner sub-tab is clicked.
+
+describe("UI tab — inner Discover sub-tabs do not hijack the shell tab slot", () => {
+  // renderSettingsInShell mirrors AppShell's ShellRoot: it provides the
+  // ScreenTabsContext setter and renders whatever tab set is registered inside a
+  // testid'd container (the shell's one slot). Assertions scoped to that
+  // container see ONLY the shell-registered tabs, never the body's inline bars.
+  const renderSettingsInShell = () => {
+    const Harness = () => {
+      const [reg, setReg] = createSignal<ScreenTabsRegistration | null>(null);
+      return (
+        <ScreenTabsContext.Provider value={setReg}>
+          <Show when={reg()}>
+            {(r) => (
+              <div data-testid="shell-slot">
+                <ScreenTabBar
+                  tabs={r().tabs}
+                  current={r().current}
+                  onSelect={r().onSelect}
+                  trailing={r().trailing}
+                />
+              </div>
+            )}
+          </Show>
+          <Settings onReboot={() => {}} />
+        </ScreenTabsContext.Provider>
+      );
+    };
+    return render(() => <Harness />);
+  };
+
+  it("keeps the section tabs in the shell slot when the inner Mainstream/Adult sub-tab changes", async () => {
+    stubFetch();
+    const { getByTestId } = renderSettingsInShell();
+    const shellSlot = () => within(getByTestId("shell-slot"));
+
+    // Settings registers SECTION_TABS with the shell slot at mount: the section
+    // tabs — NOT any Mainstream/Adult — are what the shell draws.
+    expect(await screen.findByRole("button", { name: "Connections" }));
+    expect(shellSlot().getByText("UI")).toBeInTheDocument();
+    expect(shellSlot().getByText("Library")).toBeInTheDocument();
+    expect(shellSlot().queryByText("Mainstream")).toBeNull();
+
+    // Navigate to the UI tab via the shell-registered section tab. Its inner
+    // Mainstream/Adult bar mounts in the body, NOT the shell slot.
+    fireEvent.click(shellSlot().getByText("UI"));
+    await screen.findByText("+ New slider");
+    expect(shellSlot().getByText("Library")).toBeInTheDocument();
+    expect(shellSlot().queryByText("Mainstream")).toBeNull();
+
+    // The load-bearing click: switching the INNER sub-tab must not touch the
+    // shell registration. If UISection used ScreenTabs, this click would replace
+    // the shell slot's contents with Mainstream/Adult and drop the section tabs.
+    fireEvent.click(screen.getByText("Adult"));
+    await screen.findByText("+ New row");
+    // Shell slot still holds the section tabs, unchanged...
+    expect(shellSlot().getByText("UI")).toBeInTheDocument();
+    expect(shellSlot().getByText("Library")).toBeInTheDocument();
+    expect(shellSlot().getByText("Connections")).toBeInTheDocument();
+    // ...and never adopted the inner sub-tab labels.
+    expect(shellSlot().queryByText("Mainstream")).toBeNull();
   });
 });
 

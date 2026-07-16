@@ -7,7 +7,9 @@
 // kids path for Movies/Series only — Adult has a fixed naming scheme and no
 // kids classification); Advanced (per-mode phash-threshold; match-confidence-
 // threshold for Movies/Series; identify-enabled for Adult only;
-// recheck-interval is global).
+// recheck-interval is global); UI (screen-presentation admin controls — today a
+// Discover subsection with Mainstream/Adult sub-tabs hosting the custom slider
+// and Adult-newest-row editors, see UI.tsx).
 //
 // There are TWO INDEPENDENT selectors here and they must not be conflated: the
 // section-tab selector (SECTION_TABS below), and a Movies/Series/Adult MODE
@@ -42,8 +44,7 @@ import {
 } from "./Library";
 import { AdvancedSection } from "./Advanced";
 import { SectionSave } from "./shared";
-import { SliderAdminSection } from "../SliderAdmin";
-import { AdultRowAdminSection } from "../AdultRowAdmin";
+import { UISection } from "./UI";
 
 // SECTION_TABS is the section-level tab set (distinct from the Movies/Series/
 // Adult mode selector). Connections is first so it is the default tab — that
@@ -55,8 +56,7 @@ const SECTION_TABS: TabDef[] = [
   { id: "ai", label: "AI" },
   { id: "library", label: "Library" },
   { id: "advanced", label: "Advanced" },
-  { id: "sliders", label: "Sliders" },
-  { id: "adult-rows", label: "Adult Rows" },
+  { id: "ui", label: "UI" },
 ];
 
 // ModeSelector is the inline Movies/Series/Adult tab bar shared by the Library
@@ -127,12 +127,8 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
         <AdvancedSection mode={mode} />
       </Show>
 
-      <Show when={section() === "sliders"}>
-        <SliderAdminSection />
-      </Show>
-
-      <Show when={section() === "adult-rows"}>
-        <AdultRowAdminSection />
+      <Show when={section() === "ui"}>
+        <UISection />
       </Show>
     </div>
   );
