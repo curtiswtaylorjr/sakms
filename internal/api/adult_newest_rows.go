@@ -75,8 +75,7 @@ func listAdultNewestRowsHandler(store *adultnewest.Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTOAdultNewestRows(rows))
+		writeJSON(w, toDTOAdultNewestRows(rows))
 	}
 }
 
@@ -93,8 +92,7 @@ func createAdultNewestRowHandler(store *adultnewest.Store) http.HandlerFunc {
 			adultNewestRowStoreError(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTOAdultNewestRow(*row))
+		writeJSON(w, toDTOAdultNewestRow(*row))
 	}
 }
 
@@ -116,8 +114,7 @@ func updateAdultNewestRowHandler(store *adultnewest.Store) http.HandlerFunc {
 			adultNewestRowStoreError(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTOAdultNewestRow(*row))
+		writeJSON(w, toDTOAdultNewestRow(*row))
 	}
 }
 
@@ -225,8 +222,7 @@ func resolveAdultNewestRowHandler(rowStore *adultnewest.Store, releaseStore *adu
 		for i, m := range matches {
 			items[i] = toDTOReleaseItem(m)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(items)
+		writeJSON(w, items)
 	}
 }
 
@@ -242,7 +238,6 @@ func adultNewestGenresHandler(releaseStore *adultnewest.ReleaseStore) http.Handl
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(genres)
+		writeJSON(w, genres)
 	}
 }

@@ -74,8 +74,7 @@ func listRssFeedsHandler(store *rssfeeds.Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTORssFeeds(feeds))
+		writeJSON(w, toDTORssFeeds(feeds))
 	}
 }
 
@@ -93,8 +92,7 @@ func createRssFeedHandler(store *rssfeeds.Store) http.HandlerFunc {
 			rssFeedStoreError(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTORssFeed(*f))
+		writeJSON(w, toDTORssFeed(*f))
 	}
 }
 
@@ -118,8 +116,7 @@ func updateRssFeedHandler(store *rssfeeds.Store) http.HandlerFunc {
 			rssFeedStoreError(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTORssFeed(*f))
+		writeJSON(w, toDTORssFeed(*f))
 	}
 }
 
@@ -231,7 +228,6 @@ func resolveRssFeedHandler(httpClient *http.Client, store *rssfeeds.Store) http.
 			}
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		writeJSON(w, out)
 	}
 }

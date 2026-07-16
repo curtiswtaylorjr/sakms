@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -103,9 +102,4 @@ func browseHandler() http.HandlerFunc {
 
 		writeJSON(w, apidto.BrowseResponse{Path: dir, Entries: entries})
 	}
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
 }

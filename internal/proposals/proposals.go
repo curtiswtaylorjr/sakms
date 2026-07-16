@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/curtiswtaylorjr/sakms/internal/dbutil"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 )
 
@@ -256,7 +257,7 @@ func (s *Store) MarkApplied(ctx context.Context, id int64, trackedID int) error 
 	if err != nil {
 		return fmt.Errorf("marking proposal %d applied: %w", id, err)
 	}
-	return checkAffected(res, id)
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 // Dismiss marks proposal id as reviewed-and-rejected — it stays in history
@@ -267,7 +268,7 @@ func (s *Store) Dismiss(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("dismissing proposal %d: %w", id, err)
 	}
-	return checkAffected(res, id)
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 // Repick overwrites proposal id's title/tmdbId/year with an operator-chosen
@@ -285,7 +286,7 @@ func (s *Store) Repick(ctx context.Context, id int64, title string, tmdbID, year
 	if err != nil {
 		return fmt.Errorf("re-picking proposal %d: %w", id, err)
 	}
-	return checkAffected(res, id)
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 // MarkDraftSubmitted records that a scene draft was successfully submitted to
@@ -301,7 +302,7 @@ func (s *Store) MarkDraftSubmitted(ctx context.Context, id int64, draftID string
 	if err != nil {
 		return fmt.Errorf("marking proposal %d draft-submitted: %w", id, err)
 	}
-	return checkAffected(res, id)
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 // MarkFingerprintSubmitted records a successful phash give-back for proposal
@@ -315,18 +316,7 @@ func (s *Store) MarkFingerprintSubmitted(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("marking proposal %d fingerprint-submitted: %w", id, err)
 	}
-	return checkAffected(res, id)
-}
-
-func checkAffected(res sql.Result, id int64) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking update result for proposal %d: %w", id, err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 type rowScanner interface {

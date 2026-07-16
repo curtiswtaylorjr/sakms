@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/curtiswtaylorjr/sakms/internal/dbutil"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 )
 
@@ -156,7 +157,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, status Status) error
 	if err != nil {
 		return fmt.Errorf("updating grab %d status: %w", id, err)
 	}
-	return checkAffected(res, id)
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 // Flag marks a grab for operator review — used by auto-grab's post-grab
@@ -172,7 +173,7 @@ func (s *Store) Flag(ctx context.Context, id int64, reason string) error {
 	if err != nil {
 		return fmt.Errorf("flagging grab %d: %w", id, err)
 	}
-	return checkAffected(res, id)
+	return dbutil.CheckAffected(res, id, ErrNotFound)
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows, so scanGrab works
@@ -188,15 +189,4 @@ func scanGrab(row rowScanner) (Grab, error) {
 		&g.DownloadClient, &g.ClientRef, &g.Status, &g.RootFolderPath, &g.FlaggedForReview, &g.FlagReason, &g.CreatedAt, &g.UpdatedAt)
 	g.Mode = mode.Mode(m)
 	return g, err
-}
-
-func checkAffected(res sql.Result, id int64) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking update result for grab %d: %w", id, err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
 }

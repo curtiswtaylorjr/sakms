@@ -74,8 +74,7 @@ func listSlidersHandler(store *discoversliders.Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTOSliders(sliders))
+		writeJSON(w, toDTOSliders(sliders))
 	}
 }
 
@@ -94,8 +93,7 @@ func createSliderHandler(store *discoversliders.Store) http.HandlerFunc {
 			discoverSliderStoreError(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTOSlider(*sl))
+		writeJSON(w, toDTOSlider(*sl))
 	}
 }
 
@@ -119,8 +117,7 @@ func updateSliderHandler(store *discoversliders.Store) http.HandlerFunc {
 			discoverSliderStoreError(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(toDTOSlider(*sl))
+		writeJSON(w, toDTOSlider(*sl))
 	}
 }
 
@@ -235,8 +232,7 @@ func resolveSliderHandler(httpClient *http.Client, connStore *connections.Store,
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(items)
+		writeJSON(w, items)
 	}
 }
 
