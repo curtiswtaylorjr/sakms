@@ -59,40 +59,13 @@ ENV SAKMS_ADDR=:8080 \
 VOLUME /data
 EXPOSE 8080
 
-# Opt-in variant: bundles Ollama as a second in-container process, giving
-# AI-assisted features (Adult kids-classify, Movies/Series garbled-title-
-# guess fallback — see internal/identify, internal/classify) a working
-# backend with zero external setup. NOT the default image — build with
-# `docker build --target ai .` explicitly; plain `docker build .` still
-# produces the lean "runtime" stage below, unchanged. Ollama installs as a
-# prebuilt binary here, a separate OS process from sakms; nothing in this
-# stage touches sakms's own CGO_ENABLED=0 Go build.
-FROM base AS ai
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
-    && apt-get install -y --no-install-recommends curl zstd \
-    && curl -fsSL https://ollama.com/install.sh | sh \
-    && apt-get purge -y curl zstd && apt-get autoremove -y
+# Bundled Ollama ai stage removed 2026-07-16: replaced by DB-first filename
+# parsing (internal/parseentity) which needs no local LLM. BYOAI (external
+# OpenAI/Gemini/Anthropic/Ollama) remains available via Settings → Connections.
+# The sakms-ollama-models volume on server1 can be manually pruned after the
+# next deploy confirms the new parsing pipeline works.
 
-COPY docker-entrypoint-ai.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# OLLAMA_MODELS is deliberately its own volume, not under SAKMS_DATA_DIR —
-# see docker-entrypoint-ai.sh for why (server1's auto-updater wipes /data on
-# every deploy; a model cached there would re-download every push).
-ENV SAKMS_BUNDLED_OLLAMA_MODEL=qwen2.5:1.5b \
-    OLLAMA_MODELS=/ollama-models
-
-VOLUME /ollama-models
-# Requires an init process (`docker run --init` / compose's `init: true`) —
-# see docker-entrypoint-ai.sh's header comment for why.
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["/usr/local/bin/sakms"]
-
-# Default image: lean, no AI backend bundled — unchanged from before the ai
-# stage above existed. Stays the LAST stage in this file so plain
-# `docker build .` (no --target) keeps building this, not ai.
+# Default image: lean, no AI backend bundled.
 FROM base AS runtime
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

@@ -92,6 +92,49 @@ func getAIProviderHandler(settingsStore *settings.Store) http.HandlerFunc {
 	}
 }
 
+type aiFallbackEnabledResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+type aiFallbackEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// getAIFallbackEnabledHandler reports whether the BYOAI fallback is on.
+// Unset defaults to false — DB-first parsing runs alone by default.
+func getAIFallbackEnabledHandler(settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		v, err := settingsStore.Get(r.Context(), mode.AIFallbackEnabledKey)
+		if err != nil && !errors.Is(err, settings.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(aiFallbackEnabledResponse{Enabled: v == "true"})
+	}
+}
+
+// putAIFallbackEnabledHandler toggles the BYOAI fallback. When disabled,
+// ParseFilename is never called regardless of provider/model configuration.
+func putAIFallbackEnabledHandler(settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req aiFallbackEnabledRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		v := "false"
+		if req.Enabled {
+			v = "true"
+		}
+		if err := settingsStore.Set(r.Context(), mode.AIFallbackEnabledKey, v); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // putAIProviderHandler stores which AI backend every AI-assisted feature
 // should use.
 func putAIProviderHandler(settingsStore *settings.Store) http.HandlerFunc {

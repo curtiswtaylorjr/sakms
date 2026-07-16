@@ -84,6 +84,11 @@ const (
 // model's quirks.
 const AIModelKey = "ai_model"
 
+// AIFallbackEnabledKey is the settings key for the opt-in BYOAI fallback
+// toggle. When unset or not "true", buildAIClient returns nil immediately —
+// the DB-first parser runs alone and ParseFilename is never called.
+const AIFallbackEnabledKey = "ai_fallback_enabled"
+
 // adultThrottleInterval is the per-host minimum call spacing for the Adult
 // identification pipeline's external services — technical call-spacing
 // (politeness to StashDB/FansDB/TPDB/Brave), not a user-facing setting, so a
@@ -352,6 +357,15 @@ func buildJellyfinClient(ctx context.Context, store *connections.Store, httpClie
 // unrecognized provider value is a real configuration error, not silently
 // tolerated — the user asked for something specific and it can't be honored.
 func buildAIClient(ctx context.Context, store *connections.Store, settingsStore *settings.Store, httpClient *http.Client) (identify.AIClient, error) {
+	// AI fallback is opt-in; return nil unless the operator explicitly enabled it.
+	fallbackEnabled, err := settingsStore.Get(ctx, AIFallbackEnabledKey)
+	if err != nil && !errors.Is(err, settings.ErrNotFound) {
+		return nil, err
+	}
+	if fallbackEnabled != "true" {
+		return nil, nil
+	}
+
 	provider, err := settingsStore.Get(ctx, AIProviderKey)
 	if err != nil && !errors.Is(err, settings.ErrNotFound) {
 		return nil, err // a real store error must propagate, not look like "unset"
@@ -394,18 +408,20 @@ func buildAIClient(ctx context.Context, store *connections.Store, settingsStore 
 	}
 }
 
-// buildIdentifier assembles the Adult identification pipeline around aiClient
-// (already resolved by buildAIClient — nil means AI features aren't
-// configured, so there is no identifier at all: ParseFilename would nil-panic
+// buildIdentifier assembles the Adult identification pipeline. The entity
+// store (DB-first parsing) and the AI client (BYOAI fallback) are both
+// optional — at least one must be non-nil for IdentifyDetailed to do useful
+// work, but we always return a non-nil Identifier so callers can inject
+// EntityStore after Build() without re-entering this constructor. AI features
+// (ParseFilename BYOAI path) are available when aiClient is non-nil; the
+// DB-first path (ParseFilenameDB) is available when EntityStore is non-nil
+// (injected by api handlers that need it). Original rationale for the old
+// nil guard:
 // on a missing AI client). Every other client (stashdb/fansdb/tpdb/brave) is
 // optional: a missing connection yields a nil client, which BoxSearcher and
 // Identify already treat as "not configured" rather than erroring. A real
 // store error (anything other than "not configured") propagates.
 func buildIdentifier(ctx context.Context, store *connections.Store, settingsStore *settings.Store, httpClient *http.Client, aiClient identify.AIClient) (*identify.Identifier, error) {
-	if aiClient == nil {
-		return nil, nil
-	}
-
 	boxes := map[string]*stashbox.Client{}
 	giveBackBoxes := map[string]*stashbox.Client{}
 	for _, name := range []string{"stashdb", "fansdb"} {

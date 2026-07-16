@@ -112,6 +112,9 @@ func configureAI(t *testing.T, ctx context.Context, connStore *connections.Store
 	if err := settingsStore.Set(ctx, mode.AIModelKey, "test-model"); err != nil {
 		t.Fatalf("configuring ai model: %v", err)
 	}
+	if err := settingsStore.Set(ctx, mode.AIFallbackEnabledKey, "true"); err != nil {
+		t.Fatalf("configuring ai fallback enabled: %v", err)
+	}
 }
 
 func TestLoadInterval_UnsetDefaultsTo24Hours(t *testing.T) {
@@ -253,7 +256,7 @@ func TestRunCycle_NoProwlarrConfigured_SkipsCleanly(t *testing.T) {
 	connStore, settingsStore, releaseStore := newTestScanStores(t)
 	ctx := context.Background()
 
-	runCycle(ctx, &http.Client{Timeout: time.Second}, connStore, settingsStore, releaseStore)
+	runCycle(ctx, &http.Client{Timeout: time.Second}, connStore, settingsStore, releaseStore, nil)
 
 	list, err := releaseStore.List(ctx, RowScene, "", 1, 20)
 	if err != nil {
@@ -277,7 +280,7 @@ func TestRunCycle_ProwlarrConfiguredButNoAI_SkipsCleanly(t *testing.T) {
 		t.Fatalf("configuring prowlarr: %v", err)
 	}
 
-	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore)
+	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore, nil)
 
 	list, err := releaseStore.List(ctx, RowScene, "", 1, 20)
 	if err != nil {
@@ -313,7 +316,7 @@ func TestRunCycle_UnmatchedReleaseIsMarkedSeenButNotCached(t *testing.T) {
 		t.Fatalf("configuring prowlarr: %v", err)
 	}
 
-	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore)
+	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore, nil)
 
 	list, err := releaseStore.List(ctx, RowScene, "", 1, 20)
 	if err != nil {
@@ -360,7 +363,7 @@ func TestRunCycle_SeenReleaseIsNotReprocessed(t *testing.T) {
 
 	// Must not panic or error out despite the identify pipeline being
 	// configured to fail every call — the seen release should never reach it.
-	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore)
+	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore, nil)
 
 	list, err := releaseStore.List(ctx, RowScene, "", 1, 20)
 	if err != nil {
@@ -401,7 +404,7 @@ func TestRunCycle_UnconfirmedStudioAndPerformerGuessesAreSkipped(t *testing.T) {
 		t.Fatalf("configuring prowlarr: %v", err)
 	}
 
-	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore)
+	runCycle(ctx, prow.Client(), connStore, settingsStore, releaseStore, nil)
 
 	studios, err := releaseStore.List(ctx, RowStudio, "", 1, 20)
 	if err != nil {
@@ -481,7 +484,7 @@ func TestMatchRelease_SceneMatchWithNoConfirmedRelease_IsNotCached(t *testing.T)
 		t.Fatalf("configuring prowlarr: %v", err)
 	}
 
-	runCycle(ctx, prowlarrSrv.Client(), connStore, settingsStore, releaseStore)
+	runCycle(ctx, prowlarrSrv.Client(), connStore, settingsStore, releaseStore, nil)
 
 	scenes, err := releaseStore.List(ctx, RowScene, "", 1, 20)
 	if err != nil {
@@ -549,7 +552,7 @@ func TestMatchRelease_SceneMatchWithConfirmedRelease_IsCached(t *testing.T) {
 		t.Fatalf("configuring prowlarr: %v", err)
 	}
 
-	runCycle(ctx, prowlarrSrv.Client(), connStore, settingsStore, releaseStore)
+	runCycle(ctx, prowlarrSrv.Client(), connStore, settingsStore, releaseStore, nil)
 
 	scenes, err := releaseStore.List(ctx, RowScene, "", 1, 20)
 	if err != nil {

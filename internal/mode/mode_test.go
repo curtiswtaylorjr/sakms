@@ -127,11 +127,11 @@ func TestBuild_UnknownMode(t *testing.T) {
 	}
 }
 
-// TestBuild_AdultOnlyWhisparr_IdentifyNil confirms the Tag-preservation
-// constraint: an Adult session with only whisparr configured builds
-// successfully with a nil Identify (no identification backbone), so Tag —
-// which never reads Identify — is unaffected.
-func TestBuild_AdultOnlyWhisparr_IdentifyNil(t *testing.T) {
+// TestBuild_AdultOnlyWhisparr_IdentifyBuiltWithoutAI confirms that Adult
+// Identify is always built (never nil — DB-first parsing needs no AI), and
+// that the AI client remains nil when no AI provider connection exists. Tag,
+// which never reads Identify, is unaffected either way.
+func TestBuild_AdultOnlyWhisparr_IdentifyBuiltWithoutAI(t *testing.T) {
 	store, settingsStore := newTestStores(t)
 	ctx := context.Background()
 	if err := store.Upsert(ctx, "whisparr", "http://whisparr.local:6969", "whisparr-key"); err != nil {
@@ -142,8 +142,11 @@ func TestBuild_AdultOnlyWhisparr_IdentifyNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sess.Identify != nil {
-		t.Error("expected Identify to be nil when only whisparr is configured")
+	if sess.Identify == nil {
+		t.Error("expected Identify to be non-nil for Adult (DB-first parsing requires no AI)")
+	}
+	if sess.Identify != nil && sess.Identify.AI != nil {
+		t.Error("expected Identify.AI to be nil when no AI provider is configured")
 	}
 }
 
@@ -230,10 +233,11 @@ func TestBuild_AdultSettingsStoreError_Propagates(t *testing.T) {
 	}
 }
 
-// TestBuild_AdultOllamaConnButNoModelSetting_IdentifyNil pins the §2
-// anti-pattern guard: an Ollama connection with NO model setting must leave
-// Identify nil (no guessed model) and must not panic.
-func TestBuild_AdultOllamaConnButNoModelSetting_IdentifyNil(t *testing.T) {
+// TestBuild_AdultOllamaConnButNoModelSetting_IdentifyBuiltAINil pins that
+// an Ollama connection with NO model setting leaves Identify.AI nil (no model
+// guessed), and does not panic. Identify itself is now always non-nil for
+// Adult (DB-first parsing runs without AI).
+func TestBuild_AdultOllamaConnButNoModelSetting_IdentifyBuiltAINil(t *testing.T) {
 	store, settingsStore := newTestStores(t)
 	ctx := context.Background()
 	if err := store.Upsert(ctx, "whisparr", "http://whisparr.local:6969", "whisparr-key"); err != nil {
@@ -247,8 +251,11 @@ func TestBuild_AdultOllamaConnButNoModelSetting_IdentifyNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sess.Identify != nil {
-		t.Error("expected Identify to be nil when the Ollama model setting is unset (no guessed fallback)")
+	if sess.Identify == nil {
+		t.Error("expected Identify to be non-nil for Adult (DB-first parsing requires no AI)")
+	}
+	if sess.Identify != nil && sess.Identify.AI != nil {
+		t.Error("expected Identify.AI to be nil when the Ollama model setting is unset (no guessed fallback)")
 	}
 }
 
@@ -271,6 +278,9 @@ func TestBuild_AdultWithIdentificationConnections_PopulatesIdentify(t *testing.T
 		}
 	}
 	if err := settingsStore.Set(ctx, AIModelKey, "qwen2.5vl:7b"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, AIFallbackEnabledKey, "true"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -352,6 +362,9 @@ func TestBuild_AdultIdentifierIsFunctional(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := settingsStore.Set(ctx, AIModelKey, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, AIFallbackEnabledKey, "true"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -443,6 +456,9 @@ func TestBuild_MainstreamAI_PopulatedWhenConfigured(t *testing.T) {
 			if err := settingsStore.Set(ctx, AIModelKey, "qwen2.5:7b"); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			if err := settingsStore.Set(ctx, AIFallbackEnabledKey, "true"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			sess, err := Build(ctx, store, settingsStore, &http.Client{Timeout: time.Second}, m)
 			if err != nil {
@@ -508,6 +524,9 @@ func TestBuild_AIClient_UsesConfiguredProvider(t *testing.T) {
 			if err := settingsStore.Set(ctx, AIProviderKey, c.provider); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			if err := settingsStore.Set(ctx, AIFallbackEnabledKey, "true"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if err := settingsStore.Set(ctx, AIModelKey, "test-model"); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -537,6 +556,9 @@ func TestBuild_AIClient_UnknownProviderErrors(t *testing.T) {
 	store, settingsStore := newTestStores(t)
 	ctx := context.Background()
 	if err := store.Upsert(ctx, "radarr", "http://radarr.local:7878", "radarr-key"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := settingsStore.Set(ctx, AIFallbackEnabledKey, "true"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := settingsStore.Set(ctx, AIProviderKey, "chatgpt"); err != nil {

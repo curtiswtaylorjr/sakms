@@ -398,6 +398,43 @@ export function putRecheckInterval(intervalSeconds: number): Promise<void> {
   });
 }
 
+// BYOAI fallback toggle (off by default — DB-first parsing runs alone).
+export function fetchAIFallbackEnabled(): Promise<boolean> {
+  return api<{ enabled: boolean }>("/api/settings/ai-fallback-enabled").then(
+    (r) => r.enabled,
+  );
+}
+
+export function putAIFallbackEnabled(enabled: boolean): Promise<void> {
+  return api<void>("/api/settings/ai-fallback-enabled", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+// Entity cache admin (Phase 6).
+export type EntitySyncSource = "stash" | "tpdb" | "stashdb" | "fansdb";
+
+export interface EntitySyncSourceStatus {
+  source: EntitySyncSource;
+  syncedAt: string;
+  cursor: string;
+}
+
+export interface EntitySyncStatus {
+  studioCount: number;
+  performerCount: number;
+  sources: EntitySyncSourceStatus[];
+}
+
+export function fetchEntitySyncStatus(): Promise<EntitySyncStatus> {
+  return api<EntitySyncStatus>("/api/admin/entity-sync");
+}
+
+export function triggerEntitySync(source: EntitySyncSource): Promise<void> {
+  return api<void>(`/api/admin/entity-sync/${source}`, { method: "POST" });
+}
+
 // Global background Adult "newest" scan cadence in whole seconds (>= 0,
 // backend-validated; 0 = off, opt-in). Same shape/semantics as recheck-interval
 // above, but this endpoint has no generated DTO (the Go handler uses local

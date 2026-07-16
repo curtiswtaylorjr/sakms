@@ -25,6 +25,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/parseentity"
 	"github.com/curtiswtaylorjr/sakms/internal/phash"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/recheck"
@@ -100,6 +101,9 @@ func run() error {
 	// start-call below.
 	adultNewestRowStore := adultnewest.New(sqlDB)
 	adultNewestReleaseStore := adultnewest.NewReleaseStore(sqlDB)
+	// entityStore is the DB-first entity cache for Adult filename parsing. It
+	// wraps the same sqlDB as every other store — no second connection needed.
+	entityStore := parseentity.NewSQLiteStore(sqlDB)
 	// secretStore doubles as authStore's OIDC-client-secret decryptor, and
 	// the outbound HTTP client is the same outboundTimeout-bounded one every
 	// other external client in this program uses — it bounds OIDC discovery,
@@ -143,7 +147,7 @@ func run() error {
 	// internal/api.NewAuthMux's doc comment) — NewMux stays unaware auth
 	// exists either way, so its own large test suite never had to change
 	// for auth specifically.
-	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, videoHasher, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore)
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, videoHasher, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, entityStore)
 	protectedAPI := auth.Middleware(secretStore, authStore, apiMux)
 
 	// API-key management (status + regenerate) is session-protected like
@@ -221,7 +225,7 @@ func run() error {
 	// for Adult Discover's newest-releases rows to read. Gated OFF by
 	// default (interval 0). To remove entirely: delete internal/adultnewest,
 	// this line, its NewMux params, and the two stores' construction above.
-	go adultnewest.Run(ctx, adultnewest.LoadInterval(ctx, settingsStore), connStore, settingsStore, adultNewestReleaseStore)
+	go adultnewest.Run(ctx, adultnewest.LoadInterval(ctx, settingsStore), connStore, settingsStore, adultNewestReleaseStore, entityStore)
 
 	select {
 	case err := <-errCh:

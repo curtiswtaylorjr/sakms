@@ -88,7 +88,7 @@ func TestPostGrabReview_Movies_RuntimeMismatchFlags(t *testing.T) {
 	// Imported file runs 20 min against a 100-min listing → ratio 0.2, well
 	// outside the [0.70, 1.30] band → flagged.
 	prober := fixedProber{durationSeconds: 20 * 60}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil))
 	defer srv.Close()
 
 	updated := postCheckImport(t, srv.URL, g.ID)
@@ -143,7 +143,7 @@ func TestPostGrabReview_Series_SingleEpisode_RuntimeMismatchFlags(t *testing.T) 
 
 	// Imported file runs 10 min against a 58-min episode → ratio 0.17 → flagged.
 	prober := fixedProber{durationSeconds: 10 * 60}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil))
 	defer srv.Close()
 
 	updated := postCheckImport(t, srv.URL, g.ID)
@@ -204,7 +204,7 @@ func TestPostGrabReview_Series_SeasonPack_Skips(t *testing.T) {
 	// A duration that WOULD flag if a single-episode runtime were (wrongly)
 	// applied — proving the skip is the EpisodeNumber gate, not a lucky match.
 	prober := fixedProber{durationSeconds: 10 * 60}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil))
 	defer srv.Close()
 
 	updated := postCheckImport(t, srv.URL, g.ID)

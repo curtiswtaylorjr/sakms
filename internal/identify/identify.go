@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/curtiswtaylorjr/sakms/internal/bravesearch"
+	"github.com/curtiswtaylorjr/sakms/internal/parseentity"
 	"github.com/curtiswtaylorjr/sakms/internal/throttle"
 )
 
@@ -17,10 +18,17 @@ type Identifier struct {
 	// AI is whichever provider is configured (Ollama, OpenAI, Gemini, or
 	// Anthropic — see mode.buildAIClient) behind the shared AIClient
 	// interface. Every prompt in this package is written to be
-	// provider-agnostic (see AIClient's doc comment).
-	AI       AIClient
-	Brave    *bravesearch.Client // nil if no Brave key is available — web search step is skipped
-	Throttle *throttle.Throttle
+	// provider-agnostic (see AIClient's doc comment). Nil when no external
+	// AI provider is configured — the DB-first path (EntityStore) runs
+	// without it; AI is only the BYOAI fallback when fields are still empty.
+	AI AIClient
+	// EntityStore is the entity cache for DB-first filename parsing. When
+	// non-nil, ParseFilenameDB runs before the AI path. When nil, the AI
+	// path runs unconditionally (legacy behaviour). At least one of AI or
+	// EntityStore must be non-nil for IdentifyDetailed to do useful work.
+	EntityStore parseentity.EntityStore
+	Brave       *bravesearch.Client // nil if no Brave key is available — web search step is skipped
+	Throttle    *throttle.Throttle
 	// GiveBack submits identification results back to the community databases
 	// (fingerprints, or scene drafts for web-identified-only matches). Nil if
 	// neither TPDB nor StashDB/FansDB is configured — callers must nil-check.
@@ -86,11 +94,26 @@ func (id *Identifier) IdentifyDetailed(ctx context.Context, stem, parentName str
 		return &DetailedMatch{Scene: result}, nil
 	}
 
-	parsed, err := ParseFilename(ctx, id.AI, stem, parentName)
-	if err != nil {
-		return &DetailedMatch{}, nil //nolint:nilerr // a parse failure is a soft "no match", not a hard error
+	// DB-first parse: deterministic, zero-latency entity lookup.
+	// BYOAI fallback: only when AI is configured AND key fields are still empty.
+	var parsed ParsedFilename
+	var parseErr error
+	if id.EntityStore != nil {
+		parsed, parseErr = ParseFilenameDB(ctx, stem, parentName, id.EntityStore)
+		if parseErr != nil {
+			return &DetailedMatch{}, nil //nolint:nilerr
+		}
 	}
-	if parsed.Title == "" {
+	if id.AI != nil && parsed.Studio == "" && parsed.Title == "" {
+		parsed, parseErr = ParseFilename(ctx, id.AI, stem, parentName)
+		if parseErr != nil {
+			return &DetailedMatch{}, nil //nolint:nilerr
+		}
+	}
+	if id.EntityStore == nil && id.AI == nil {
+		return &DetailedMatch{}, nil
+	}
+	if parsed.Title == "" && parsed.Studio == "" {
 		return &DetailedMatch{}, nil
 	}
 

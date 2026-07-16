@@ -30,7 +30,7 @@ func newAdultMux(t *testing.T, conns map[string]string) *http.ServeMux {
 			t.Fatalf("upserting %s: %v", service, err)
 		}
 	}
-	return NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore)
+	return NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil)
 }
 
 func TestAdultStashBox_NotConfiguredReturnsEmptyArray(t *testing.T) {

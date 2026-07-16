@@ -13,6 +13,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/connections"
 	"github.com/curtiswtaylorjr/sakms/internal/identify"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/parseentity"
 	"github.com/curtiswtaylorjr/sakms/internal/prowlarr"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
@@ -106,7 +107,7 @@ func LoadInterval(ctx context.Context, settingsStore *settings.Store) time.Durat
 // interval defaults to defaultIntervalHours, not off (see
 // IntervalSettingKey's doc comment), so this job runs out of the box unlike
 // every other background job in this codebase.
-func Run(ctx context.Context, interval time.Duration, connStore *connections.Store, settingsStore *settings.Store, releaseStore *ReleaseStore) {
+func Run(ctx context.Context, interval time.Duration, connStore *connections.Store, settingsStore *settings.Store, releaseStore *ReleaseStore, entityStore parseentity.EntityStore) {
 	if interval <= 0 {
 		return // opt-in gate: off by default, honoring "manual first"
 	}
@@ -130,7 +131,7 @@ func Run(ctx context.Context, interval time.Duration, connStore *connections.Sto
 				interval = cur
 				ticker.Reset(cur)
 			}
-			runCycle(ctx, httpClient, connStore, settingsStore, releaseStore)
+			runCycle(ctx, httpClient, connStore, settingsStore, releaseStore, entityStore)
 		}
 	}
 }
@@ -141,7 +142,7 @@ func Run(ctx context.Context, interval time.Duration, connStore *connections.Sto
 // rest of the codebase: a missing Prowlarr/Identify config skips the whole
 // pass (nothing to scan with/against), and a single release's processing
 // failure is logged and skipped without aborting the others.
-func runCycle(ctx context.Context, httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, releaseStore *ReleaseStore) {
+func runCycle(ctx context.Context, httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, releaseStore *ReleaseStore, entityStore parseentity.EntityStore) {
 	// Purged independent of whether Prowlarr/Identify are configured right
 	// now — cleaning up months-old cache entries shouldn't depend on the
 	// feature being actively scannable at this exact moment (e.g. a
@@ -160,8 +161,14 @@ func runCycle(ctx context.Context, httpClient *http.Client, connStore *connectio
 	if sess.Prowlarr == nil {
 		return // prowlarr not configured — nothing to scan
 	}
-	if sess.Identify == nil {
-		return // AI identify pipeline not configured (needs an AI provider + at least one of StashDB/FansDB/TPDB) — nothing to match against
+	// Inject the entity store so the DB-first parser is available. Identify is
+	// always non-nil for Adult now; the real gate is whether it has any parsing
+	// capability (EntityStore or AI).
+	if sess.Identify != nil {
+		sess.Identify.EntityStore = entityStore
+	}
+	if sess.Identify == nil || (sess.Identify.EntityStore == nil && sess.Identify.AI == nil) {
+		return // no parsing backend configured (entity store or BYOAI) — nothing to identify against
 	}
 
 	// Bare category browse, no query term — Prowlarr/Torznab's native

@@ -12,6 +12,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/grabs"
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/parseentity"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/rename"
 	"github.com/curtiswtaylorjr/sakms/internal/rssfeeds"
@@ -52,7 +53,7 @@ import (
 // feed URL fetched and parsed server-side, a separate concept from
 // slidersStore (TMDB-backed) and adultNewestRowStore (Prowlarr-scan-cache-
 // backed) even though its CRUD+reorder shape mirrors both.
-func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, videoHasher rename.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store, slidersStore *discoversliders.Store, traktStore *trakt.Store, adultNewestRowStore *adultnewest.Store, adultNewestReleaseStore *adultnewest.ReleaseStore, rssFeedsStore *rssfeeds.Store) *http.ServeMux {
+func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, videoHasher rename.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store, slidersStore *discoversliders.Store, traktStore *trakt.Store, adultNewestRowStore *adultnewest.Store, adultNewestReleaseStore *adultnewest.ReleaseStore, rssFeedsStore *rssfeeds.Store, entityStore parseentity.EntityStore) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/connections/test", connectionsTestHandler(httpClient))
 	mux.HandleFunc("GET /api/connections", listConnectionsHandler(connStore))
@@ -88,7 +89,7 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("GET /api/modes/{mode}/identify-enabled", getIdentifyEnabledHandler(settingsStore))
 	mux.HandleFunc("PUT /api/modes/{mode}/identify-enabled", putIdentifyEnabledHandler(settingsStore))
 
-	mux.HandleFunc("POST /api/modes/{mode}/rename/scan", renameScanHandler(httpClient, connStore, settingsStore, propStore, libStore, prober, videoHasher))
+	mux.HandleFunc("POST /api/modes/{mode}/rename/scan", renameScanHandler(httpClient, connStore, settingsStore, propStore, libStore, prober, videoHasher, entityStore))
 	mux.HandleFunc("GET /api/modes/{mode}/rename/proposals", listProposalsHandler(propStore, proposals.Rename))
 	mux.HandleFunc("GET /api/modes/{mode}/rename/kids-root-path", getKidsRootPathHandler(settingsStore))
 	mux.HandleFunc("PUT /api/modes/{mode}/rename/kids-root-path", putKidsRootPathHandler(settingsStore))
@@ -248,6 +249,13 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("PUT /api/settings/ai-provider", putAIProviderHandler(settingsStore))
 	mux.HandleFunc("GET /api/settings/ai-model", getOllamaModelHandler(settingsStore, mode.AIModelKey))
 	mux.HandleFunc("PUT /api/settings/ai-model", putOllamaModelHandler(settingsStore, mode.AIModelKey))
+	// AI fallback opt-in toggle — off by default; DB-first parsing runs alone
+	// until the operator explicitly enables it here.
+	mux.HandleFunc("GET /api/settings/ai-fallback-enabled", getAIFallbackEnabledHandler(settingsStore))
+	mux.HandleFunc("PUT /api/settings/ai-fallback-enabled", putAIFallbackEnabledHandler(settingsStore))
+	// Entity cache admin — counts, per-source sync state, on-demand sync triggers
+	mux.HandleFunc("GET /api/admin/entity-sync", entitySyncStatusHandler(entityStore))
+	mux.HandleFunc("POST /api/admin/entity-sync/{source}", triggerEntitySyncHandler(entityStore, connStore, settingsStore, httpClient))
 
 	// Interval for the opt-in background availability recheck job (see
 	// internal/recheck) — 0/off by default. Just a settings scalar here; the

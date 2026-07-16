@@ -9,6 +9,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/dedup"
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
+	"github.com/curtiswtaylorjr/sakms/internal/parseentity"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/rename"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
@@ -74,7 +75,7 @@ func putKidsRootPathHandler(settingsStore *settings.Store) http.HandlerFunc {
 // (Whisparr eliminated, Stage 4), threading in the videophash hasher and the
 // mediainfo prober for its phash-first identification cascade. prober is the
 // mux's shared *mediainfo.Prober (its method set satisfies rename.Prober).
-func renameScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, libStore *library.Store, prober dedup.Prober, videoHasher rename.PHasher) http.HandlerFunc {
+func renameScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, libStore *library.Store, prober dedup.Prober, videoHasher rename.PHasher, entityStore parseentity.EntityStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
 		ctx := r.Context()
@@ -83,6 +84,12 @@ func renameScanHandler(httpClient *http.Client, connStore *connections.Store, se
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		// Inject the DB-first entity store into the Identify pipeline. Always
+		// done (even for Movies/Series, where Identify is nil and the nil-check
+		// makes this a no-op) so the handler stays mode-agnostic.
+		if sess.Identify != nil {
+			sess.Identify.EntityStore = entityStore
 		}
 
 		var found []proposals.Proposal
