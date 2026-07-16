@@ -67,7 +67,7 @@ func TestPostGrabReview_Movies_RuntimeMismatchFlags(t *testing.T) {
 	fakeQB := fakeCompletedQBittorrent(t, downloadDir)
 	tmdbSrv := fakeTMDBMovieRuntime(t, 100) // TMDB says 100 min = 6000 s
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -88,7 +88,7 @@ func TestPostGrabReview_Movies_RuntimeMismatchFlags(t *testing.T) {
 	// Imported file runs 20 min against a 100-min listing → ratio 0.2, well
 	// outside the [0.70, 1.30] band → flagged.
 	prober := fixedProber{durationSeconds: 20 * 60}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	updated := postCheckImport(t, srv.URL, g.ID)
@@ -123,7 +123,7 @@ func TestPostGrabReview_Series_SingleEpisode_RuntimeMismatchFlags(t *testing.T) 
 	fakeQB := fakeCompletedQBittorrent(t, downloadDir)
 	tmdbSrv := fakeTMDBSeriesRuntime(t, 1, 58) // season 1 episode 1, 58 min = 3480 s
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -143,7 +143,7 @@ func TestPostGrabReview_Series_SingleEpisode_RuntimeMismatchFlags(t *testing.T) 
 
 	// Imported file runs 10 min against a 58-min episode → ratio 0.17 → flagged.
 	prober := fixedProber{durationSeconds: 10 * 60}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	updated := postCheckImport(t, srv.URL, g.ID)
@@ -182,7 +182,7 @@ func TestPostGrabReview_Series_SeasonPack_Skips(t *testing.T) {
 	fakeQB := fakeCompletedQBittorrent(t, downloadDir)
 	tmdbSrv := fakeTMDBSeriesRuntime(t, 1, 58) // would be 3480 s if a single episode were checked
 
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -204,7 +204,7 @@ func TestPostGrabReview_Series_SeasonPack_Skips(t *testing.T) {
 	// A duration that WOULD flag if a single-episode runtime were (wrongly)
 	// applied — proving the skip is the EpisodeNumber gate, not a lucky match.
 	prober := fixedProber{durationSeconds: 10 * 60}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	updated := postCheckImport(t, srv.URL, g.ID)

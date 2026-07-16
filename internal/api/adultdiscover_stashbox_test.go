@@ -24,13 +24,13 @@ func fakeStashBox(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 // routing outbound calls to a fake server.
 func newAdultMux(t *testing.T, conns map[string]string) *http.ServeMux {
 	t.Helper()
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	for service, u := range conns {
 		if err := connStore.Upsert(context.Background(), service, u, "key"); err != nil {
 			t.Fatalf("upserting %s: %v", service, err)
 		}
 	}
-	return NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore)
+	return NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore)
 }
 
 func TestAdultStashBox_NotConfiguredReturnsEmptyArray(t *testing.T) {

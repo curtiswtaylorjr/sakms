@@ -14,6 +14,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/rename"
+	"github.com/curtiswtaylorjr/sakms/internal/rssfeeds"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 	"github.com/curtiswtaylorjr/sakms/internal/trakt"
 )
@@ -46,8 +47,12 @@ import (
 // categories above it. traktStore backs the Trakt watchlist connection
 // (settings-save, connection-summary, OAuth device flow, watchlist row —
 // see trakt.go, a self-contained file task #9 wrote independently of this
-// one; NewMux just registers its handlers).
-func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, videoHasher rename.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store, slidersStore *discoversliders.Store, traktStore *trakt.Store, adultNewestRowStore *adultnewest.Store, adultNewestReleaseStore *adultnewest.ReleaseStore) *http.ServeMux {
+// one; NewMux just registers its handlers). rssFeedsStore backs the
+// admin-defined raw RSS feed rows (see rss_feeds.go) — a per-row RSS 2.0
+// feed URL fetched and parsed server-side, a separate concept from
+// slidersStore (TMDB-backed) and adultNewestRowStore (Prowlarr-scan-cache-
+// backed) even though its CRUD+reorder shape mirrors both.
+func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, videoHasher rename.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store, slidersStore *discoversliders.Store, traktStore *trakt.Store, adultNewestRowStore *adultnewest.Store, adultNewestReleaseStore *adultnewest.ReleaseStore, rssFeedsStore *rssfeeds.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/connections/test", connectionsTestHandler(httpClient))
 	mux.HandleFunc("GET /api/connections", listConnectionsHandler(connStore))
@@ -150,6 +155,24 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("DELETE /api/discover/sliders/{id}", deleteSliderHandler(slidersStore))
 	mux.HandleFunc("POST /api/discover/sliders/reorder", reorderSlidersHandler(slidersStore))
 	mux.HandleFunc("GET /api/discover/sliders/{id}/resolve", resolveSliderHandler(httpClient, connStore, settingsStore, slidersStore))
+	// Admin-defined raw RSS 2.0 feed rows (NZBGeek saved-search style) — CRUD +
+	// reorder on the stored config, plus resolve to fetch+parse the feed's
+	// live items (see rss_feeds.go). A separate concept from the TMDB-backed
+	// sliders above: a feed's items are already fully-resolved releases
+	// (a real downloadUrl+protocol in hand), not catalog titles to search for.
+	mux.HandleFunc("GET /api/discover/rss-feeds", listRssFeedsHandler(rssFeedsStore))
+	mux.HandleFunc("POST /api/discover/rss-feeds", createRssFeedHandler(rssFeedsStore))
+	mux.HandleFunc("PUT /api/discover/rss-feeds/{id}", updateRssFeedHandler(rssFeedsStore))
+	mux.HandleFunc("DELETE /api/discover/rss-feeds/{id}", deleteRssFeedHandler(rssFeedsStore))
+	mux.HandleFunc("POST /api/discover/rss-feeds/reorder", reorderRssFeedsHandler(rssFeedsStore))
+	mux.HandleFunc("GET /api/discover/rss-feeds/{id}/resolve", resolveRssFeedHandler(httpClient, rssFeedsStore))
+	// Discover row display order — a best-effort hint over the FULL merged
+	// row set (built-in rows + every dynamic row type), one per screen (see
+	// discover_row_order.go). NOT the same invariant as the reorder routes
+	// above (which require the full existing id set exactly once) — this is
+	// deliberately loose (see discoverRowOrderSettingKey's doc comment).
+	mux.HandleFunc("GET /api/discover/row-order/{screen}", getRowOrderHandler(settingsStore))
+	mux.HandleFunc("PUT /api/discover/row-order/{screen}", putRowOrderHandler(settingsStore))
 	// Trakt: watchlist connection (Settings) + Discover watchlist row. See
 	// trakt.go for the handlers and the full route-table rationale — this is
 	// just the one-line mux registration. traktFlow is one shared in-memory

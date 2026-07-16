@@ -28,6 +28,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/phash"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 	"github.com/curtiswtaylorjr/sakms/internal/recheck"
+	"github.com/curtiswtaylorjr/sakms/internal/rssfeeds"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 	"github.com/curtiswtaylorjr/sakms/internal/trakt"
@@ -79,6 +80,10 @@ func run() error {
 	grabsStore := grabs.New(sqlDB)
 	libStore := library.New(sqlDB)
 	slidersStore := discoversliders.New(sqlDB)
+	// rssFeedsStore backs admin-defined raw RSS 2.0 feed rows (NZBGeek
+	// saved-search style) — a per-row feed URL fetched and parsed server-side
+	// at resolve time, a separate concept from slidersStore (TMDB-backed).
+	rssFeedsStore := rssfeeds.New(sqlDB)
 	// traktStore persists Trakt's single application connection + linked
 	// account tokens (its own table, not connections.Store — see
 	// internal/trakt's package doc for why); secretStore encrypts the same
@@ -138,7 +143,7 @@ func run() error {
 	// internal/api.NewAuthMux's doc comment) — NewMux stays unaware auth
 	// exists either way, so its own large test suite never had to change
 	// for auth specifically.
-	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, videoHasher, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore)
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, hasher, videoHasher, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore)
 	protectedAPI := auth.Middleware(secretStore, authStore, apiMux)
 
 	// API-key management (status + regenerate) is session-protected like

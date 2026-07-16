@@ -1146,3 +1146,80 @@ type BrowseResponse struct {
 	Path    string        `json:"path"`
 	Entries []BrowseEntry `json:"entries"`
 }
+
+// --- Optional raw RSS feed rows (internal/rssfeeds + internal/rssfeed) — a
+// per-row raw RSS 2.0 feed URL (NZBGeek saved-search style), fetched and
+// parsed server-side, rendered as one more optional Discover row. Target is
+// "movie" | "tv" | "adult" (a feed belongs to exactly one mode, no "mixed").
+// Mirrors Slider's CRUD+reorder DTO shape almost exactly.
+type RssFeed struct {
+	ID        int    `json:"id"`
+	Title     string `json:"title"`
+	FeedURL   string `json:"feedUrl"`
+	Target    string `json:"target"`
+	Protocol  string `json:"protocol"`
+	SortOrder int    `json:"sortOrder"`
+	Enabled   bool   `json:"enabled"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// RssFeedUpsertRequest is the body of POST /api/discover/rss-feeds (create)
+// and PUT /api/discover/rss-feeds/{id} (update) — every editable field,
+// mirroring rssfeeds.Store.Create/Update's parameters exactly. Nothing here
+// is a secret, so unlike ConnectionUpsertRequest.APIKey every field is a
+// plain value, no three-state pointer semantics needed.
+type RssFeedUpsertRequest struct {
+	Title    string `json:"title"`
+	FeedURL  string `json:"feedUrl"`
+	Target   string `json:"target"`
+	Protocol string `json:"protocol"`
+	Enabled  bool   `json:"enabled"`
+}
+
+// RssFeedReorderRequest is POST /api/discover/rss-feeds/reorder's body — ids
+// in display order, covering every existing feed exactly once. One explicit
+// "here is the full new order" action, not a per-item bulk mutation (see
+// rssfeeds.Store.Reorder's doc comment for why).
+type RssFeedReorderRequest struct {
+	IDs []int `json:"ids"`
+}
+
+// RssFeedItem is one resolved item from GET /api/discover/rss-feeds/{id}/resolve
+// — a fully-resolved release (a real downloadUrl+protocol already in hand,
+// unlike a TMDB/TPDB catalog item), mapped from rssfeed.Item. DownloadURL is
+// the item's enclosure URL, falling back to its Link when the item has no
+// enclosure (a malformed/no-enclosure item). SizeBytes is the enclosure's
+// byte length, 0 when absent. Indexer is the feed's own configured Title,
+// reusing the existing free-form Indexer display field grabs already have —
+// see internal/api/rss_feeds.go's resolve handler.
+type RssFeedItem struct {
+	Title       string `json:"title"`
+	Link        string `json:"link"`
+	PubDate     string `json:"pubDate"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+	DownloadURL string `json:"downloadUrl"`
+	Protocol    string `json:"protocol"`
+	Indexer     string `json:"indexer"`
+}
+
+// --- Discover row order (internal/api/discover_row_order.go) — a
+// best-effort display-order hint over the FULL merged row set (built-in rows
+// plus every dynamic row type: sliders, adult newest rows, rss feeds), one
+// per screen ("mainstream" | "adult"). NOT backed by its own table — a thin
+// wrapper over two fixed settings.Store keys, since the value is just a
+// JSON array of stable string keys (e.g. "builtin:trending-movies",
+// "slider:4", "rssfeed:2"). Deliberately not validated against a fixed
+// known-id set the way RssFeedReorderRequest is — see
+// internal/api/discover_row_order.go's doc comment: the frontend appends any
+// key it knows about but doesn't find in the stored order to the end, and
+// skips any stored key that no longer resolves to anything live.
+type RowOrderResponse struct {
+	Keys []string `json:"keys"`
+}
+
+// RowOrderRequest is PUT /api/discover/row-order/{screen}'s body — the full
+// replacement key order, same shape as the response.
+type RowOrderRequest struct {
+	Keys []string `json:"keys"`
+}

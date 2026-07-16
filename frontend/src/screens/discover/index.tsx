@@ -35,7 +35,7 @@ import {
   Switch,
   Match,
 } from "solid-js";
-import { type TabDef, ScreenTabs } from "../../components/ui";
+import { Button, type TabDef, ScreenTabs } from "../../components/ui";
 import { MainstreamDiscover } from "./Mainstream";
 import { AdultDiscover } from "./Adult";
 
@@ -51,23 +51,46 @@ const MAINSTREAM_TABS: TabDef[] = [
 // rendered standalone (a unit test with no shell context) it falls back to
 // drawing the bar inline, the same pattern ModeTabs uses — so tests can still
 // click "Adult" without mounting the whole shell.
+//
+// editMode drives the Optional RSS Discover rows + inline row editor feature:
+// a single Edit toggle lives in the tab bar's trailing slot (ScreenTabs'
+// `trailing` prop) here, one level above Mainstream/Adult, since it's the
+// same toggle regardless of which sub-tab is active — each sub-screen reads
+// it via a prop and renders RowEditor in place of its normal row list while
+// on. Switching tabs resets it to false so a stale "Edit" state never
+// carries from one screen to the other.
 export const Discover: Component = () => {
   const [tab, setTab] = createSignal("mainstream");
+  const [editMode, setEditMode] = createSignal(false);
+
+  const selectTab = (id: string) => {
+    setEditMode(false);
+    setTab(id);
+  };
+
   return (
     <div>
       <ScreenTabs
         tabs={MAINSTREAM_TABS}
         current={tab}
-        onSelect={setTab}
-        class="flex gap-1"
+        onSelect={selectTab}
+        trailing={
+          <Button
+            class="!px-3 !py-1.5 !text-sm"
+            onClick={() => setEditMode((v) => !v)}
+          >
+            {editMode() ? "Done" : "Edit"}
+          </Button>
+        }
+        class="flex items-center gap-1"
       />
       <div class="mt-4">
         <Switch>
           <Match when={tab() === "adult"}>
-            <AdultDiscover />
+            <AdultDiscover editMode={editMode} />
           </Match>
           <Match when={tab() === "mainstream"}>
-            <MainstreamDiscover />
+            <MainstreamDiscover editMode={editMode} />
           </Match>
         </Switch>
       </div>

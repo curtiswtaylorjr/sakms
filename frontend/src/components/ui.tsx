@@ -156,10 +156,13 @@ export type TabDef = { id: string; label: string };
 // render that screen's tab bar in its one consistent location above the page
 // content. `current` is a Solid accessor (NOT a frozen value) so the active-tab
 // highlight tracks the screen's own selection signal; `onSelect` sets it.
+// `trailing` is an optional screen-level slot rendered after the tab buttons
+// (e.g. Discover's Edit-mode toggle) — most callers omit it.
 export type ScreenTabsRegistration = {
   tabs: TabDef[];
   current: () => string;
   onSelect: (id: string) => void;
+  trailing?: JSX.Element;
 };
 
 // ScreenTabsContext lets the shell (provider) receive the active screen's tab
@@ -184,16 +187,19 @@ export function useScreenTabs(reg: ScreenTabsRegistration): boolean {
 }
 
 // ScreenTabBar is the generic tab bar: a row of pill buttons over an opaque
-// TabDef set. The shell renders it in its consistent location; screens rendered
-// standalone (no shell) render it inline via ModeTabs' fallback.
+// TabDef set, plus an optional trailing slot rendered after them (e.g.
+// Discover's Edit-mode toggle). The shell renders it in its consistent
+// location; screens rendered standalone (no shell) render it inline via
+// ModeTabs' fallback.
 export function ScreenTabBar(props: {
   tabs: TabDef[];
   current: () => string;
   onSelect: (id: string) => void;
+  trailing?: JSX.Element;
   class?: string;
 }): JSX.Element {
   return (
-    <div class={props.class ?? "mb-4 flex gap-1"}>
+    <div class={props.class ?? "mb-4 flex items-center gap-1"}>
       <For each={props.tabs}>
         {(t) => (
           <button
@@ -209,6 +215,7 @@ export function ScreenTabBar(props: {
           </button>
         )}
       </For>
+      {props.trailing}
     </div>
   );
 }
@@ -225,12 +232,14 @@ export function ScreenTabs(props: {
   tabs: TabDef[];
   current: () => string;
   onSelect: (id: string) => void;
+  trailing?: JSX.Element;
   class?: string;
 }): JSX.Element {
   const registered = useScreenTabs({
     tabs: props.tabs,
     current: props.current,
     onSelect: props.onSelect,
+    trailing: props.trailing,
   });
   if (registered) return null as unknown as JSX.Element;
   return (
@@ -238,6 +247,7 @@ export function ScreenTabs(props: {
       tabs={props.tabs}
       current={props.current}
       onSelect={props.onSelect}
+      trailing={props.trailing}
       class={props.class}
     />
   );

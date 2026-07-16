@@ -365,6 +365,7 @@ export const AppShell: Component<{
                     tabs={reg().tabs}
                     current={reg().current}
                     onSelect={reg().onSelect}
+                    trailing={reg().trailing}
                   />
                 )}
               </Show>

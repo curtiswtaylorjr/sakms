@@ -16,7 +16,7 @@ import (
 // title, and scene-level tags, the same {id, title, tags} shape Movies/Series
 // return, keyed on a library_scenes row.
 func TestListTracked_Adult_ReturnsSceneLibraryItems(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
 	scene, err := libStore.UpsertScene(ctx, library.Scene{
 		Box: "stashdb", SceneID: "s1", Title: "Some Scene",
@@ -29,7 +29,7 @@ func TestListTracked_Adult_ReturnsSceneLibraryItems(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/tracked")
@@ -53,8 +53,8 @@ func TestListTracked_Adult_ReturnsSceneLibraryItems(t *testing.T) {
 // connection at all now — an empty library returns an empty list with 200,
 // not a 400 (the old Whisparr-missing behavior).
 func TestListTracked_Adult_EmptyWhenNoScenes(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/adult/tracked")
@@ -78,7 +78,7 @@ func TestListTracked_Adult_EmptyWhenNoScenes(t *testing.T) {
 // never touches Radarr at all — it's served straight from libStore, with
 // Tags as label strings (not numeric Servarr tag ids).
 func TestListTracked_Movies_ReturnsLibraryItemsWithLabelTags(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
 	item, err := libStore.Upsert(ctx, library.Item{Mode: mode.Movies, TMDBID: 453, Title: "A Beautiful Mind", Year: 2001, RootFolderPath: "/movies"})
 	if err != nil {
@@ -88,7 +88,7 @@ func TestListTracked_Movies_ReturnsLibraryItemsWithLabelTags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/movies/tracked")
@@ -118,7 +118,7 @@ func TestListTracked_Movies_ReturnsLibraryItemsWithLabelTags(t *testing.T) {
 // never touches Sonarr at all now — it's served straight from libStore,
 // same shape as Movies.
 func TestListTracked_Series_ReturnsLibrarySeriesWithLabelTags(t *testing.T) {
-	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore := testStores(t)
+	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
 	series, err := libStore.UpsertSeries(ctx, library.Series{TMDBID: 555, Title: "Some Show", Year: 2019, RootFolderPath: "/tv"})
 	if err != nil {
@@ -128,7 +128,7 @@ func TestListTracked_Series_ReturnsLibrarySeriesWithLabelTags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/modes/series/tracked")

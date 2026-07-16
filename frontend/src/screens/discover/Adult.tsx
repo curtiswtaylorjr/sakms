@@ -9,9 +9,22 @@
 // non-interactive — no stash-box scenes-by-entity drill-down endpoint
 // exists yet, see EntityCard). Extracted from the original single-file
 // Discover.tsx.
+//
+// Row order (Optional RSS Discover rows + inline row editor): the browse
+// row block is driven by a merged, operator-reorderable key list (see
+// api/rowOrder.ts's mergeRowOrder) — newest rows/Studios/Performers/
+// stash-box rows are reorderable but not removable here (they already have
+// their own management surfaces elsewhere); admin-added RSS feed rows
+// (target=adult) are both reorderable AND removable/toggleable inline. Only
+// applies to the plain browse view — search results and a Studio/Performer
+// drill-down are unaffected. editMode (from Discover/index.tsx's tab-bar
+// Edit toggle) swaps the row list for RowEditor's UI; the "+ Add RSS feed"
+// tile at the bottom is always visible regardless of edit mode.
 
 import {
   type Component,
+  type JSX,
+  createEffect,
   createResource,
   createSignal,
   For,
@@ -48,6 +61,16 @@ import {
   notConfiguredService,
 } from "./shared";
 import { type DetailTarget, DetailPopup } from "./DetailPopup";
+import {
+  type RssFeed,
+  deleteRssFeed,
+  fetchRssFeeds,
+  updateRssFeed,
+} from "../../api/rssFeeds";
+import { fetchRowOrder, mergeRowOrder, saveRowOrder } from "../../api/rowOrder";
+import { RssFeedRow } from "./RssFeedRows";
+import { RowEditor, type RowDescriptor } from "./RowEditor";
+import { AddRssFeedModal } from "./AddRssFeedModal";
 
 // sourceLabel maps a non-TPDB AdultDiscoverItem.source to its display label —
 // "" (no label) for "tpdb" (the default, unlabeled source) or an unrecognized/
@@ -268,6 +291,41 @@ const STASH_BOX_ROWS: {
   },
 ];
 
+// STASH_BOX_ORDERABLE_ROWS flattens STASH_BOX_ROWS into individual rows, each
+// with its own stable Discover row-order key ("stashbox:{box}:{kind}") — the
+// row-order feature interleaves these individually with newest
+// rows/Studios/Performers/RSS feed rows, not as one per-box block.
+type StashBoxOrderableRow = {
+  key: string;
+  box: StashBox;
+  label: string;
+  shape: "scenes" | "studios" | "performers";
+  sceneKind?: "recent" | "trending";
+};
+const STASH_BOX_ORDERABLE_ROWS: StashBoxOrderableRow[] = STASH_BOX_ROWS.flatMap(
+  (row) => [
+    ...row.sceneRows.map((sr) => ({
+      key: `stashbox:${row.box}:${sr.kind}`,
+      box: row.box,
+      label: sr.title,
+      shape: "scenes" as const,
+      sceneKind: sr.kind,
+    })),
+    {
+      key: `stashbox:${row.box}:studios`,
+      box: row.box,
+      label: `${row.label} Studios`,
+      shape: "studios" as const,
+    },
+    {
+      key: `stashbox:${row.box}:performers`,
+      box: row.box,
+      label: `${row.label} Performers`,
+      shape: "performers" as const,
+    },
+  ],
+);
+
 // AdultDrill is the active drill-down target: which entity kind, its opaque TPDB
 // id (passed verbatim to the drill-down endpoint), and its name for the header.
 type AdultDrill = { kind: "studio" | "performer"; id: string; name: string };
@@ -279,7 +337,11 @@ type AdultDrill = { kind: "studio" | "performer"; id: string; name: string };
 // that entity's scenes (with a "Back to browse" control). Owns the single grab
 // dialog for every scene card (rows, search, drill-down) and the not-configured
 // setup modal, raised once when any strip's fetch reports TPDB missing.
-export const AdultDiscover: Component = () => {
+// editMode (from Discover/index.tsx's tab-bar Edit toggle) swaps the browse
+// row block for RowEditor's reorder/enable/delete UI.
+export const AdultDiscover: Component<{ editMode?: () => boolean }> = (
+  props,
+) => {
   const [grabTarget, setGrabTarget] = createSignal<GrabTarget | null>(null);
   const [detailTarget, setDetailTarget] = createSignal<DetailTarget | null>(null);
   const [setupError, setSetupError] = createSignal<unknown>(null);
@@ -366,6 +428,235 @@ export const AdultDiscover: Component = () => {
 
   const configureFor = () => notConfiguredService(setupError());
 
+  // --- Discover row order: newest rows/Studios/Performers/stash-box rows
+  // (reorderable, not removable here) + admin-added RSS feed rows
+  // (reorderable AND removable/toggleable), fully interleavable via Edit
+  // mode (RowEditor). Only applies to the plain browse view. ---
+  const [feedsData] = createResource(reloadToken, () =>
+    fetchRssFeeds().catch(() => [] as RssFeed[]),
+  );
+  const adultFeeds = () => (feedsData() ?? []).filter((f) => f.target === "adult");
+  const enabledAdultFeeds = () => adultFeeds().filter((f) => f.enabled);
+
+  const stashBoxKnownRows = () =>
+    STASH_BOX_ORDERABLE_ROWS.filter((r) => configuredServices().has(r.box));
+
+  // knownKeys is every row this screen currently knows about. Default order
+  // (an empty stored order, e.g. a fresh install) matches the page's
+  // original hardcoded row sequence exactly: newest rows, Studios,
+  // Performers, then any configured stash-box rows, then RSS feeds.
+  const knownKeys = () => [
+    ...newestRows().map((r) => `newestrow:${r.id}`),
+    "studios",
+    "performers",
+    ...stashBoxKnownRows().map((r) => r.key),
+    ...adultFeeds().map((f) => `rssfeed:${f.id}`),
+  ];
+
+  const [storedKeys, setStoredKeys] = createSignal<string[] | null>(null);
+  createEffect(() => {
+    if (storedKeys() === null) {
+      fetchRowOrder("adult")
+        .then(setStoredKeys)
+        .catch(() => setStoredKeys([]));
+    }
+  });
+
+  const orderedKeys = () => mergeRowOrder(storedKeys() ?? [], knownKeys());
+
+  const [rowOrderError, setRowOrderError] = createSignal("");
+  const persistOrder = (keys: string[]) => {
+    setStoredKeys(keys);
+    void saveRowOrder("adult", keys).catch((e) =>
+      setRowOrderError((e as Error).message),
+    );
+  };
+
+  const moveRow = (key: string, direction: -1 | 1) => {
+    const keys = orderedKeys();
+    const idx = keys.indexOf(key);
+    const swapWith = idx + direction;
+    if (idx < 0 || swapWith < 0 || swapWith >= keys.length) return;
+    const next = [...keys];
+    [next[idx], next[swapWith]] = [next[swapWith]!, next[idx]!];
+    persistOrder(next);
+  };
+
+  const descriptorFor = (key: string): RowDescriptor | undefined => {
+    if (key === "studios") return { key, label: "Studios", removable: false };
+    if (key === "performers") return { key, label: "Performers", removable: false };
+    if (key.startsWith("newestrow:")) {
+      const id = Number(key.slice("newestrow:".length));
+      const row = newestRows().find((r) => r.id === id);
+      return row ? { key, label: row.title, removable: false } : undefined;
+    }
+    if (key.startsWith("stashbox:")) {
+      const row = STASH_BOX_ORDERABLE_ROWS.find((r) => r.key === key);
+      return row ? { key, label: row.label, removable: false } : undefined;
+    }
+    if (key.startsWith("rssfeed:")) {
+      const id = Number(key.slice("rssfeed:".length));
+      const f = adultFeeds().find((f) => f.id === id);
+      return f ? { key, label: f.title, removable: true, enabled: f.enabled } : undefined;
+    }
+    return undefined;
+  };
+
+  const rowDescriptors = (): RowDescriptor[] =>
+    orderedKeys()
+      .map(descriptorFor)
+      .filter((d): d is RowDescriptor => d !== undefined);
+
+  const toggleRowEnabled = async (row: RowDescriptor) => {
+    if (!row.key.startsWith("rssfeed:")) return;
+    try {
+      const f = adultFeeds().find((f) => `rssfeed:${f.id}` === row.key);
+      if (!f) return;
+      await updateRssFeed(f.id, {
+        title: f.title,
+        feedUrl: f.feedUrl,
+        target: f.target,
+        protocol: f.protocol,
+        enabled: !f.enabled,
+      });
+      setReloadToken((n) => n + 1);
+    } catch (e) {
+      setRowOrderError((e as Error).message);
+    }
+  };
+
+  const deleteRow = async (row: RowDescriptor) => {
+    if (!row.key.startsWith("rssfeed:")) return;
+    if (!confirm(`Delete "${row.label}"?`)) return;
+    try {
+      await deleteRssFeed(Number(row.key.slice("rssfeed:".length)));
+      persistOrder(orderedKeys().filter((k) => k !== row.key));
+      setReloadToken((n) => n + 1);
+    } catch (e) {
+      setRowOrderError((e as Error).message);
+    }
+  };
+
+  const visibleKeys = () =>
+    orderedKeys().filter((key) => {
+      if (key.startsWith("rssfeed:")) {
+        return enabledAdultFeeds().some((f) => `rssfeed:${f.id}` === key);
+      }
+      return true;
+    });
+
+  const renderRow = (key: string): JSX.Element => {
+    if (key === "studios") {
+      return (
+        <PaginatedStrip<StudioSummary>
+          title="Studios"
+          reloadToken={reloadToken}
+          load={(page) => fetchAdultStudios(page)}
+          onError={setSetupError}
+        >
+          {(s) => (
+            <EntityCard
+              kind="studio"
+              name={s.name}
+              image={s.image}
+              onSelect={() => setDrill({ kind: "studio", id: s.id, name: s.name })}
+            />
+          )}
+        </PaginatedStrip>
+      );
+    }
+    if (key === "performers") {
+      return (
+        <PaginatedStrip<PerformerSummary>
+          title="Performers"
+          reloadToken={reloadToken}
+          load={(page) => fetchAdultPerformers(page)}
+          onError={setSetupError}
+        >
+          {(p) => (
+            <EntityCard
+              kind="performer"
+              name={p.name}
+              image={p.image}
+              onSelect={() => setDrill({ kind: "performer", id: p.id, name: p.name })}
+            />
+          )}
+        </PaginatedStrip>
+      );
+    }
+    if (key.startsWith("newestrow:")) {
+      const id = Number(key.slice("newestrow:".length));
+      const row = newestRows().find((r) => r.id === id)!;
+      return (
+        <PaginatedStrip<AdultNewestReleaseItem>
+          title={row.title}
+          reloadToken={reloadToken}
+          load={(page) => fetchAdultNewestRowItems(row.id, page)}
+          onError={setSetupError}
+        >
+          {(item) =>
+            row.rowType === "movie" || row.rowType === "scene" ? (
+              <AdultCard
+                item={toAdultDiscoverItem(item)}
+                onGrab={setGrabTarget}
+                onDetail={setDetailTarget}
+              />
+            ) : (
+              <EntityCard
+                kind={row.rowType === "studio" ? "studio" : "performer"}
+                name={item.title}
+                image={item.image}
+              />
+            )
+          }
+        </PaginatedStrip>
+      );
+    }
+    if (key.startsWith("stashbox:")) {
+      const row = STASH_BOX_ORDERABLE_ROWS.find((r) => r.key === key)!;
+      if (row.shape === "scenes") {
+        return (
+          <PaginatedStrip
+            title={row.label}
+            reloadToken={reloadToken}
+            load={(page) => fetchStashBoxScenes(row.box, row.sceneKind!, page)}
+            onError={setSetupError}
+          >
+            {(item) => (
+              <AdultCard item={item} onGrab={setGrabTarget} onDetail={setDetailTarget} />
+            )}
+          </PaginatedStrip>
+        );
+      }
+      if (row.shape === "studios") {
+        return (
+          <PaginatedStrip<StudioSummary>
+            title={row.label}
+            reloadToken={reloadToken}
+            load={(page) => fetchStashBoxStudios(row.box, page)}
+            onError={setSetupError}
+          >
+            {(s) => <EntityCard kind="studio" name={s.name} image={s.image} />}
+          </PaginatedStrip>
+        );
+      }
+      return (
+        <PaginatedStrip<PerformerSummary>
+          title={row.label}
+          reloadToken={reloadToken}
+          load={(page) => fetchStashBoxPerformers(row.box, page)}
+          onError={setSetupError}
+        >
+          {(p) => <EntityCard kind="performer" name={p.name} image={p.image} />}
+        </PaginatedStrip>
+      );
+    }
+    const feed = enabledAdultFeeds().find((f) => `rssfeed:${f.id}` === key)!;
+    return <RssFeedRow feed={feed} reloadToken={reloadToken} onError={setSetupError} />;
+  };
+
+  const [addFeedOpen, setAddFeedOpen] = createSignal(false);
+
   return (
     <div>
       <form
@@ -415,126 +706,34 @@ export const AdultDiscover: Component = () => {
             when={drill()}
             fallback={
               <>
-                {/* Operator-defined "newest" rows — Prowlarr-backed matches
-                    cached by the background scan, shown first as the
-                    confirmed-downloadable value-add. movie/scene rows render
-                    grab-able AdultCards (via the toAdultDiscoverItem adapter);
-                    performer/studio rows render non-interactive EntityCards
-                    (no drill-down endpoint for THIS pipeline's matched
-                    entities — same reason STASH_BOX_ROWS omit onSelect). */}
-                <For each={newestRows()}>
-                  {(row) => (
-                    <PaginatedStrip<AdultNewestReleaseItem>
-                      title={row.title}
-                      reloadToken={reloadToken}
-                      load={(page) => fetchAdultNewestRowItems(row.id, page)}
-                      onError={setSetupError}
-                    >
-                      {(item) =>
-                        row.rowType === "movie" || row.rowType === "scene" ? (
-                          <AdultCard
-                            item={toAdultDiscoverItem(item)}
-                            onGrab={setGrabTarget}
-                            onDetail={setDetailTarget}
-                          />
-                        ) : (
-                          <EntityCard
-                            kind={row.rowType === "studio" ? "studio" : "performer"}
-                            name={item.title}
-                            image={item.image}
-                          />
-                        )
-                      }
-                    </PaginatedStrip>
-                  )}
-                </For>
-                <PaginatedStrip<StudioSummary>
-                  title="Studios"
-                  reloadToken={reloadToken}
-                  load={(page) => fetchAdultStudios(page)}
-                  onError={setSetupError}
-                >
-                  {(s) => (
-                    <EntityCard
-                      kind="studio"
-                      name={s.name}
-                      image={s.image}
-                      onSelect={() =>
-                        setDrill({ kind: "studio", id: s.id, name: s.name })
-                      }
-                    />
-                  )}
-                </PaginatedStrip>
-                <PaginatedStrip<PerformerSummary>
-                  title="Performers"
-                  reloadToken={reloadToken}
-                  load={(page) => fetchAdultPerformers(page)}
-                  onError={setSetupError}
-                >
-                  {(p) => (
-                    <EntityCard
-                      kind="performer"
-                      name={p.name}
-                      image={p.image}
-                      onSelect={() =>
-                        setDrill({ kind: "performer", id: p.id, name: p.name })
-                      }
-                    />
-                  )}
-                </PaginatedStrip>
-
-                {/* Optional stash-box sources — rendered only when
-                    configured (no "Nothing here yet" placeholder otherwise).
-                    Studios/Performers cards below deliberately omit onSelect
-                    (see EntityCard's doc comment): there is no stash-box
-                    scenes-by-entity drill-down endpoint, so these render as
-                    plain, non-interactive tiles. */}
-                <For each={STASH_BOX_ROWS}>
-                  {(row) => (
-                    <Show when={configuredServices().has(row.box)}>
-                      <For each={row.sceneRows}>
-                        {(sceneRow) => (
-                          <PaginatedStrip
-                            title={sceneRow.title}
-                            reloadToken={reloadToken}
-                            load={(page) =>
-                              fetchStashBoxScenes(row.box, sceneRow.kind, page)
-                            }
-                            onError={setSetupError}
-                          >
-                            {(item) => (
-                              <AdultCard
-                                item={item}
-                                onGrab={setGrabTarget}
-                                onDetail={setDetailTarget}
-                              />
-                            )}
-                          </PaginatedStrip>
-                        )}
-                      </For>
-                      <PaginatedStrip<StudioSummary>
-                        title={`${row.label} Studios`}
-                        reloadToken={reloadToken}
-                        load={(page) => fetchStashBoxStudios(row.box, page)}
-                        onError={setSetupError}
-                      >
-                        {(s) => (
-                          <EntityCard kind="studio" name={s.name} image={s.image} />
-                        )}
-                      </PaginatedStrip>
-                      <PaginatedStrip<PerformerSummary>
-                        title={`${row.label} Performers`}
-                        reloadToken={reloadToken}
-                        load={(page) => fetchStashBoxPerformers(row.box, page)}
-                        onError={setSetupError}
-                      >
-                        {(p) => (
-                          <EntityCard kind="performer" name={p.name} image={p.image} />
-                        )}
-                      </PaginatedStrip>
-                    </Show>
-                  )}
-                </For>
+                <Show when={props.editMode?.()}>
+                  <RowEditor
+                    rows={rowDescriptors()}
+                    onMove={moveRow}
+                    onToggleEnabled={(r) => void toggleRowEnabled(r)}
+                    onDelete={(r) => void deleteRow(r)}
+                  />
+                  <Show when={rowOrderError()}>
+                    <ErrorText>{rowOrderError()}</ErrorText>
+                  </Show>
+                </Show>
+                <For each={visibleKeys()}>{(key) => renderRow(key)}</For>
+                <div class="mt-6 flex justify-center">
+                  <Button onClick={() => setAddFeedOpen(true)}>
+                    + Add RSS feed
+                  </Button>
+                </div>
+                <Show when={addFeedOpen()}>
+                  <AddRssFeedModal
+                    allowedTargets={["adult"]}
+                    defaultTarget="adult"
+                    onClose={() => setAddFeedOpen(false)}
+                    onSaved={() => {
+                      setAddFeedOpen(false);
+                      setReloadToken((n) => n + 1);
+                    }}
+                  />
+                </Show>
               </>
             }
           >
