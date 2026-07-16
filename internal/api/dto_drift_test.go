@@ -60,6 +60,38 @@ func TestHandlerDTOMirrorNoDrift(t *testing.T) {
 		{"repickProposalRequest/RepickRequest", repickProposalRequest{}, apidto.RepickRequest{}},
 		{"libraryTagEntry/TagEntry", libraryTagEntry{}, apidto.TagEntry{}},
 		{"libraryTrackedItem/TrackedItem", libraryTrackedItem{}, apidto.TrackedItem{}},
+		// settings.go
+		{"aiModelResponse/AIModelResponse", aiModelResponse{}, apidto.AIModelResponse{}},
+		{"aiModelRequest/AIModelRequest", aiModelRequest{}, apidto.AIModelRequest{}},
+		{"aiProviderResponse/AIProviderResponse", aiProviderResponse{}, apidto.AIProviderResponse{}},
+		{"aiProviderRequest/AIProviderRequest", aiProviderRequest{}, apidto.AIProviderRequest{}},
+		// library.go
+		{"libraryRootFolderResponse/LibraryRootFolderResponse", libraryRootFolderResponse{}, apidto.LibraryRootFolderResponse{}},
+		{"libraryRootFolderRequest/LibraryRootFolderRequest", libraryRootFolderRequest{}, apidto.LibraryRootFolderRequest{}},
+		{"qualityPrefsResponse/QualityPrefsResponse", qualityPrefsResponse{}, apidto.QualityPrefsResponse{}},
+		{"qualityPrefsRequest/QualityPrefsRequest", qualityPrefsRequest{}, apidto.QualityPrefsRequest{}},
+		{"namingPresetResponse/NamingPresetResponse", namingPresetResponse{}, apidto.NamingPresetResponse{}},
+		{"namingPresetRequest/NamingPresetRequest", namingPresetRequest{}, apidto.NamingPresetRequest{}},
+		{"phashThresholdResponse/PHashThresholdResponse", phashThresholdResponse{}, apidto.PHashThresholdResponse{}},
+		{"phashThresholdRequest/PHashThresholdRequest", phashThresholdRequest{}, apidto.PHashThresholdRequest{}},
+		{"confidenceThresholdResponse/ConfidenceThresholdResponse", confidenceThresholdResponse{}, apidto.ConfidenceThresholdResponse{}},
+		{"confidenceThresholdRequest/ConfidenceThresholdRequest", confidenceThresholdRequest{}, apidto.ConfidenceThresholdRequest{}},
+		{"identifyEnabledResponse/IdentifyEnabledResponse", identifyEnabledResponse{}, apidto.IdentifyEnabledResponse{}},
+		{"identifyEnabledRequest/IdentifyEnabledRequest", identifyEnabledRequest{}, apidto.IdentifyEnabledRequest{}},
+		// recheck.go
+		{"recheckIntervalResponse/RecheckIntervalResponse", recheckIntervalResponse{}, apidto.RecheckIntervalResponse{}},
+		{"recheckIntervalRequest/RecheckIntervalRequest", recheckIntervalRequest{}, apidto.RecheckIntervalRequest{}},
+		// rename.go
+		{"kidsRootPathResponse/KidsRootPathResponse", kidsRootPathResponse{}, apidto.KidsRootPathResponse{}},
+		{"kidsRootPathRequest/KidsRootPathRequest", kidsRootPathRequest{}, apidto.KidsRootPathRequest{}},
+		// apikey.go
+		{"apikeyRegenerateResponse/APIKeyRegenerateResponse", apikeyRegenerateResponse{}, apidto.APIKeyRegenerateResponse{}},
+		// trakt.go
+		{"traktCredentialsRequest/TraktCredentialsRequest", traktCredentialsRequest{}, apidto.TraktCredentialsRequest{}},
+		{"traktStatus/TraktStatusResponse", traktStatus{}, apidto.TraktStatusResponse{}},
+		{"traktDeviceStartResponse/TraktDeviceStartResponse", traktDeviceStartResponse{}, apidto.TraktDeviceStartResponse{}},
+		{"traktDevicePollResponse/TraktDevicePollResponse", traktDevicePollResponse{}, apidto.TraktDevicePollResponse{}},
+		{"traktWatchlistItem/TraktWatchlistItem", traktWatchlistItem{}, apidto.TraktWatchlistItem{}},
 	}
 
 	for _, tc := range cases {
