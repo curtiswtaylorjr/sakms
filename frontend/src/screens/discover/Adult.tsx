@@ -161,6 +161,14 @@ const AdultCard: Component<{
 // Art frequently absent, so the image is Show-guarded with a text fallback and
 // any non-empty URL is routed through the proxy (never hot-linked).
 //
+// kind selects the artwork frame: "performer" is a 2:3 portrait crop
+// (object-cover — a headshot fills the frame the way a person photo should),
+// "studio" is a 16:9 frame with the logo letterboxed via object-contain
+// rather than cropped — a studio logo is usually squarish or wide-with-
+// padding, not portrait-shaped, so object-cover on it was cutting off the
+// logo's edges (found live 2026-07-15: both Studios and Performers shared
+// one aspect-video/object-cover frame before this fix).
+//
 // onSelect is OPTIONAL: TPDB's Studios/Performers rows pass it and the whole
 // card renders as a button that drills down into that entity's scenes (via
 // setDrill). StashDB/FansDB's Studios/Performers rows deliberately do NOT pass
@@ -171,6 +179,7 @@ const AdultCard: Component<{
 // those rows stay visible (the backend QueryStudios/QueryPerformers browse
 // still shows real data) without a broken or misleading drill-down.
 const EntityCard: Component<{
+  kind: "studio" | "performer";
   name: string;
   image: string;
   onSelect?: () => void;
@@ -178,13 +187,23 @@ const EntityCard: Component<{
   const src = () => proxyImage(props.image);
   const artwork = () => (
     <>
-      <div class="aspect-video overflow-hidden rounded-lg border border-border bg-surface">
+      <div
+        class="overflow-hidden rounded-lg border border-border bg-surface"
+        classList={{
+          "aspect-[2/3]": props.kind === "performer",
+          "aspect-video": props.kind === "studio",
+        }}
+      >
         <Show when={src()} fallback={<TextPoster label={props.name} />}>
           <img
             src={src()}
             alt={props.name}
             loading="lazy"
-            class="h-full w-full object-cover"
+            class="h-full w-full"
+            classList={{
+              "object-cover": props.kind === "performer",
+              "object-contain": props.kind === "studio",
+            }}
           />
         </Show>
       </div>
@@ -419,7 +438,11 @@ export const AdultDiscover: Component = () => {
                             onDetail={setDetailTarget}
                           />
                         ) : (
-                          <EntityCard name={item.title} image={item.image} />
+                          <EntityCard
+                            kind={row.rowType === "studio" ? "studio" : "performer"}
+                            name={item.title}
+                            image={item.image}
+                          />
                         )
                       }
                     </PaginatedStrip>
@@ -433,6 +456,7 @@ export const AdultDiscover: Component = () => {
                 >
                   {(s) => (
                     <EntityCard
+                      kind="studio"
                       name={s.name}
                       image={s.image}
                       onSelect={() =>
@@ -449,6 +473,7 @@ export const AdultDiscover: Component = () => {
                 >
                   {(p) => (
                     <EntityCard
+                      kind="performer"
                       name={p.name}
                       image={p.image}
                       onSelect={() =>
@@ -493,7 +518,9 @@ export const AdultDiscover: Component = () => {
                         load={(page) => fetchStashBoxStudios(row.box, page)}
                         onError={setSetupError}
                       >
-                        {(s) => <EntityCard name={s.name} image={s.image} />}
+                        {(s) => (
+                          <EntityCard kind="studio" name={s.name} image={s.image} />
+                        )}
                       </PaginatedStrip>
                       <PaginatedStrip<PerformerSummary>
                         title={`${row.label} Performers`}
@@ -501,7 +528,9 @@ export const AdultDiscover: Component = () => {
                         load={(page) => fetchStashBoxPerformers(row.box, page)}
                         onError={setSetupError}
                       >
-                        {(p) => <EntityCard name={p.name} image={p.image} />}
+                        {(p) => (
+                          <EntityCard kind="performer" name={p.name} image={p.image} />
+                        )}
                       </PaginatedStrip>
                     </Show>
                   )}
