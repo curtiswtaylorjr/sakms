@@ -1,15 +1,18 @@
 // Settings — ported from the vanilla-JS frontend's renderSettings plus the
 // Advanced Settings section. SECTION TABS (registered with the app shell via
 // ScreenTabs, so the shell draws the bar in its one consistent location; inline
-// fallback when rendered standalone in a unit test): Connections; Auth
-// (Authentication mode + API Access break-glass key together); AI; Library
+// fallback when rendered standalone in a unit test): Connections (own inline
+// Connections/AI sub-tab split, see ConnectionsTab.tsx — AI configuration is
+// conceptually a kind of connection setup, folded in here rather than living as
+// its own top-level tab; each sub-tab keeps its own independent Save); Library
 // (per-mode root folder + quality prefs for all three modes; naming preset and
 // kids path for Movies/Series only — Adult has a fixed naming scheme and no
-// kids classification); Advanced (per-mode phash-threshold; match-confidence-
-// threshold for Movies/Series; identify-enabled for Adult only;
-// recheck-interval is global); UI (screen-presentation admin controls — today a
+// kids classification); UI (screen-presentation admin controls — today a
 // Discover subsection with Mainstream/Adult sub-tabs hosting the custom slider
-// and Adult-newest-row editors, see UI.tsx).
+// and Adult-newest-row editors, see UI.tsx); Auth (Authentication mode + API
+// Access break-glass key together); Advanced (per-mode phash-threshold; match-
+// confidence-threshold for Movies/Series; identify-enabled for Adult only;
+// recheck-interval is global).
 //
 // There are TWO INDEPENDENT selectors here and they must not be conflated: the
 // section-tab selector (SECTION_TABS below), and a Movies/Series/Adult MODE
@@ -21,8 +24,10 @@
 // selected mode.
 //
 // This screen is split across settings/: shared primitives (Card, SaveStatus,
-// useSaveStatus, MODE_LABELS) in shared.tsx; one file per section
-// (Connections/Auth/AI/Library/Advanced); this file is the thin tab shell.
+// useSaveStatus, MODE_LABELS) in shared.tsx; one file per section (Connections/
+// Auth/AI/Library/Advanced); ConnectionsTab.tsx and UI.tsx each add an inline
+// sub-tab split combining two of those section files under one top-level tab;
+// this file is the thin tab shell.
 
 import { type Component, createSignal, Show } from "solid-js";
 import type { Mode } from "../../api/discover";
@@ -33,9 +38,8 @@ import {
   ScreenTabs,
   type TabDef,
 } from "../../components/ui";
-import { ConnectionsSection } from "./Connections";
+import { ConnectionsTabSection } from "./ConnectionsTab";
 import { APIAccessSection, AuthModeSection } from "./Auth";
-import { AISection } from "./AI";
 import {
   KidsRootPathSection,
   LibraryRootFolderSection,
@@ -52,11 +56,10 @@ import { UISection } from "./UI";
 // on screen at mount with zero navigation.
 const SECTION_TABS: TabDef[] = [
   { id: "connections", label: "Connections" },
-  { id: "auth", label: "Auth" },
-  { id: "ai", label: "AI" },
   { id: "library", label: "Library" },
-  { id: "advanced", label: "Advanced" },
   { id: "ui", label: "UI" },
+  { id: "auth", label: "Auth" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 // ModeSelector is the inline Movies/Series/Adult tab bar shared by the Library
@@ -85,16 +88,7 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
       <ScreenTabs tabs={SECTION_TABS} current={section} onSelect={setSection} />
 
       <Show when={section() === "connections"}>
-        <ConnectionsSection />
-      </Show>
-
-      <Show when={section() === "auth"}>
-        <AuthModeSection onReboot={props.onReboot} />
-        <APIAccessSection />
-      </Show>
-
-      <Show when={section() === "ai"}>
-        <AISection />
+        <ConnectionsTabSection />
       </Show>
 
       <Show when={section() === "library"}>
@@ -122,13 +116,18 @@ export const Settings: Component<{ onReboot: () => void }> = (props) => {
         </SectionSave>
       </Show>
 
+      <Show when={section() === "ui"}>
+        <UISection />
+      </Show>
+
+      <Show when={section() === "auth"}>
+        <AuthModeSection onReboot={props.onReboot} />
+        <APIAccessSection />
+      </Show>
+
       <Show when={section() === "advanced"}>
         <ModeSelector mode={mode} onSelect={setMode} />
         <AdvancedSection mode={mode} />
-      </Show>
-
-      <Show when={section() === "ui"}>
-        <UISection />
       </Show>
     </div>
   );

@@ -125,10 +125,15 @@ const stubFetch = (override?: Override) => {
 
 const renderSettings = () => render(() => <Settings onReboot={() => {}} />);
 
-// goToSection clicks a section tab. Settings now splits its panels across
-// section tabs (Connections is the default), so a test targeting any non-
-// Connections panel must navigate there first. Section-tab buttons are queried
-// by role+name so they never collide with a Card's <legend> of the same text
+// goToSection clicks a section tab OR (for "AI") the Connections tab's own
+// inline Connections/AI sub-tab — AI is no longer a top-level SECTION_TABS
+// entry, it's folded into Connections (see ConnectionsTab.tsx). This still
+// works unmodified for every existing "AI" call site: Connections is the
+// default outer tab, so its inner sub-tab bar (and thus the "AI" button) is
+// already mounted at a fresh render — callers just shouldn't navigate away
+// from Connections first and then call goToSection("AI"), since the inner
+// sub-tab bar wouldn't be mounted at that point. Buttons are queried by
+// role+name so they never collide with a Card's <legend> of the same text
 // (legends aren't buttons) nor with the Movies/Series/Adult mode buttons.
 const goToSection = (
   name: "Connections" | "Auth" | "AI" | "Library" | "Advanced" | "UI",
@@ -1389,8 +1394,13 @@ describe("UI tab — inner Discover sub-tabs do not hijack the shell tab slot", 
     const shellSlot = () => within(getByTestId("shell-slot"));
 
     // Settings registers SECTION_TABS with the shell slot at mount: the section
-    // tabs — NOT any Mainstream/Adult — are what the shell draws.
-    expect(await screen.findByRole("button", { name: "Connections" }));
+    // tabs — NOT any Mainstream/Adult — are what the shell draws. Scoped to the
+    // shell slot specifically: the Connections tab's OWN inline Connections/AI
+    // sub-tab bar (ConnectionsTab.tsx) also renders a "Connections" button in
+    // the body, so an unscoped query would match both.
+    expect(
+      await shellSlot().findByRole("button", { name: "Connections" }),
+    ).toBeInTheDocument();
     expect(shellSlot().getByText("UI")).toBeInTheDocument();
     expect(shellSlot().getByText("Library")).toBeInTheDocument();
     expect(shellSlot().queryByText("Mainstream")).toBeNull();
@@ -1422,8 +1432,12 @@ describe("Settings — no bulk-action affordances", () => {
   it("has no save-all / apply-all across the whole view", async () => {
     stubFetch();
     renderSettings();
-    // Mount confirmed via the always-present section tab bar.
-    await screen.findByRole("button", { name: "Connections" });
+    // Mount confirmed via the always-present Settings heading. (Not the
+    // "Connections" button: the Connections tab's own inline Connections/AI
+    // sub-tab bar also renders a "Connections" button, so that query would be
+    // ambiguous here — this test isn't scoped to a shell-slot container the
+    // way the shell-harness test above is.)
+    await screen.findByRole("heading", { name: "Settings" });
     expect(screen.queryByText(/save all/i)).toBeNull();
     expect(screen.queryByText(/apply all/i)).toBeNull();
     expect(screen.queryByText(/test all/i)).toBeNull();
