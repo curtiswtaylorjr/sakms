@@ -18,6 +18,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 	"github.com/curtiswtaylorjr/sakms/internal/stashapi"
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
 )
 
 // newTestStores opens one fresh db and returns a connections store and a
@@ -347,6 +348,12 @@ func TestBuild_AdultIdentifierIsFunctional(t *testing.T) {
 		}}})
 	}))
 	defer stashSrv.Close()
+	// buildIdentifier now builds the stash-box client against the hardcoded
+	// stashbox.StashDBURL, not Connection.URL — point it at the fake for this
+	// test so the identification call lands on stashSrv.
+	prevStashDBURL := stashbox.StashDBURL
+	stashbox.StashDBURL = stashSrv.URL
+	defer func() { stashbox.StashDBURL = prevStashDBURL }()
 
 	store, settingsStore := newTestStores(t)
 	ctx := context.Background()

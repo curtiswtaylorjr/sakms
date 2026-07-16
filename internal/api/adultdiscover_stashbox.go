@@ -49,8 +49,11 @@ func adultStashBoxClient(ctx context.Context, connStore *connections.Store, http
 	if conn == nil {
 		return nil, false, nil
 	}
+	// StashDB/FansDB are fixed public stash-box instances — the endpoint is the
+	// hardcoded per-name constant, never conn.URL (not collected for them).
+	endpoint, _ := stashbox.URLForBox(service)
 	return stashbox.New(stashbox.Config{
-		Endpoint: conn.URL, APIKey: conn.APIKey, IsBearer: false, HasVoteField: true,
+		Endpoint: endpoint, APIKey: conn.APIKey, IsBearer: false, HasVoteField: true,
 	}, httpClient), true, nil
 }
 

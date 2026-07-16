@@ -14,6 +14,9 @@ func fakeTPDB(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
+	// Handlers now read tpdbrest.DefaultBaseURL, not Connection.URL — point it
+	// at this fake for the test's duration so outbound REST calls land here.
+	overrideFixedURL(t, "tpdb", srv.URL)
 	return srv
 }
 

@@ -49,6 +49,7 @@ func TestAdultDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		if err := connStore.Upsert(ctx, c.service, c.url, "test-key"); err != nil {
 			t.Fatalf("seeding %s connection: %v", c.service, err)
 		}
+		overrideFixedURL(t, c.service, c.url)
 	}
 	if err := settingsStore.Set(ctx, mode.AIModelKey, "test-model"); err != nil {
 		t.Fatalf("seeding ollama model: %v", err)

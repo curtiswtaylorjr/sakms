@@ -98,7 +98,8 @@ func triggerEntitySyncHandler(store parseentity.EntityStore, connStore *connecti
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			client := tpdbrest.New(conn.URL, conn.APIKey, httpClient)
+			// TPDB REST base is fixed and public — hardcoded, never conn.URL.
+			client := tpdbrest.New(tpdbrest.DefaultBaseURL, conn.APIKey, httpClient)
 			go func() {
 				_ = parseentity.SyncFromTPDB(context.Background(), store, client, parseentity.DefaultSyncPages)
 			}()
@@ -112,8 +113,10 @@ func triggerEntitySyncHandler(store parseentity.EntityStore, connStore *connecti
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// StashDB/FansDB endpoints are fixed public constants, never conn.URL.
+			endpoint, _ := stashbox.URLForBox(source)
 			client := stashbox.New(stashbox.Config{
-				Endpoint: conn.URL, APIKey: conn.APIKey, IsBearer: false, HasVoteField: true,
+				Endpoint: endpoint, APIKey: conn.APIKey, IsBearer: false, HasVoteField: true,
 			}, httpClient)
 			go func() {
 				_ = parseentity.SyncFromStashBox(context.Background(), store, client, source, parseentity.DefaultSyncPages)

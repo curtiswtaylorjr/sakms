@@ -39,6 +39,7 @@ func TestDiscoverAvailabilityHandler_Movies_BasicFetch(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,6 +104,7 @@ func TestDiscoverAvailabilityHandler_Series_SeasonEpisodeParams(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -319,6 +321,7 @@ func TestDiscoverAvailabilityHandler_Series_WholeSeasonUsesSeasonTotalRuntime(t 
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -375,6 +378,7 @@ func TestDiscoverAvailabilityHandler_ResolutionAndTierAxesDistinguished(t *testi
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

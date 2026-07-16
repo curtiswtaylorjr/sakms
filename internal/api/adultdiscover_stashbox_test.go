@@ -7,7 +7,39 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/curtiswtaylorjr/sakms/internal/stashbox"
+	"github.com/curtiswtaylorjr/sakms/internal/tmdb"
+	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
 )
+
+// overrideFixedURL points the hardcoded base-URL package var for a fixed-URL
+// service (tmdb/stashdb/fansdb/tpdb) at u for the duration of the test,
+// restoring it on cleanup. Handlers now ignore Connection.URL for these
+// services and read the package var instead, so a test that stands up a fake
+// server must redirect the var, not just store the URL. No-op for any other
+// service (e.g. stash/prowlarr, which legitimately still use Connection.URL).
+func overrideFixedURL(t *testing.T, service, u string) {
+	t.Helper()
+	switch service {
+	case "tmdb":
+		prev := tmdb.DefaultBaseURL
+		tmdb.DefaultBaseURL = u
+		t.Cleanup(func() { tmdb.DefaultBaseURL = prev })
+	case "stashdb":
+		prev := stashbox.StashDBURL
+		stashbox.StashDBURL = u
+		t.Cleanup(func() { stashbox.StashDBURL = prev })
+	case "fansdb":
+		prev := stashbox.FansDBURL
+		stashbox.FansDBURL = u
+		t.Cleanup(func() { stashbox.FansDBURL = prev })
+	case "tpdb":
+		prev := tpdbrest.DefaultBaseURL
+		tpdbrest.DefaultBaseURL = u
+		t.Cleanup(func() { tpdbrest.DefaultBaseURL = prev })
+	}
+}
 
 // fakeStashBox serves a stash-box GraphQL endpoint from a handler the test
 // supplies (all stash-box calls are POSTs to a single endpoint), mirroring
@@ -29,6 +61,7 @@ func newAdultMux(t *testing.T, conns map[string]string) *http.ServeMux {
 		if err := connStore.Upsert(context.Background(), service, u, "key"); err != nil {
 			t.Fatalf("upserting %s: %v", service, err)
 		}
+		overrideFixedURL(t, service, u)
 	}
 	return NewMux(testHTTPClient(), connStore, propStore, allowStore, testProber(t), testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil)
 }

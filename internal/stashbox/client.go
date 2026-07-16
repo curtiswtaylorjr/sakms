@@ -16,6 +16,38 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/httpx"
 )
 
+// StashDBURL and FansDBURL are the two community stash-box instances' single
+// canonical GraphQL endpoints. Like TMDB/TPDB, callers hardcode these instead
+// of reading a user-supplied Connection.URL (mirroring the TPDBGraphQLURL
+// precedent in internal/mode/mode.go). Vars (not consts) so tests can override
+// them to point at an httptest fake.
+//
+// StashDBURL is well-known and stable. FansDBURL ("https://fansdb.cc/graphql")
+// is corroborated by this repo's own test fixtures (internal/stashapi's
+// client_test.go) and is FansDB's known public endpoint; if the live server1
+// deployment is ever pointed at a different FansDB-compatible instance, verify
+// this value against its configured "fansdb" connection URL.
+var (
+	StashDBURL = "https://stashdb.org/graphql"
+	FansDBURL  = "https://fansdb.cc/graphql"
+)
+
+// URLForBox returns the hardcoded endpoint for a stash-box connection service
+// name ("stashdb" or "fansdb"); ok is false for any other name. Callers that
+// build a per-name stash-box client (identification, Adult Discover, entity
+// sync) use this so the outbound endpoint is always the fixed constant, never
+// the user-supplied Connection.URL.
+func URLForBox(service string) (url string, ok bool) {
+	switch service {
+	case "stashdb":
+		return StashDBURL, true
+	case "fansdb":
+		return FansDBURL, true
+	default:
+		return "", false
+	}
+}
+
 // Config parameterizes the client per stash-box instance.
 type Config struct {
 	Endpoint string

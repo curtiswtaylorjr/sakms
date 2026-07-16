@@ -165,6 +165,7 @@ func TestResolveSliderHandler_GenreDispatchesToDiscoverMovieGenre(t *testing.T) 
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -212,6 +213,7 @@ func TestResolveSliderHandler_MixedConcatenatesMovieAndTV(t *testing.T) {
 	defer fake.Close()
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

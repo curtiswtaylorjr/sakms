@@ -104,7 +104,8 @@ func adultTPDBClient(w http.ResponseWriter, r *http.Request, httpClient *http.Cl
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, false
 	}
-	return tpdbrest.New(conn.URL, conn.APIKey, httpClient), true
+	// TPDB's REST base is a fixed public endpoint — hardcoded, never conn.URL.
+	return tpdbrest.New(tpdbrest.DefaultBaseURL, conn.APIKey, httpClient), true
 }
 
 // adultPagination reads the page/perPage query params the four browse/drill-down

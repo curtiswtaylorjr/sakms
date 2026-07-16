@@ -202,5 +202,6 @@ func buildTMDB(ctx context.Context, connStore *connections.Store, httpClient *ht
 	if err != nil {
 		return nil, err
 	}
-	return tmdb.New(tmdb.Config{BaseURL: conn.URL, APIKey: conn.APIKey}, httpClient), nil
+	// TMDB is a fixed public service — its base URL is hardcoded, not conn.URL.
+	return tmdb.New(tmdb.Config{BaseURL: tmdb.DefaultBaseURL, APIKey: conn.APIKey}, httpClient), nil
 }

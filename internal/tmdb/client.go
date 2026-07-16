@@ -41,9 +41,17 @@ const (
 	TV    MediaType = "tv"
 )
 
-// Config parameterizes the client. BaseURL is normally
-// https://api.themoviedb.org/3, stored explicitly (not hardcoded) the same
-// way this project already treats Brave's fixed-but-configurable endpoint.
+// DefaultBaseURL is TMDB's single canonical public v3 REST endpoint. TMDB is a
+// fixed public service (not self-hostable), so there is nothing for an operator
+// to point it at — callers hardcode this instead of reading a user-supplied
+// Connection.URL, mirroring the existing TPDBGraphQLURL precedent
+// (internal/mode/mode.go). A var (not const) so tests can override it to point
+// at an httptest fake, exactly as TPDBGraphQLURL documents.
+var DefaultBaseURL = "https://api.themoviedb.org/3"
+
+// Config parameterizes the client. BaseURL is normally DefaultBaseURL — a fixed
+// public endpoint every caller now passes as a hardcoded constant, the same way
+// this project already treats TPDB's GraphQL give-back endpoint.
 type Config struct {
 	BaseURL string
 	APIKey  string

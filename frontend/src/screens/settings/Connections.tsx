@@ -18,6 +18,7 @@ import {
 } from "solid-js";
 import {
   CONNECTION_SERVICES,
+  SERVICES_WITH_FIXED_URL,
   SERVICES_WITH_USERNAME,
   buildConnectionUpsertBody,
   deleteConnection,
@@ -60,6 +61,9 @@ export const ConnectionRow: Component<{
   onChanged: () => void;
 }> = (props) => {
   const needsUsername = SERVICES_WITH_USERNAME.includes(props.service);
+  // needsFixedUrl services have a hardcoded server-side base URL — the row shows
+  // no URL input, and save/test skip the "url is required" guard for them.
+  const needsFixedUrl = SERVICES_WITH_FIXED_URL.includes(props.service);
   const allowHostProbe = props.service === "jellyfin";
   const [url, setUrl] = createSignal(props.existing?.url ?? "");
   const [username, setUsername] = createSignal(props.existing?.username ?? "");
@@ -118,7 +122,7 @@ export const ConnectionRow: Component<{
   // upsertBody is split out so the URL-required guard mirrors the backend
   // (url is required) with a clear inline message rather than a 400 round-trip.
   const upsertBody = async () => {
-    if (!url().trim()) throw new Error("url is required");
+    if (!needsFixedUrl && !url().trim()) throw new Error("url is required");
     await upsertConnection(props.service, body());
   };
 
@@ -179,6 +183,7 @@ export const ConnectionRow: Component<{
     <tr class="border-b border-border/60 align-top">
       <td class="px-2 py-2 text-fg">{props.service}</td>
       <td class="px-2 py-2">
+        <Show when={!needsFixedUrl}>
         <input
           type="text"
           class={`${inputClass} !w-72`}
@@ -257,6 +262,7 @@ export const ConnectionRow: Component<{
               <div class="mt-1">{hint()}</div>
             </Show>
           </div>
+        </Show>
         </Show>
       </td>
       <td class="px-2 py-2">

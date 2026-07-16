@@ -73,6 +73,13 @@ export type {
 // surface a Username input.
 export const SERVICES_WITH_USERNAME = ["qbittorrent", "nzbget"];
 
+// SERVICES_WITH_FIXED_URL are fixed public APIs with one canonical address each,
+// hardcoded server-side as package constants (internal/tmdb, internal/stashbox,
+// internal/tpdbrest) — the operator never types a URL for them. Their rows show
+// only an API Key field, and the backend accepts an upsert with no `url` for
+// exactly these services (mirrors fixedURLServices in internal/api/handler.go).
+export const SERVICES_WITH_FIXED_URL = ["tmdb", "stashdb", "fansdb", "tpdb"];
+
 // CONNECTION_SERVICES is the full ordered set the Connections table lists, one
 // row each (verbatim from index.html). There is no radarr/sonarr/whisparr — SAK
 // owns those libraries now (see internal/library's package doc).

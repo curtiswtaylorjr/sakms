@@ -58,6 +58,7 @@ func TestRepickWorkflow_WeakMatchSearchRepickApply_EndToEnd(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", fakeTMDB.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fakeTMDB.URL, "test-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,6 +189,7 @@ func TestRepickWorkflow_Series_WeakMatchSearchRepickApply_EndToEnd(t *testing.T)
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", fakeTMDB.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fakeTMDB.URL, "test-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

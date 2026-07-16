@@ -72,6 +72,7 @@ func TestPostGrabReview_Movies_RuntimeMismatchFlags(t *testing.T) {
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,6 +129,7 @@ func TestPostGrabReview_Series_SingleEpisode_RuntimeMismatchFlags(t *testing.T) 
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -187,6 +189,7 @@ func TestPostGrabReview_Series_SeasonPack_Skips(t *testing.T) {
 	if err := connStore.UpsertWithUsername(ctx, "qbittorrent", fakeQB.URL, "wade", "hunter2"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

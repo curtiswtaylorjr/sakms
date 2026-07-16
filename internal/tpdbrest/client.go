@@ -14,6 +14,13 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/httpx"
 )
 
+// DefaultBaseURL is ThePornDB's single canonical REST API base (no trailing
+// slash — the client builds paths as baseURL + "/scenes"). TPDB is a fixed
+// public service, so callers hardcode this instead of a user-supplied
+// Connection.URL, mirroring the TPDBGraphQLURL precedent (internal/mode).
+// A var (not const) so tests can override it to point at an httptest fake.
+var DefaultBaseURL = "https://api.theporndb.net"
+
 type Client struct {
 	baseURL string
 	apiKey  string

@@ -309,7 +309,9 @@ func buildSearchPipeline(ctx context.Context, store *connections.Store, httpClie
 	if conn, err := optionalConn(ctx, store, "tmdb"); err != nil {
 		return err
 	} else if conn != nil {
-		sess.TMDB = tmdb.New(tmdb.Config{BaseURL: conn.URL, APIKey: conn.APIKey}, httpClient)
+		// TMDB is a fixed public service — its base URL is the hardcoded
+		// tmdb.DefaultBaseURL, never conn.URL (which is not collected for it).
+		sess.TMDB = tmdb.New(tmdb.Config{BaseURL: tmdb.DefaultBaseURL, APIKey: conn.APIKey}, httpClient)
 	}
 
 	return nil
@@ -430,8 +432,11 @@ func buildIdentifier(ctx context.Context, store *connections.Store, settingsStor
 			return nil, err
 		}
 		if conn != nil {
+			// StashDB/FansDB are fixed public stash-box instances — the endpoint
+			// is the hardcoded per-name constant, never conn.URL (not collected).
+			endpoint, _ := stashbox.URLForBox(name)
 			client := stashbox.New(stashbox.Config{
-				Endpoint: conn.URL, APIKey: conn.APIKey, IsBearer: false, HasVoteField: true,
+				Endpoint: endpoint, APIKey: conn.APIKey, IsBearer: false, HasVoteField: true,
 			}, httpClient)
 			boxes[name] = client
 			giveBackBoxes[name] = client
@@ -442,7 +447,8 @@ func buildIdentifier(ctx context.Context, store *connections.Store, settingsStor
 	if conn, err := optionalConn(ctx, store, "tpdb"); err != nil {
 		return nil, err
 	} else if conn != nil {
-		tpdb = tpdbrest.New(conn.URL, conn.APIKey, httpClient)
+		// TPDB's REST base is fixed and public — hardcoded, never conn.URL.
+		tpdb = tpdbrest.New(tpdbrest.DefaultBaseURL, conn.APIKey, httpClient)
 		// TPDB's GraphQL endpoint (give-back only) is a different host from its
 		// REST search API, but shares the same API key — see TPDBGraphQLURL.
 		giveBackBoxes["tpdb"] = stashbox.New(stashbox.Config{

@@ -48,6 +48,7 @@ func TestAutoGrabHandler_Movies_QualifiedGrabsExactlyOne(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,6 +117,7 @@ func TestAutoGrabHandler_Movies_SearchIncludesQueryAlongsideIDs(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,6 +160,7 @@ func TestAutoGrabHandler_Movies_FallbackGrabsNothing(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -225,6 +228,7 @@ func TestAutoGrabHandler_Movies_LowSeedersTorrentFallsBack(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -381,6 +385,7 @@ func TestAutoGrabHandler_Series_SingleEpisodeQualifies(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -447,6 +452,7 @@ func TestAutoGrabHandler_Series_SeasonPackGrabFallsBack(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -574,6 +580,7 @@ func TestAutoGrabHandler_Series_PickerGatedFallback(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", tmdbSrv.URL)
 	if err := connStore.Upsert(ctx, "tmdb", tmdbSrv.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

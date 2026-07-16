@@ -77,6 +77,7 @@ func TestAdultRenameWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		if err := connStore.Upsert(ctx, c.service, c.url, "test-key"); err != nil {
 			t.Fatalf("seeding %s connection: %v", c.service, err)
 		}
+		overrideFixedURL(t, c.service, c.url)
 	}
 	// Without the model set, buildIdentifier returns nil and Scan fast-fails.
 	if err := settingsStore.Set(ctx, mode.AIModelKey, "test-model"); err != nil {

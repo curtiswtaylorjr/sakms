@@ -259,6 +259,31 @@ describe("Connections table — untouched key is never sent (Acceptance Criterio
     expect(put.body).toEqual({ url: "http://prowlarr:9696", apiKey: "sk-rotated" });
   });
 
+  it("Saves a fixed-URL row (tmdb) with no url — no client-side 'url is required' throw", async () => {
+    const calls = stubFetch();
+    renderSettings();
+    // tmdb has no URL input; the operator only sets the API key.
+    const keyInput = await screen.findByLabelText("tmdb API key");
+    fireEvent.input(keyInput, { target: { value: "tmdb-key" } });
+    const row = (keyInput as HTMLElement).closest("tr")!;
+    fireEvent.click(within(row).getByText("Save"));
+
+    // The Save must reach the network (not throw "url is required" first).
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "PUT" && c.url.includes("/api/connections/tmdb"),
+        ),
+      ).toBe(true),
+    );
+    const put = calls.find(
+      (c) => c.method === "PUT" && c.url.includes("/api/connections/tmdb"),
+    )!;
+    // No url in the body (the UI collects none); apiKey carries through.
+    expect(put.body).toEqual({ url: "", apiKey: "tmdb-key" });
+  });
+
   it("no longer lists the AI provider / Brave rows (moved to the AI tab)", async () => {
     stubFetch();
     renderSettings();
@@ -266,6 +291,19 @@ describe("Connections table — untouched key is never sent (Acceptance Criterio
     expect(await screen.findByLabelText("prowlarr URL")).toBeInTheDocument();
     for (const moved of ["ollama", "openai", "gemini", "anthropic", "brave"]) {
       expect(screen.queryByLabelText(`${moved} URL`)).toBeNull();
+    }
+  });
+
+  it("renders no URL input for fixed-public-API rows (tmdb/stashdb/fansdb/tpdb), only their API Key", async () => {
+    stubFetch();
+    renderSettings();
+    // A URL-required service still shows a URL input.
+    expect(await screen.findByLabelText("prowlarr URL")).toBeInTheDocument();
+    for (const fixed of ["tmdb", "stashdb", "fansdb", "tpdb"]) {
+      // No URL input for these fixed-URL services...
+      expect(screen.queryByLabelText(`${fixed} URL`)).toBeNull();
+      // ...but their API Key field is still present, so the row is usable.
+      expect(screen.getByLabelText(`${fixed} API key`)).toBeInTheDocument();
     }
   });
 

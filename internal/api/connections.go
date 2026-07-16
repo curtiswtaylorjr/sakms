@@ -56,7 +56,10 @@ func TestConnection(ctx context.Context, httpClient *http.Client, req Connection
 	case "jellyfin":
 		return testJellyfin(ctx, httpClient, req)
 	case "stashdb", "fansdb":
-		return testStashBox(ctx, httpClient, req)
+		// Fixed public stash-box endpoints — the URL is the hardcoded per-name
+		// constant, never req.URL (the UI collects no URL for these).
+		endpoint, _ := stashbox.URLForBox(req.Service)
+		return testStashBox(ctx, httpClient, req, endpoint)
 	case "tpdb":
 		return testTPDB(ctx, httpClient, req)
 	case "brave":
@@ -111,10 +114,11 @@ func testJellyfin(ctx context.Context, httpClient *http.Client, req ConnectionTe
 
 // testStashBox covers both StashDB and FansDB — same stash-box protocol,
 // ApiKey-header auth (as opposed to TPDB's GraphQL endpoint, which is
-// Bearer-authed and reached separately via testTPDB). req.URL must already
-// point at the GraphQL endpoint (e.g. "https://stashdb.org/graphql").
-func testStashBox(ctx context.Context, httpClient *http.Client, req ConnectionTestRequest) ConnectionTestResult {
-	c := stashbox.New(stashbox.Config{Endpoint: req.URL, APIKey: req.APIKey, IsBearer: false, HasVoteField: true}, httpClient)
+// Bearer-authed and reached separately via testTPDB). endpoint is the fixed
+// per-name public GraphQL URL (stashbox.StashDBURL / FansDBURL), not a
+// user-supplied value — StashDB/FansDB collect no URL in Settings.
+func testStashBox(ctx context.Context, httpClient *http.Client, req ConnectionTestRequest, endpoint string) ConnectionTestResult {
+	c := stashbox.New(stashbox.Config{Endpoint: endpoint, APIKey: req.APIKey, IsBearer: false, HasVoteField: true}, httpClient)
 	if _, err := c.Me(ctx); err != nil {
 		return ConnectionTestResult{Error: err.Error()}
 	}
@@ -126,7 +130,8 @@ func testStashBox(ctx context.Context, httpClient *http.Client, req ConnectionTe
 // what identify's actual text-search fallback uses day to day, so that's
 // the connection worth confirming here.
 func testTPDB(ctx context.Context, httpClient *http.Client, req ConnectionTestRequest) ConnectionTestResult {
-	c := tpdbrest.New(req.URL, req.APIKey, httpClient)
+	// Fixed public REST base — hardcoded, never req.URL (no URL collected).
+	c := tpdbrest.New(tpdbrest.DefaultBaseURL, req.APIKey, httpClient)
 	if err := c.Ping(ctx); err != nil {
 		return ConnectionTestResult{Error: err.Error()}
 	}
@@ -170,7 +175,8 @@ func testNZBGet(ctx context.Context, httpClient *http.Client, req ConnectionTest
 }
 
 func testTMDB(ctx context.Context, httpClient *http.Client, req ConnectionTestRequest) ConnectionTestResult {
-	c := tmdb.New(tmdb.Config{BaseURL: req.URL, APIKey: req.APIKey}, httpClient)
+	// Fixed public base URL — hardcoded, never req.URL (no URL collected).
+	c := tmdb.New(tmdb.Config{BaseURL: tmdb.DefaultBaseURL, APIKey: req.APIKey}, httpClient)
 	if _, err := c.Popular(ctx, tmdb.Movie, 1); err != nil {
 		return ConnectionTestResult{Error: err.Error()}
 	}

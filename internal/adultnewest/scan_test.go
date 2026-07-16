@@ -16,7 +16,19 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/mode"
 	"github.com/curtiswtaylorjr/sakms/internal/secrets"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
 )
+
+// overrideTPDBBaseURL points tpdbrest.DefaultBaseURL at u for the test's
+// duration, restoring it on cleanup. mode.Build now constructs the TPDB REST
+// client from this hardcoded package var, not the stored Connection.URL, so a
+// test that stands up a fake TPDB must redirect the var, not just store its URL.
+func overrideTPDBBaseURL(t *testing.T, u string) {
+	t.Helper()
+	prev := tpdbrest.DefaultBaseURL
+	tpdbrest.DefaultBaseURL = u
+	t.Cleanup(func() { tpdbrest.DefaultBaseURL = prev })
+}
 
 // newTestScanStores builds a connections.Store and settings.Store backed by
 // the same freshly-migrated SQLite file, plus a standalone ReleaseStore —
@@ -392,6 +404,7 @@ func TestRunCycle_UnconfirmedStudioAndPerformerGuessesAreSkipped(t *testing.T) {
 		map[string]bool{"Real Studio": true},
 		map[string]bool{"Real Performer": true},
 	)
+	overrideTPDBBaseURL(t, tpdb.URL)
 	if err := connStore.Upsert(ctx, "tpdb", tpdb.URL, "key"); err != nil {
 		t.Fatalf("configuring tpdb: %v", err)
 	}
@@ -457,6 +470,7 @@ func TestMatchRelease_SceneMatchWithNoConfirmedRelease_IsNotCached(t *testing.T)
 		}
 	}))
 	t.Cleanup(tpdb.Close)
+	overrideTPDBBaseURL(t, tpdb.URL)
 	if err := connStore.Upsert(ctx, "tpdb", tpdb.URL, "key"); err != nil {
 		t.Fatalf("configuring tpdb: %v", err)
 	}
@@ -533,6 +547,7 @@ func TestMatchRelease_SceneMatchWithConfirmedRelease_IsCached(t *testing.T) {
 		}
 	}))
 	t.Cleanup(tpdb.Close)
+	overrideTPDBBaseURL(t, tpdb.URL)
 	if err := connStore.Upsert(ctx, "tpdb", tpdb.URL, "key"); err != nil {
 		t.Fatalf("configuring tpdb: %v", err)
 	}

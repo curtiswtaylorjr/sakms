@@ -51,6 +51,7 @@ func TestDiscoverHandler_MoviesUsesMovieMediaType(t *testing.T) {
 	if err := connStore.Upsert(ctx, "radarr", "http://radarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,6 +91,7 @@ func TestDiscoverHandler_SeriesUsesTVMediaType(t *testing.T) {
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,6 +146,7 @@ func TestDiscoverHandler_PageParamForwarded(t *testing.T) {
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,6 +184,7 @@ func TestPosterHandler_ReturnsPosterPath(t *testing.T) {
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,6 +260,7 @@ func TestResolveTVDBIDHandler_ResolvesID(t *testing.T) {
 	if err := connStore.Upsert(ctx, "sonarr", "http://sonarr.local", "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -310,6 +315,7 @@ func TestDiscoverHandler_UpcomingUsesOnTheAirForSeries(t *testing.T) {
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,6 +367,7 @@ func TestDiscoverHandler_GenreSendsWithGenres(t *testing.T) {
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,6 +440,7 @@ func TestDiscoverGenresHandler_MoviesUsesMovieGenreList(t *testing.T) {
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -517,6 +525,7 @@ func TestDiscoverKeywordsHandler_SearchesTMDB(t *testing.T) {
 	})
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
+	overrideFixedURL(t, "tmdb", fake.URL)
 	if err := connStore.Upsert(context.Background(), "tmdb", fake.URL, "key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -44,6 +44,7 @@ func TestDedupWorkflow_Series_ScanThenApply_EndToEnd(t *testing.T) {
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", fakeTMDB.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fakeTMDB.URL, "test-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,6 +145,7 @@ func TestDedupWorkflow_Series_SeasonPack_ScanFindsGroupedDuplicate(t *testing.T)
 
 	connStore, propStore, allowStore, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore := testStores(t)
 	ctx := context.Background()
+	overrideFixedURL(t, "tmdb", fakeTMDB.URL)
 	if err := connStore.Upsert(ctx, "tmdb", fakeTMDB.URL, "test-key"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

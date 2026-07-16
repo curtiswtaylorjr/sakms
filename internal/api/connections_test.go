@@ -133,6 +133,9 @@ func TestTestConnection_StashDB_Success(t *testing.T) {
 		w.Write([]byte(`{"data":{"me":{"id":"1","name":"curtis"}}}`))
 	}))
 	defer srv.Close()
+	// testStashBox now targets the hardcoded stashbox.StashDBURL, not req.URL —
+	// point it at the fake so the "me" query lands here.
+	overrideFixedURL(t, "stashdb", srv.URL)
 
 	result := TestConnection(context.Background(), testHTTPClient(), ConnectionTestRequest{
 		Service: "stashdb", URL: srv.URL, APIKey: "stashdb-key",
@@ -147,6 +150,7 @@ func TestTestConnection_FansDB_NotAuthorized(t *testing.T) {
 		w.Write([]byte(`{"errors":[{"message":"not authorized"}]}`))
 	}))
 	defer srv.Close()
+	overrideFixedURL(t, "fansdb", srv.URL)
 
 	result := TestConnection(context.Background(), testHTTPClient(), ConnectionTestRequest{
 		Service: "fansdb", URL: srv.URL, APIKey: "bad-key",
@@ -164,6 +168,7 @@ func TestTestConnection_TPDB_Success(t *testing.T) {
 		w.Write([]byte(`{"data":[]}`))
 	}))
 	defer srv.Close()
+	overrideFixedURL(t, "tpdb", srv.URL)
 
 	result := TestConnection(context.Background(), testHTTPClient(), ConnectionTestRequest{
 		Service: "tpdb", URL: srv.URL, APIKey: "tpdb-key",
