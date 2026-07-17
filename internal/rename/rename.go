@@ -496,6 +496,53 @@ func proposeOneEpisodeLibrary(
 	episode := episodes[0]
 	extraEpisodes := episodes[1:]
 
+	// NFO fast-path: a tvshow.nfo (or episode-level .nfo) alongside the video
+	// file may carry an authoritative TMDB id — skip the fuzzy search and
+	// confidence gate and go straight to the season-validation + TVDetails
+	// call. Same pattern as the movie .nfo fast-path in proposeOneLibrary.
+	if hint := nfo.ReadSeriesSidecar(videoPath); hint.TMDBID != 0 {
+		if tracked[episodeKey{tmdbID: hint.TMDBID, season: season, episode: episode}] {
+			p.Status = proposals.Unmatched
+			p.Reason = fmt.Sprintf(".nfo TMDB id %d appears to already be in the library as S%02dE%02d — leaving in place for manual review", hint.TMDBID, season, episode)
+			return p
+		}
+		if _, err := sess.TMDB.SeasonDetails(ctx, hint.TMDBID, season); err != nil {
+			p.Status = proposals.Unmatched
+			p.Reason = fmt.Sprintf(".nfo TMDB id %d: could not confirm season %d: %v", hint.TMDBID, season, err)
+			return p
+		}
+		det, err := sess.TMDB.TVDetails(ctx, hint.TMDBID)
+		if err != nil {
+			p.Status = proposals.Unmatched
+			p.Reason = fmt.Sprintf(".nfo TMDB id %d: lookup failed: %v", hint.TMDBID, err)
+			return p
+		}
+		targetRoot := generalRoot
+		switch {
+		case foundRoot == sess.KidsRootPath:
+			targetRoot = sess.KidsRootPath
+		case sess.KidsRootPath != "" && sess.MainstreamAI != nil:
+			if result, err := classify.WithAI(ctx, sess.MainstreamAI, det.Title, ""); err == nil && result.IsKids {
+				targetRoot = sess.KidsRootPath
+			}
+		}
+		p.Status = proposals.Pending
+		p.Title = det.Title
+		p.TMDBID = hint.TMDBID
+		p.Year = hint.Year
+		p.SeasonNumber = season
+		p.EpisodeNumber = episode
+		if len(extraEpisodes) > 0 {
+			p.ExtraEpisodeNumbers = extraEpisodes
+		}
+		p.RootFolderPath = targetRoot
+		p.Genres = det.Genres
+		if cast, err := sess.TMDB.TVAggregateCredits(ctx, hint.TMDBID); err == nil {
+			p.Cast = cast
+		}
+		return p
+	}
+
 	term := searchterm.FromName(library.StripEpisodeMarker(name))
 	items, err := sess.TMDB.SearchTV(ctx, term)
 	if err != nil {

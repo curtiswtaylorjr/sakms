@@ -169,6 +169,27 @@ organizational authority.
 
 ## Recently shipped (outside this backlog)
 
+### Local .nfo preference for Movies/Series Rename — shipped 2026-07-17
+`internal/nfo` reads Kodi/Jellyfin `.nfo` sidecar files and provides an
+authoritative TMDB ID when present, skipping the fuzzy filename search and
+confidence gate entirely. Both common XML shapes handled: flat `<tmdbid>`
+and `<uniqueid type="tmdb">`. 
+
+**Movies** (already wired before this session): `nfo.ReadSidecar` tries a
+same-basename sidecar first, then `movie.nfo` in the same directory. Folder
+entries (where `ScanRootFolder` yields the wrapping directory) look inside
+the folder. Fast-path lives in `proposeOneLibrary`, before the TMDB search.
+
+**Series** (added 2026-07-17): `nfo.ReadSeriesSidecar` tries, in order:
+`{episodeDir}/../tvshow.nfo` (series root, the common season-subfolder
+layout), `{episodeDir}/tvshow.nfo` (flat layout), then the episode's own
+`.nfo` sidecar. Fast-path lives in `proposeOneEpisodeLibrary`, before the
+TMDB search — season and episode numbers are still parsed from the filename,
+and `SeasonDetails` is still called to verify the season exists. 7 new
+tests added to `internal/nfo/nfo_test.go`.
+
+Artwork reuse (local poster/fanart) remains open if it comes up.
+
 ### TVDB fallback for Movies/Series Rename — shipped 2026-07-17
 When TMDB search returns zero results or a below-threshold confidence match
 during Rename scan (Movies and Series), SAK now tries TheTVDB v4 as a
@@ -696,11 +717,8 @@ started — no design, no client package, no schema.
 - **TVDB as fallback metadata source** — shipped 2026-07-17, see "Recently
   shipped" below. IMDB deferred: no official public API (would need a paid
   third-party mirror or scraping), judged not worth the complexity.
-- **Local `.nfo`/artwork preference** — confirmed zero support today:
-  `.nfo` is purely in `config.SidecarExts` (skip-only, contents never
-  read), and there is no local poster/fanart-reuse logic anywhere. Would
-  mean writing a parser for Kodi/Jellyfin's de facto `.nfo` XML schema and
-  preferring it over a fresh TMDB search when present.
+- **Local `.nfo` preference** — shipped 2026-07-17, see "Recently shipped"
+  below. Artwork reuse (local poster/fanart) remains open if it comes up.
 - **Collections** — TMDB has a native `belongs_to_collection` field on
   movie details, the natural seed. Movies-only (Series has no TMDB
   equivalent — same asymmetry pattern as Kids-root-path). Needs a new

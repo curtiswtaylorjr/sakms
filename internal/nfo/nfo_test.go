@@ -173,3 +173,109 @@ func TestReadSidecar_DirectoryEntry(t *testing.T) {
 		t.Errorf("got TMDBID %d, want 603", m.TMDBID)
 	}
 }
+
+// — Series tests ——————————————————————————————————————————————————————————————
+
+func TestReadSeries_FlatTmdbidField(t *testing.T) {
+	d := t.TempDir()
+	writeNFO(t, d, "tvshow.nfo", `<?xml version="1.0"?>
+<tvshow>
+  <title>Breaking Bad</title>
+  <year>2008</year>
+  <tmdbid>1396</tmdbid>
+</tvshow>`)
+	s, err := nfo.ReadSeries(filepath.Join(d, "tvshow.nfo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TMDBID != 1396 {
+		t.Errorf("TMDBID: got %d, want 1396", s.TMDBID)
+	}
+	if s.Title != "Breaking Bad" {
+		t.Errorf("Title: got %q, want %q", s.Title, "Breaking Bad")
+	}
+	if s.Year != 2008 {
+		t.Errorf("Year: got %d, want 2008", s.Year)
+	}
+}
+
+func TestReadSeries_UniqueidTypeTmdb(t *testing.T) {
+	d := t.TempDir()
+	writeNFO(t, d, "tvshow.nfo", `<?xml version="1.0"?>
+<tvshow>
+  <title>Succession</title>
+  <uniqueid type="imdb">tt4574334</uniqueid>
+  <uniqueid type="tmdb" default="true">63333</uniqueid>
+</tvshow>`)
+	s, err := nfo.ReadSeries(filepath.Join(d, "tvshow.nfo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TMDBID != 63333 {
+		t.Errorf("TMDBID: got %d, want 63333", s.TMDBID)
+	}
+}
+
+func TestReadSeriesSidecar_TVShowNfoAtSeriesRoot(t *testing.T) {
+	// Typical layout: series root / Season 01 / episode.mkv
+	// tvshow.nfo lives at the series root, one level above the season folder.
+	seriesRoot := t.TempDir()
+	seasonDir := filepath.Join(seriesRoot, "Season 01")
+	if err := os.Mkdir(seasonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeNFO(t, seriesRoot, "tvshow.nfo", `<tvshow><tmdbid>1396</tmdbid></tvshow>`)
+	video := filepath.Join(seasonDir, "Breaking.Bad.S01E01.mkv")
+	s := nfo.ReadSeriesSidecar(video)
+	if s.TMDBID != 1396 {
+		t.Errorf("got TMDBID %d, want 1396 (from tvshow.nfo at series root)", s.TMDBID)
+	}
+}
+
+func TestReadSeriesSidecar_TVShowNfoAtEpisodeDir(t *testing.T) {
+	// tvshow.nfo lives in the same directory as the episode (flat layout).
+	d := t.TempDir()
+	writeNFO(t, d, "tvshow.nfo", `<tvshow><tmdbid>1399</tmdbid></tvshow>`)
+	video := filepath.Join(d, "Game.of.Thrones.S01E01.mkv")
+	s := nfo.ReadSeriesSidecar(video)
+	if s.TMDBID != 1399 {
+		t.Errorf("got TMDBID %d, want 1399 (from tvshow.nfo alongside episode)", s.TMDBID)
+	}
+}
+
+func TestReadSeriesSidecar_EpisodeSidecarFallback(t *testing.T) {
+	// No tvshow.nfo anywhere — fall back to episode-specific .nfo.
+	d := t.TempDir()
+	writeNFO(t, d, "Show.S02E03.nfo", `<tvshow><tmdbid>99999</tmdbid></tvshow>`)
+	video := filepath.Join(d, "Show.S02E03.mkv")
+	s := nfo.ReadSeriesSidecar(video)
+	if s.TMDBID != 99999 {
+		t.Errorf("got TMDBID %d, want 99999 (from episode sidecar)", s.TMDBID)
+	}
+}
+
+func TestReadSeriesSidecar_NoNFO(t *testing.T) {
+	d := t.TempDir()
+	video := filepath.Join(d, "Show.S01E01.mkv")
+	s := nfo.ReadSeriesSidecar(video)
+	if s.TMDBID != 0 {
+		t.Errorf("expected zero SeriesNFO, got TMDBID %d", s.TMDBID)
+	}
+}
+
+func TestSeriesSidecarPaths_ThreeDistinctPaths(t *testing.T) {
+	video := "/media/tv/Breaking Bad (2008)/Season 01/Breaking.Bad.S01E01.mkv"
+	paths := nfo.SeriesSidecarPaths(video)
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 candidate paths, got %d: %v", len(paths), paths)
+	}
+	if filepath.Base(paths[0]) != "tvshow.nfo" {
+		t.Errorf("first path should be tvshow.nfo from parent dir, got %q", paths[0])
+	}
+	if filepath.Base(paths[1]) != "tvshow.nfo" {
+		t.Errorf("second path should be tvshow.nfo from episode dir, got %q", paths[1])
+	}
+	if filepath.Ext(paths[2]) != ".nfo" {
+		t.Errorf("third path should be episode sidecar (.nfo), got %q", paths[2])
+	}
+}
