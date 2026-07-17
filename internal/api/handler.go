@@ -293,6 +293,12 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	// job itself lives in its own package, started once from main.
 	mux.HandleFunc("GET /api/settings/recheck-interval", getRecheckIntervalHandler(settingsStore))
 	mux.HandleFunc("PUT /api/settings/recheck-interval", putRecheckIntervalHandler(settingsStore))
+
+	// Watch-folders toggle — opt-in, off by default. The background goroutine
+	// (RunWatchFolders, started from main) polls this setting every
+	// watchPollInterval seconds and starts/stops watching accordingly.
+	mux.HandleFunc("GET /api/admin/watch-folders", getWatchFoldersHandler(settingsStore))
+	mux.HandleFunc("PUT /api/admin/watch-folders/enabled", putWatchFoldersEnabledHandler(settingsStore))
 	mux.HandleFunc("GET /api/settings/adult-newest-scan-interval", getAdultNewestScanIntervalHandler(settingsStore))
 	mux.HandleFunc("PUT /api/settings/adult-newest-scan-interval", putAdultNewestScanIntervalHandler(settingsStore))
 

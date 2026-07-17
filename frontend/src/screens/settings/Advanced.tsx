@@ -19,11 +19,13 @@ import {
   fetchIdentifyEnabled,
   fetchPHashThreshold,
   fetchRecheckInterval,
+  fetchWatchFolders,
   putConfidenceThreshold,
   putEntitySyncInterval,
   putIdentifyEnabled,
   putPHashThreshold,
   putRecheckInterval,
+  putWatchFoldersEnabled,
   triggerEntitySync,
   triggerRecheck,
   type EntitySyncSource,
@@ -507,6 +509,87 @@ const RecheckTriggerButton: Component = () => {
   );
 };
 
+// WatchFoldersSection is a global (not per-mode) card — shown once, regardless
+// of which mode tab is active.
+const WatchFoldersSection: Component = () => {
+  const [status, { refetch }] = createResource(fetchWatchFolders);
+  const [enabled, setEnabled] = createSignal(false);
+  const [dirty, setDirty] = createSignal(false);
+  const saveStatus = useSaveStatus();
+
+  createEffect(
+    on(status, (v) => {
+      if (v !== undefined) {
+        setEnabled(v.enabled);
+        setDirty(false);
+      }
+    }),
+  );
+
+  const save = async () => {
+    try {
+      await putWatchFoldersEnabled(enabled());
+      setDirty(false);
+      saveStatus.saved();
+      void refetch();
+    } catch (e) {
+      saveStatus.failed(e);
+    }
+  };
+
+  return (
+    <Card title="Watch Folders — global">
+      <p class="mb-3 text-sm text-muted">
+        When enabled, SAK monitors each mode's configured library root folder
+        for new content and automatically runs a Rename Scan. Only Scan is
+        triggered — proposals still require a human Apply click. Takes effect
+        within 30 seconds of toggling.
+      </p>
+      <label class="mb-3 flex items-center gap-2">
+        <input
+          type="checkbox"
+          aria-label="Watch folders enabled"
+          checked={enabled()}
+          onChange={(e) => {
+            setEnabled(e.currentTarget.checked);
+            setDirty(true);
+          }}
+        />
+        <span class="text-sm text-fg">Watch folders enabled</span>
+      </label>
+      <Show when={status()}>
+        {(s) => {
+          const roots = Object.entries(s().roots);
+          return (
+            <Show when={roots.length > 0}>
+              <ul class="mb-3 space-y-1 text-xs text-muted">
+                <For each={roots}>
+                  {([mode, path]) => (
+                    <li>
+                      <span class="font-medium capitalize">{mode}:</span> {path}
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          );
+        }}
+      </Show>
+      <div class="flex items-center gap-3">
+        <Show when={dirty()}>
+          <button
+            class="rounded bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/80"
+            onClick={() => void save()}
+          >
+            Save
+          </button>
+        </Show>
+        <SaveStatus text={saveStatus.status().text} error={saveStatus.status().error} />
+      </div>
+    </Card>
+  );
+};
+
 export const AdvancedSection: Component<{ mode: () => Mode }> = (props) => {
   // recheck-interval is GLOBAL, not per-mode — fetched once, independent of the
   // mode tab.
@@ -559,6 +642,7 @@ export const AdvancedSection: Component<{ mode: () => Mode }> = (props) => {
       <Show when={props.mode() === "adult"}>
         <EntityDatabaseSection />
       </Show>
+      <WatchFoldersSection />
     </>
   );
 };

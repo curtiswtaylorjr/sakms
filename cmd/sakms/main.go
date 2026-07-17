@@ -247,6 +247,12 @@ func run() error {
 	// remove entirely: delete internal/parseentity/schedule.go and this line.
 	go parseentity.Run(ctx, parseentity.LoadInterval(ctx, settingsStore), connStore, settingsStore, entityStore)
 
+	// Watch-folders: monitors each mode's library root folder for new content
+	// and triggers a Rename Scan automatically (never auto-Apply). Gated OFF
+	// by default (WatchFoldersEnabledKey = false). To remove entirely: delete
+	// internal/api/watchfolders.go and this line.
+	go api.RunWatchFolders(ctx, &http.Client{Timeout: outboundTimeout}, connStore, settingsStore, propStore, libStore, videoHasher, prober, entityStore)
+
 	select {
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {

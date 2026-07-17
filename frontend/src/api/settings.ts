@@ -522,3 +522,22 @@ export function putAdultNewestScanInterval(
     body: JSON.stringify({ intervalSeconds }),
   });
 }
+
+// Watch-folders: enabled toggle + currently configured root paths. The
+// backend goroutine polls WatchFoldersEnabledKey every ~30s, so a change
+// takes effect within 30 seconds without a restart.
+export type WatchFoldersStatus = {
+  enabled: boolean;
+  roots: Record<string, string>; // mode → root path (only configured roots)
+};
+
+export function fetchWatchFolders(): Promise<WatchFoldersStatus> {
+  return api<WatchFoldersStatus>("/api/admin/watch-folders");
+}
+
+export function putWatchFoldersEnabled(enabled: boolean): Promise<void> {
+  return api<void>("/api/admin/watch-folders/enabled", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
