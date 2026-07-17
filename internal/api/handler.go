@@ -18,6 +18,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/rename"
 	"github.com/curtiswtaylorjr/sakms/internal/rssfeeds"
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
+	"github.com/curtiswtaylorjr/sakms/internal/sysinfo"
 	"github.com/curtiswtaylorjr/sakms/internal/trakt"
 )
 
@@ -270,6 +271,9 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	// Entity cache admin — counts, per-source sync state, on-demand sync triggers
 	mux.HandleFunc("GET /api/admin/entity-sync", entitySyncStatusHandler(entityStore))
 	mux.HandleFunc("POST /api/admin/entity-sync/{source}", triggerEntitySyncHandler(entityStore, connStore, settingsStore, httpClient))
+	// Live container/host resource metrics streamed as server-sent events for
+	// the System Dashboard (internal/sysinfo reads cgroups v2 + /proc).
+	mux.HandleFunc("GET /api/admin/sysinfo/stream", sysinfoStreamHandler(sysinfo.Sample))
 	// Shared background sync cadence for all four entity sources combined (see
 	// internal/parseentity's Run/LoadInterval) — 0/off by default, additive to
 	// the manual per-source triggers directly above.

@@ -33,6 +33,7 @@ import {
   ScreenTabsContext,
   type ScreenTabsRegistration,
 } from "../components/ui";
+import { Dashboard } from "./Dashboard";
 import { Discover } from "./Discover";
 import { Grabs } from "./Grabs";
 import { Rename } from "./Rename";
@@ -45,7 +46,7 @@ import { Settings } from "./Settings";
 // serves. Guardrail #2 / requirement #7: the router must NEVER claim any
 // /api/* path (the OIDC callback /api/auth/oidc/callback is a real server
 // route). A unit test asserts none of these start with "/api".
-export const APP_ROUTES = ["/", "/discover", "/grabs", "/rename", "/purge", "/dedup", "/tag", "/settings"] as const;
+export const APP_ROUTES = ["/dashboard", "/", "/discover", "/grabs", "/rename", "/purge", "/dedup", "/tag", "/settings"] as const;
 
 // SIDEBAR_COLLAPSED_KEY persists the sidebar's collapsed/expanded choice across
 // reloads. A single boolean is enough ("true" = collapsed).
@@ -93,6 +94,14 @@ const svgProps = {
   "aria-hidden": true,
 };
 
+const IconDashboard: Component = () => (
+  <svg {...svgProps}>
+    <rect x="3" y="3" width="7" height="7" rx="1" />
+    <rect x="14" y="3" width="7" height="7" rx="1" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+    <rect x="14" y="14" width="7" height="7" rx="1" />
+  </svg>
+);
 const IconDiscover: Component = () => (
   <svg {...svgProps}>
     <circle cx="12" cy="12" r="9" />
@@ -154,6 +163,7 @@ const IconMenu: Component = () => (
 type NavItem = { href: string; label: string; icon: Component };
 
 const NAV_ITEMS: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: IconDashboard },
   { href: "/discover", label: "Discover", icon: IconDiscover },
   { href: "/grabs", label: "Grabs", icon: IconGrabs },
   { href: "/rename", label: "Rename", icon: IconRename },
@@ -380,6 +390,7 @@ export const AppShell: Component<{
   return (
     <Router root={ShellRoot}>
       <Route path="/" component={Discover} />
+      <Route path="/dashboard" component={Dashboard} />
       <Route path="/discover" component={Discover} />
       <Route path="/grabs" component={Grabs} />
       <Route path="/rename" component={Rename} />

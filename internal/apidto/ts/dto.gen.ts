@@ -1218,3 +1218,26 @@ export interface RowOrderResponse {
 export interface RowOrderRequest {
   keys: string[];
 }
+/**
+ * SysinfoServerDisk is per-physical-disk I/O from /proc/diskstats.
+ */
+export interface SysinfoServerDisk {
+  name: string;
+  readBps: number /* float64 */;
+  writeBps: number /* float64 */;
+}
+/**
+ * SysinfoSnapshot is one live-resource reading streamed by GET /api/admin/sysinfo/stream.
+ */
+export interface SysinfoSnapshot {
+  cpuPercent: number /* float64 */;
+  memUsedBytes: number /* int64 */;
+  memLimitBytes: number /* int64 */;
+  netRxBps: number /* float64 */;
+  netTxBps: number /* float64 */;
+  containerDiskReadBps: number /* float64 */;
+  containerDiskWriteBps: number /* float64 */;
+  serverDisks: SysinfoServerDisk[];
+  storageTotalBytes: number /* int64 */;
+  storageAvailBytes: number /* int64 */;
+}

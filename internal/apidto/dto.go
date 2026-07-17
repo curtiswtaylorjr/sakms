@@ -1274,3 +1274,24 @@ type RowOrderResponse struct {
 type RowOrderRequest struct {
 	Keys []string `json:"keys"`
 }
+
+// SysinfoServerDisk is per-physical-disk I/O from /proc/diskstats.
+type SysinfoServerDisk struct {
+	Name     string  `json:"name"`
+	ReadBPS  float64 `json:"readBps"`
+	WriteBPS float64 `json:"writeBps"`
+}
+
+// SysinfoSnapshot is one live-resource reading streamed by GET /api/admin/sysinfo/stream.
+type SysinfoSnapshot struct {
+	CPUPercent            float64             `json:"cpuPercent"`
+	MemUsedBytes          int64               `json:"memUsedBytes"`
+	MemLimitBytes         int64               `json:"memLimitBytes"`
+	NetRxBPS              float64             `json:"netRxBps"`
+	NetTxBPS              float64             `json:"netTxBps"`
+	ContainerDiskReadBPS  float64             `json:"containerDiskReadBps"`
+	ContainerDiskWriteBPS float64             `json:"containerDiskWriteBps"`
+	ServerDisks           []SysinfoServerDisk `json:"serverDisks"`
+	StorageTotalBytes     int64               `json:"storageTotalBytes"`
+	StorageAvailBytes     int64               `json:"storageAvailBytes"`
+}
