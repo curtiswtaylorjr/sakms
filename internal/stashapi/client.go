@@ -30,6 +30,11 @@ type Client struct {
 }
 
 func New(cfg Config, httpClient *http.Client) *Client {
+	u := strings.TrimRight(cfg.URL, "/")
+	if !strings.HasSuffix(u, "/graphql") {
+		u += "/graphql"
+	}
+	cfg.URL = u
 	return &Client{cfg: cfg, http: httpClient}
 }
 

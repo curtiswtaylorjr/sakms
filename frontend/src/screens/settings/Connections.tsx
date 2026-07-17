@@ -221,7 +221,7 @@ export const ConnectionRow: Component<{
 
   return (
     <tr class="border-b border-border/60 align-top">
-      <td class="px-2 py-2 text-fg">{props.service}</td>
+      <td class="px-2 py-2 text-fg">{props.service === "jellyfin" ? "Jellyfin/Emby" : props.service}</td>
       <td class="px-2 py-2">
         <Show when={!needsFixedUrl}>
         <input
