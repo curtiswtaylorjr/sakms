@@ -290,11 +290,11 @@ func probeJellyfin(ctx context.Context, httpClient *http.Client, baseURL string)
 	return Finding{Service: "jellyfin", URL: baseURL, Label: "possible Jellyfin instance"}, true
 }
 
-// probeStash confirms a Stash instance via its /graphql endpoint. Stash's
-// GraphQL always responds with a JSON envelope — even when authentication is
-// required the response is a valid {"errors":[...]} object, not HTML. The
-// combination of a JSON Content-Type header and a body that opens with '{'
-// is sufficient to distinguish Stash from arbitrary HTTP servers on port 9999.
+// probeStash confirms a Stash instance via its /graphql endpoint. An
+// unauthenticated POST to /graphql returns 401 with Www-Authenticate: FormBased
+// and an empty body — no JSON envelope. The FormBased value is Stash's
+// non-standard auth scheme and is the identity signal; a standard HTTP server
+// would never emit it.
 // The API key is never available unauthenticated; this probe only confirms the
 // URL — the operator must retrieve their API key from Stash → Settings →
 // Security.
@@ -318,14 +318,7 @@ func probeStash(ctx context.Context, httpClient *http.Client, baseURL string) (F
 		resp.Body.Close()
 	}()
 
-	if !strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
-		return Finding{}, false
-	}
-	peek, err := io.ReadAll(io.LimitReader(resp.Body, 64))
-	if err != nil {
-		return Finding{}, false
-	}
-	if !strings.HasPrefix(strings.TrimSpace(string(peek)), "{") {
+	if !strings.EqualFold(resp.Header.Get("Www-Authenticate"), "FormBased") {
 		return Finding{}, false
 	}
 	return Finding{Service: "stash", URL: baseURL, Label: "possible Stash instance"}, true

@@ -43,10 +43,9 @@ func probeServer(t *testing.T, service string) *httptest.Server {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(jellyfinPublicInfoJSON))
 		case service == "stash" && r.Method == http.MethodPost && r.URL.Path == "/graphql":
-			// Stash returns JSON even when the API key is required.
-			w.Header().Set("Content-Type", "application/json")
+			// Real Stash: 401 with Www-Authenticate: FormBased, empty body.
+			w.Header().Set("Www-Authenticate", "FormBased")
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"errors":[{"message":"API key required"}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -181,14 +180,15 @@ func TestProbeStash_ConfirmsIdentityOnAuthError(t *testing.T) {
 	}
 }
 
-func TestProbeStash_RejectsNonJSONResponse(t *testing.T) {
+func TestProbeStash_RejectsWithoutFormBasedHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html>not stash</html>"))
+		// A plain 401 without Www-Authenticate: FormBased — not Stash.
+		w.Header().Set("Www-Authenticate", "Basic realm=\"restricted\"")
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 	if _, ok := probeStash(context.Background(), testHTTPClient(), srv.URL); ok {
-		t.Fatal("a non-JSON response should not confirm Stash")
+		t.Fatal("a server without Www-Authenticate: FormBased should not confirm Stash")
 	}
 }
 
