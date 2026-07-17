@@ -739,12 +739,11 @@ started — no design, no client package, no schema.
   as a goroutine from `main.go` (confirmed 2026-07-17 during audit) — Scan
   never blocks an HTTP handler. No current operation needs a queue. Revisit
   only if a genuinely slow, user-triggered operation appears.
-- **Webhooks + real API docs** — the REST API already *is* the
-  extensibility surface (the frontend uses the same endpoints a script
-  would). Missing pieces: formal API docs (OpenAPI) and outbound webhooks
-  (notify an external URL on Apply/import completion). GraphQL was
-  explicitly considered and rejected — no clear win over the existing REST
-  surface, would be a rewrite for no benefit.
+- **Webhooks + real API docs** — shipped (pre-2026-07-17; discovered
+  complete during audit). `internal/webhooks` + `internal/api/webhooks_api.go`
+  implement full CRUD + test-fire; `internal/api/openapi.go` embeds
+  `openapi.yaml` and serves it at `GET /api/openapi.yaml`. GraphQL remains
+  out of scope (rejected — no clear win over the existing REST surface).
 
 ### System dashboard — shipped 2026-07-17, see "Recently shipped" below.
 
