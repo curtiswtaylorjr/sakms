@@ -1236,6 +1236,19 @@ export interface SysinfoStorageMount {
   configured: boolean;
 }
 /**
+ * SysinfoGPU is one GPU's point-in-time reading. UtilPercent is -1 when
+ * utilization is unavailable (NVIDIA/Intel expose no sysfs util path without a
+ * vendor library); PowerMicrowatts is 0 when unavailable. See
+ * internal/sysinfo/gpu.go for the per-vendor sourcing and its soft-failure rule.
+ */
+export interface SysinfoGPU {
+  name: string;
+  utilPercent: number /* int */; // -1 = unavailable
+  vramUsedBytes: number /* int64 */;
+  vramTotalBytes: number /* int64 */;
+  powerMicrowatts: number /* int64 */;
+}
+/**
  * SysinfoSnapshot is one live-resource reading streamed by GET /api/admin/sysinfo/stream.
  */
 export interface SysinfoSnapshot {
@@ -1248,4 +1261,5 @@ export interface SysinfoSnapshot {
   containerDiskWriteBps: number /* float64 */;
   serverDisks: SysinfoServerDisk[];
   storageMounts: SysinfoStorageMount[];
+  gpus: SysinfoGPU[];
 }

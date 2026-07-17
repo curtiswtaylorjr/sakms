@@ -1290,6 +1290,18 @@ type SysinfoStorageMount struct {
 	Configured bool   `json:"configured"`
 }
 
+// SysinfoGPU is one GPU's point-in-time reading. UtilPercent is -1 when
+// utilization is unavailable (NVIDIA/Intel expose no sysfs util path without a
+// vendor library); PowerMicrowatts is 0 when unavailable. See
+// internal/sysinfo/gpu.go for the per-vendor sourcing and its soft-failure rule.
+type SysinfoGPU struct {
+	Name            string `json:"name"`
+	UtilPercent     int    `json:"utilPercent"` // -1 = unavailable
+	VRAMUsedBytes   int64  `json:"vramUsedBytes"`
+	VRAMTotalBytes  int64  `json:"vramTotalBytes"`
+	PowerMicrowatts int64  `json:"powerMicrowatts"`
+}
+
 // SysinfoSnapshot is one live-resource reading streamed by GET /api/admin/sysinfo/stream.
 type SysinfoSnapshot struct {
 	CPUPercent            float64               `json:"cpuPercent"`
@@ -1301,4 +1313,5 @@ type SysinfoSnapshot struct {
 	ContainerDiskWriteBPS float64               `json:"containerDiskWriteBps"`
 	ServerDisks           []SysinfoServerDisk   `json:"serverDisks"`
 	StorageMounts         []SysinfoStorageMount `json:"storageMounts"`
+	GPUs                  []SysinfoGPU          `json:"gpus"`
 }

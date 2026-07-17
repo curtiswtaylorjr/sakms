@@ -60,6 +60,7 @@ type RawSample struct {
 	ContainerDiskWBytes int64 // sum wbytes from /sys/fs/cgroup/io.stat
 	ServerDisks         []DiskRaw
 	StorageMounts       []StorageEntry // one statfs reading per named mount
+	GPUs                []GPURaw       // point-in-time per-GPU reading, no delta needed
 }
 
 // DiskRaw is one physical disk's cumulative read/write bytes from
@@ -80,18 +81,23 @@ type sysinfoPathConfig struct {
 	netDev     string
 	ioStat     string
 	diskstats  string
+	// gpuDrmBasePath is the /sys/class/drm base whose card* dirs readGPUs
+	// enumerates. Unlike the counters above, a GPU read failure is soft (never
+	// aborts the sample), so it needs no error path in sampleFromPaths.
+	gpuDrmBasePath string
 }
 
 // defaultPaths are the real cgroups v2 / proc locations.
 // UNVERIFIED ASSUMPTION: cgroups v2 unified hierarchy at /sys/fs/cgroup with
 // the container's own leaf files at the mount root (see package doc).
 var defaultPaths = sysinfoPathConfig{
-	cpuStat:    "/sys/fs/cgroup/cpu.stat",
-	memCurrent: "/sys/fs/cgroup/memory.current",
-	memMax:     "/sys/fs/cgroup/memory.max",
-	netDev:     "/proc/net/dev",
-	ioStat:     "/sys/fs/cgroup/io.stat",
-	diskstats:  "/proc/diskstats",
+	cpuStat:        "/sys/fs/cgroup/cpu.stat",
+	memCurrent:     "/sys/fs/cgroup/memory.current",
+	memMax:         "/sys/fs/cgroup/memory.max",
+	netDev:         "/proc/net/dev",
+	ioStat:         "/sys/fs/cgroup/io.stat",
+	diskstats:      "/proc/diskstats",
+	gpuDrmBasePath: "/sys/class/drm",
 }
 
 // physicalDiskRe matches whole physical block-device names in /proc/diskstats,
@@ -169,6 +175,11 @@ func sampleFromPaths(paths sysinfoPathConfig, mounts []MountSpec) (RawSample, er
 		entries = append(entries, StorageEntry{Name: m.Name, TotalBytes: total, AvailBytes: avail, Configured: true})
 	}
 	s.StorageMounts = entries
+
+	// GPUs are a soft read: a missing card, unreadable file, or unknown vendor
+	// yields a shorter/empty slice, never an error — a GPU failure must not
+	// blank out the CPU/RAM/disk metrics on the dashboard.
+	s.GPUs = readGPUs(paths.gpuDrmBasePath)
 
 	return s, nil
 }
@@ -382,6 +393,19 @@ func ComputeRates(prev, curr RawSample) apidto.SysinfoSnapshot {
 		}
 	}
 
+	// GPUs are point-in-time levels (util/VRAM/power), read straight from the
+	// current sample — no delta pass, unlike the counters above.
+	var gpus []apidto.SysinfoGPU
+	for _, g := range curr.GPUs {
+		gpus = append(gpus, apidto.SysinfoGPU{
+			Name:            g.Name,
+			UtilPercent:     g.UtilPercent,
+			VRAMUsedBytes:   g.VRAMUsedBytes,
+			VRAMTotalBytes:  g.VRAMTotalBytes,
+			PowerMicrowatts: g.PowerMicrowatts,
+		})
+	}
+
 	snap := apidto.SysinfoSnapshot{
 		CPUPercent:            cpuPercent,
 		MemUsedBytes:          curr.MemUsedBytes,
@@ -391,6 +415,7 @@ func ComputeRates(prev, curr RawSample) apidto.SysinfoSnapshot {
 		ContainerDiskReadBPS:  perSecond(prev.ContainerDiskRBytes, curr.ContainerDiskRBytes, elapsed),
 		ContainerDiskWriteBPS: perSecond(prev.ContainerDiskWBytes, curr.ContainerDiskWBytes, elapsed),
 		StorageMounts:         mounts,
+		GPUs:                  gpus,
 	}
 
 	prevByName := make(map[string]DiskRaw, len(prev.ServerDisks))

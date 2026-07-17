@@ -8,6 +8,11 @@
 //
 // The backend emits its first data event ~2s after connect (after its initial
 // sample pair), so the loading state is expected on first mount.
+//
+// Layout is a 3-column grid (CPU + GPUs left, Memory/Network/Container/Storage
+// middle, aggregate Disk I/O right) with two circular arc gauges (CPU, Disk
+// I/O) and sparkline history for CPU and Network — the sakms cream/navy/gold
+// palette throughout, via the semantic color tokens (never hard-coded hex).
 
 import {
   type Component,
@@ -33,6 +38,15 @@ function formatGB(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+// formatGbps renders an aggregate disk throughput for the Disk I/O gauge label:
+// <1e6 → "X KB/s", <1e9 → "X MB/s", else "X.X GB/s" (decimal SI, matching the
+// gauge's 500 MB/s ceiling reasoning rather than the binary formatBps above).
+function formatGbps(n: number): string {
+  if (n < 1e6) return `${Math.round(n / 1e3)} KB/s`;
+  if (n < 1e9) return `${Math.round(n / 1e6)} MB/s`;
+  return `${(n / 1e9).toFixed(1)} GB/s`;
+}
+
 // Bar is a 0–100% horizontal fill bar.
 const Bar: Component<{ percent: number }> = (props) => {
   const clamped = () => Math.max(0, Math.min(100, props.percent));
@@ -46,8 +60,104 @@ const Bar: Component<{ percent: number }> = (props) => {
   );
 };
 
+// ArcGauge is a 270° SVG arc gauge with the gap at the bottom. The track and
+// fill are two dash-patterned circles rotated so the 90° gap sits at 6 o'clock;
+// the fill's dash length scales with percent. color is a text-* token class
+// (default gold) that currentColor picks up.
+const ARC_R = 40;
+const ARC_CIRCUMFERENCE = 2 * Math.PI * ARC_R; // ≈ 251.33
+const ARC_LENGTH = ARC_CIRCUMFERENCE * 0.75; // 270° arc
+
+const ArcGauge: Component<{
+  percent: number;
+  label: string;
+  sublabel: string;
+  color?: string;
+}> = (props) => {
+  const clamped = () => Math.max(0, Math.min(100, props.percent));
+  const fillLen = () => ARC_LENGTH * (clamped() / 100);
+  return (
+    <svg viewBox="0 0 100 100" class="mx-auto w-full max-w-[160px]">
+      <circle
+        cx="50"
+        cy="50"
+        r={ARC_R}
+        fill="none"
+        stroke="currentColor"
+        stroke-width="10"
+        stroke-linecap="round"
+        class="text-surface-2"
+        stroke-dasharray={`${ARC_LENGTH} ${ARC_CIRCUMFERENCE - ARC_LENGTH}`}
+        transform="rotate(135 50 50)"
+      />
+      <circle
+        cx="50"
+        cy="50"
+        r={ARC_R}
+        fill="none"
+        stroke="currentColor"
+        stroke-width="10"
+        stroke-linecap="round"
+        class={props.color ?? "text-accent"}
+        stroke-dasharray={`${fillLen()} ${ARC_CIRCUMFERENCE - fillLen()}`}
+        transform="rotate(135 50 50)"
+        style={{ transition: "stroke-dasharray 500ms ease" }}
+      />
+      <text
+        x="50"
+        y="46"
+        text-anchor="middle"
+        class="fill-fg font-bold"
+        font-size="18"
+      >
+        {props.label}
+      </text>
+      <text
+        x="50"
+        y="60"
+        text-anchor="middle"
+        class="fill-muted"
+        font-size="9"
+      >
+        {props.sublabel}
+      </text>
+    </svg>
+  );
+};
+
+// Sparkline draws a history polyline scaled to the tallest sample. It renders
+// nothing until there are at least two points (a single point has no line).
+const Sparkline: Component<{ values: number[] }> = (props) => {
+  const points = () => {
+    const vs = props.values;
+    const max = Math.max(...vs, 1);
+    const denom = vs.length - 1 || 1;
+    return vs.map((v, i) => `${i / denom},${1 - v / max}`).join(" ");
+  };
+  return (
+    <Show when={props.values.length >= 2}>
+      <svg
+        viewBox="0 0 1 1"
+        preserveAspectRatio="none"
+        class="h-10 w-full"
+      >
+        <polyline
+          points={points()}
+          fill="none"
+          stroke="currentColor"
+          class="text-accent"
+          stroke-width="0.025"
+          stroke-linecap="round"
+        />
+      </svg>
+    </Show>
+  );
+};
+
 export const Dashboard: Component = () => {
   const [snap, setSnap] = createSignal<SysinfoSnapshot | null>(null);
+  // history keeps the last 60 snapshots for the CPU/Network sparklines.
+  const [history, setHistory] = createSignal<SysinfoSnapshot[]>([]);
   const [reconnecting, setReconnecting] = createSignal(false);
   // error holds an in-stream read failure (a "sampleError" SSE event), kept
   // separate from the transport-level reconnecting notice: the connection is
@@ -60,7 +170,9 @@ export const Dashboard: Component = () => {
     es = new EventSource("/api/admin/sysinfo/stream");
     es.onmessage = (ev) => {
       try {
-        setSnap(JSON.parse(ev.data) as SysinfoSnapshot);
+        const s = JSON.parse(ev.data) as SysinfoSnapshot;
+        setSnap(s);
+        setHistory((h) => [...h.slice(-59), s]);
         setReconnecting(false);
         setError(null);
       } catch {
@@ -85,6 +197,12 @@ export const Dashboard: Component = () => {
     return (s.memUsedBytes / s.memLimitBytes) * 100;
   };
 
+  // totalDiskBps sums read+write across every physical server disk; diskPct
+  // maps it onto the gauge against a 500 MB/s ceiling (clamped to 100%).
+  const totalDiskBps = () =>
+    (snap()?.serverDisks ?? []).reduce((a, d) => a + d.readBps + d.writeBps, 0);
+  const diskPct = () => Math.min(100, (totalDiskBps() / 500_000_000) * 100);
+
   return (
     <div>
       <Show when={reconnecting()}>
@@ -106,77 +224,132 @@ export const Dashboard: Component = () => {
         fallback={<Muted>Waiting for the first live reading…</Muted>}
       >
         {(s) => (
-          <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Card title="CPU">
-              <div class="mb-2 text-2xl font-semibold text-fg">
-                {s().cpuPercent.toFixed(1)}%
-              </div>
-              <Bar percent={s().cpuPercent} />
-            </Card>
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-[1fr_2fr_1fr]">
+            {/* Left column: CPU gauge + history, then per-GPU cards. */}
+            <div class="flex flex-col gap-4">
+              <Card title="CPU">
+                <ArcGauge
+                  percent={s().cpuPercent}
+                  label={`${s().cpuPercent.toFixed(1)}%`}
+                  sublabel="CPU"
+                />
+                <Sparkline values={history().map((h) => h.cpuPercent)} />
+              </Card>
 
-            <Card title="Memory">
-              <div class="mb-2 text-sm text-fg">
-                {formatGB(s().memUsedBytes)} used
-                {s().memLimitBytes > 0
-                  ? ` / ${formatGB(s().memLimitBytes)} limit`
-                  : " / unlimited"}
-              </div>
-              <Bar percent={memPercent()} />
-            </Card>
-
-            <Card title="Network">
-              <div class="flex gap-6 text-sm text-fg">
-                <span>↓ {formatBps(s().netRxBps)}</span>
-                <span>↑ {formatBps(s().netTxBps)}</span>
-              </div>
-            </Card>
-
-            <Card title="Container disk I/O">
-              <div class="flex gap-6 text-sm text-fg">
-                <span>R: {formatBps(s().containerDiskReadBps)}</span>
-                <span>W: {formatBps(s().containerDiskWriteBps)}</span>
-              </div>
-            </Card>
-
-            <For each={s().storageMounts}>
-              {(mount) => (
-                <Card title={mount.name}>
-                  <Show
-                    when={mount.configured}
-                    fallback={<Muted>Not configured</Muted>}
-                  >
-                    <div class="mb-2 text-sm text-fg">
-                      {formatGB(mount.totalBytes - mount.availBytes)} used
-                      {" of "}
-                      {formatGB(mount.totalBytes)}
-                    </div>
-                    <Bar
-                      percent={
-                        mount.totalBytes > 0
-                          ? ((mount.totalBytes - mount.availBytes) /
-                              mount.totalBytes) *
-                            100
-                          : 0
+              <For each={s().gpus}>
+                {(gpu) => (
+                  <Card title={gpu.name}>
+                    <Show
+                      when={gpu.utilPercent >= 0}
+                      fallback={
+                        <p class="py-2 text-center text-sm text-muted">
+                          Utilization unavailable
+                        </p>
                       }
-                    />
-                  </Show>
-                </Card>
-              )}
-            </For>
+                    >
+                      <ArcGauge
+                        percent={gpu.utilPercent}
+                        label={`${gpu.utilPercent}%`}
+                        sublabel="GPU"
+                      />
+                    </Show>
 
-            <div class="md:col-span-2">
-              <Card title="Server disks">
+                    <Show when={gpu.vramTotalBytes > 0}>
+                      <div class="mt-2 mb-1 text-xs text-muted">
+                        {formatGB(gpu.vramUsedBytes)} / {formatGB(gpu.vramTotalBytes)} VRAM
+                      </div>
+                      <Bar
+                        percent={
+                          (gpu.vramUsedBytes / gpu.vramTotalBytes) * 100
+                        }
+                      />
+                    </Show>
+
+                    <Show when={gpu.powerMicrowatts > 0}>
+                      <p class="mt-1 text-xs text-muted">
+                        {(gpu.powerMicrowatts / 1e6).toFixed(1)} W
+                      </p>
+                    </Show>
+                  </Card>
+                )}
+              </For>
+            </div>
+
+            {/* Middle column: Memory, Network, Container disk, Storage. */}
+            <div class="flex flex-col gap-4">
+              <Card title="Memory">
+                <div class="mb-2 text-sm text-fg">
+                  {formatGB(s().memUsedBytes)} used
+                  {s().memLimitBytes > 0
+                    ? ` / ${formatGB(s().memLimitBytes)} limit`
+                    : " / unlimited"}
+                </div>
+                <Bar percent={memPercent()} />
+              </Card>
+
+              <Card title="Network">
+                <div class="mb-2 flex gap-6 text-sm text-fg">
+                  <span>↓ {formatBps(s().netRxBps)}</span>
+                  <span>↑ {formatBps(s().netTxBps)}</span>
+                </div>
+                <Sparkline
+                  values={history().map((h) => (h.netRxBps + h.netTxBps) / 1e6)}
+                />
+              </Card>
+
+              <Card title="Container disk I/O">
+                <div class="flex gap-6 text-sm text-fg">
+                  <span>R: {formatBps(s().containerDiskReadBps)}</span>
+                  <span>W: {formatBps(s().containerDiskWriteBps)}</span>
+                </div>
+              </Card>
+
+              <For each={s().storageMounts}>
+                {(mount) => (
+                  <Card title={mount.name}>
+                    <Show
+                      when={mount.configured}
+                      fallback={<Muted>Not configured</Muted>}
+                    >
+                      <div class="mb-2 text-sm text-fg">
+                        {formatGB(mount.totalBytes - mount.availBytes)} used
+                        {" of "}
+                        {formatGB(mount.totalBytes)}
+                      </div>
+                      <Bar
+                        percent={
+                          mount.totalBytes > 0
+                            ? ((mount.totalBytes - mount.availBytes) /
+                                mount.totalBytes) *
+                              100
+                            : 0
+                        }
+                      />
+                    </Show>
+                  </Card>
+                )}
+              </For>
+            </div>
+
+            {/* Right column: aggregate Disk I/O gauge + per-disk breakdown. */}
+            <div class="flex flex-col gap-4">
+              <Card title="Disk I/O">
+                <ArcGauge
+                  percent={diskPct()}
+                  label={formatGbps(totalDiskBps())}
+                  sublabel="Disk I/O"
+                />
                 <Show
                   when={s().serverDisks.length > 0}
                   fallback={<Muted>No physical disks reported.</Muted>}
                 >
-                  <ul class="flex flex-col gap-1">
+                  <ul class="mt-2 flex flex-col gap-1 text-xs text-muted">
                     <For each={s().serverDisks}>
                       {(d) => (
-                        <li class="flex items-center gap-4 text-sm text-fg">
-                          <span class="w-24 shrink-0 font-medium">{d.name}</span>
-                          <span>R {formatBps(d.readBps)}</span>
-                          <span>W {formatBps(d.writeBps)}</span>
+                        <li class="flex items-center gap-3">
+                          <span class="w-20 shrink-0 font-medium">{d.name}</span>
+                          <span>R: {formatBps(d.readBps)}</span>
+                          <span>W: {formatBps(d.writeBps)}</span>
                         </li>
                       )}
                     </For>

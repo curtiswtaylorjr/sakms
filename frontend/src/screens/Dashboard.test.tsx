@@ -68,6 +68,7 @@ const snapshot = (over: Partial<SysinfoSnapshot> = {}): SysinfoSnapshot => ({
       configured: true,
     },
   ],
+  gpus: [],
   ...over,
 });
 
@@ -120,5 +121,55 @@ describe("Dashboard view", () => {
     render(() => <Dashboard />);
     MockEventSource.last!.emit(snapshot({ memLimitBytes: -1 }));
     expect(await screen.findByText(/used \/ unlimited/)).toBeInTheDocument();
+  });
+
+  it("renders a GPU card with a utilization gauge", async () => {
+    render(() => <Dashboard />);
+    MockEventSource.last!.emit(
+      snapshot({
+        gpus: [
+          {
+            name: "RTX 4070",
+            utilPercent: 65,
+            vramUsedBytes: 4 * 1024 * 1024 * 1024,
+            vramTotalBytes: 12 * 1024 * 1024 * 1024,
+            powerMicrowatts: 150_000_000,
+          },
+        ],
+      }),
+    );
+    // The GPU card's title and its gauge's center percentage both render.
+    expect(await screen.findByText("RTX 4070")).toBeInTheDocument();
+    expect(screen.getByText("65%")).toBeInTheDocument();
+  });
+
+  it("shows 'Utilization unavailable' when a GPU reports utilPercent -1", async () => {
+    render(() => <Dashboard />);
+    MockEventSource.last!.emit(
+      snapshot({
+        gpus: [
+          {
+            name: "Radeon RX 7900",
+            utilPercent: -1,
+            vramUsedBytes: 0,
+            vramTotalBytes: 0,
+            powerMicrowatts: 0,
+          },
+        ],
+      }),
+    );
+    expect(
+      await screen.findByText(/Utilization unavailable/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a sparkline polyline after multiple events", async () => {
+    const { container } = render(() => <Dashboard />);
+    // A single point renders no line; a second point produces a polyline.
+    MockEventSource.last!.emit(snapshot({ cpuPercent: 10 }));
+    MockEventSource.last!.emit(snapshot({ cpuPercent: 20 }));
+    MockEventSource.last!.emit(snapshot({ cpuPercent: 30 }));
+    await screen.findByText("30.0%");
+    expect(container.querySelector("polyline")).not.toBeNull();
   });
 });
