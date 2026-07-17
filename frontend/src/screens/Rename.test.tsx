@@ -1,9 +1,14 @@
-// Stage 3 Rename UI tests — the staged scan→propose→apply queue per mode, and
-// the explicit no-bulk-action assertion (Acceptance Criterion 6): every mutating
-// affordance acts on exactly ONE proposal, and no "apply all" / multi-select
-// affordance exists anywhere in the view.
+// Stage 3 Rename UI tests — the staged scan→propose→apply queue per mode, plus
+// the bounded bulk-apply exception. Single-item apply still acts on exactly ONE
+// proposal via its own button; on top of that an opt-in multi-select of Pending
+// rows can be applied together in one apply-batch request (a deliberate,
+// documented reversal of the original no-apply-everything rule — see ROADMAP.md
+// and the top-level CLAUDE.md). The bulk tests pin that: checkboxes render only
+// for Pending rows, "Apply Selected" appears only with a non-empty selection,
+// clicking it fires exactly ONE apply-batch (not N single applies), and the
+// selection clears after a successful batch.
 //
-// Covered: Movies apply-one, the no-bulk invariant with several pending rows,
+// Covered: Movies apply-one, the bulk-apply behavior with several pending rows,
 // Series Re-pick (auto-search → use a NEW tmdb match), Dismiss, and Adult
 // (Give back on an unmatched row, and Re-pick correctly absent for Adult).
 
@@ -64,6 +69,18 @@ const stubFetch = (handler: Handler) => {
 const applyCalls = (calls: Call[]) =>
   calls.filter((c) => c.url.includes("/apply"));
 
+// batchCalls / singleApplyCalls disambiguate the two apply routes: the batch
+// endpoint URL ("/api/proposals/apply-batch") also matches ".includes('/apply')",
+// so the bulk tests must match "/apply-batch" precisely and exclude it when
+// counting single-item applies — otherwise "one batch, not N singles" can't be
+// asserted (see the plan's test note).
+const batchCalls = (calls: Call[]) =>
+  calls.filter((c) => c.url.includes("/apply-batch"));
+const singleApplyCalls = (calls: Call[]) =>
+  calls.filter(
+    (c) => c.url.includes("/apply") && !c.url.includes("/apply-batch"),
+  );
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Rename — Movies (scan → propose → apply one)", () => {
@@ -119,8 +136,51 @@ describe("Rename — Movies (scan → propose → apply one)", () => {
   });
 });
 
-describe("Rename — no bulk actions (Acceptance Criterion 6)", () => {
-  it("renders one Apply per pending row and no apply-all / select-all affordance", async () => {
+describe("Rename — bulk apply (opt-in multi-select of Pending rows)", () => {
+  it("renders a checkbox only for Pending rows, never for a non-pending one", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/movies/rename/proposals"))
+        return jsonResponse([
+          proposal({ id: 1, sourceName: "A", status: "pending" }),
+          proposal({ id: 2, sourceName: "B", status: "pending" }),
+          proposal({
+            id: 3,
+            sourceName: "C",
+            status: "unmatched",
+            title: "",
+          }),
+        ]);
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Rename />);
+    await screen.findByText("A");
+
+    // Pending rows get a row checkbox; the unmatched row does not.
+    expect(screen.getByLabelText("Select A")).toBeInTheDocument();
+    expect(screen.getByLabelText("Select B")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Select C")).toBeNull();
+    // Two pending row checkboxes + one select-all header checkbox = 3 total.
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
+  });
+
+  it("shows 'Apply Selected' only once a row is selected", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/movies/rename/proposals"))
+        return jsonResponse([proposal({ id: 1, sourceName: "A" })]);
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Rename />);
+    await screen.findByText("A");
+
+    // Absent with an empty selection.
+    expect(screen.queryByText(/Apply Selected/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("Select A"));
+    expect(await screen.findByText("Apply Selected (1)")).toBeInTheDocument();
+  });
+
+  it("applies several selected rows in ONE apply-batch (not N single applies) and clears the selection", async () => {
     const calls = stubFetch((url, init) => {
       if (url.includes("/api/modes/movies/rename/proposals"))
         return jsonResponse([
@@ -128,26 +188,98 @@ describe("Rename — no bulk actions (Acceptance Criterion 6)", () => {
           proposal({ id: 2, sourceName: "B" }),
           proposal({ id: 3, sourceName: "C" }),
         ]);
-      if (url.includes("/apply") && (init?.method ?? "").toUpperCase() === "POST")
-        return noContent();
+      if (
+        url.includes("/api/proposals/apply-batch") &&
+        (init?.method ?? "").toUpperCase() === "POST"
+      )
+        return jsonResponse({
+          results: [
+            { id: 1, ok: true },
+            { id: 3, ok: true },
+          ],
+        });
       throw new Error("unexpected fetch: " + url);
     });
 
     render(() => <Rename />);
     await screen.findByText("A");
 
-    // One Apply button per row — never a single bulk control.
-    const applyButtons = screen.getAllByText("Apply");
-    expect(applyButtons).toHaveLength(3);
-    expect(screen.queryByText(/apply all/i)).toBeNull();
-    expect(screen.queryByText(/select all/i)).toBeNull();
-    // No selection checkboxes anywhere in the queue.
-    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    // Select the select-all header, then deselect one row → 2 selected.
+    fireEvent.click(screen.getByLabelText("Select A"));
+    fireEvent.click(screen.getByLabelText("Select C"));
+    const bulk = await screen.findByText("Apply Selected (2)");
+    fireEvent.click(bulk);
 
-    // Clicking one Apply mutates exactly one proposal — not the batch.
-    fireEvent.click(applyButtons[1]!);
-    await waitFor(() => expect(applyCalls(calls)).toHaveLength(1));
-    expect(applyCalls(calls)[0]!.url).toContain("/api/proposals/2/apply");
+    // Exactly ONE apply-batch call carrying both ids; zero single-item applies.
+    await waitFor(() => expect(batchCalls(calls)).toHaveLength(1));
+    expect(singleApplyCalls(calls)).toHaveLength(0);
+    expect(batchCalls(calls)[0]!.body).toEqual({
+      items: [{ id: 1 }, { id: 3 }],
+    });
+    // The summary shows, and the selection cleared (button gone).
+    expect(await screen.findByText("2 applied, 0 failed")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(/Apply Selected/)).toBeNull(),
+    );
+  });
+
+  it("reports a PARTIAL failure — 'N applied, M failed' plus the failed row's title and error", async () => {
+    // Skip-and-continue is the whole point: a batch can partially fail. Item 3
+    // fails; it stays Pending (still in the proposals stub), so its title
+    // resolves in the summary alongside its error.
+    const calls = stubFetch((url, init) => {
+      if (url.includes("/api/modes/movies/rename/proposals"))
+        return jsonResponse([
+          proposal({ id: 1, sourceName: "Applied.One", title: "Applied One" }),
+          proposal({ id: 3, sourceName: "Failed.One", title: "Failed One" }),
+        ]);
+      if (
+        url.includes("/api/proposals/apply-batch") &&
+        (init?.method ?? "").toUpperCase() === "POST"
+      )
+        return jsonResponse({
+          results: [
+            { id: 1, ok: true },
+            { id: 3, ok: false, error: "disk full" },
+          ],
+        });
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Rename />);
+    await screen.findByText("Applied.One");
+
+    fireEvent.click(screen.getByLabelText("Select all pending"));
+    fireEvent.click(await screen.findByText("Apply Selected (2)"));
+
+    await waitFor(() => expect(batchCalls(calls)).toHaveLength(1));
+    // Count line and the per-item failure detail both render.
+    expect(await screen.findByText("1 applied, 1 failed")).toBeInTheDocument();
+    expect(screen.getByText(/Failed One: disk full/)).toBeInTheDocument();
+  });
+
+  it("still applies a single row through its own Apply button (one single call, no batch)", async () => {
+    const calls = stubFetch((url, init) => {
+      if (url.includes("/api/modes/movies/rename/proposals"))
+        return jsonResponse([
+          proposal({ id: 1, sourceName: "A" }),
+          proposal({ id: 2, sourceName: "B" }),
+        ]);
+      if (
+        url.includes("/api/proposals/2/apply") &&
+        (init?.method ?? "").toUpperCase() === "POST"
+      )
+        return noContent();
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Rename />);
+    await screen.findByText("A");
+    fireEvent.click(screen.getAllByText("Apply")[1]!);
+
+    await waitFor(() => expect(singleApplyCalls(calls)).toHaveLength(1));
+    expect(singleApplyCalls(calls)[0]!.url).toContain("/api/proposals/2/apply");
+    expect(batchCalls(calls)).toHaveLength(0);
   });
 });
 

@@ -4,10 +4,13 @@ This is the binding scope-fence artifact required by the redesign plan
 (`.omc/plans/frontend-redesign-seerr.md`, Guardrail #3). The frontend is
 **visually** inspired by [seerr-team/seerr](https://github.com/seerr-team/seerr)
 (the Overseerr/Jellyseerr successor) but **must not** absorb Seerr's
-multi-user request/approval model. sakms is single-operator, has no
-permissions system, and takes no bulk actions anywhere — see the project
-`CLAUDE.md` ("Automation: manual by default", "Staged-for-approval, one item
-at a time", "Single-operator auth").
+multi-user request/approval model. sakms is single-operator and has no
+permissions system — see the project `CLAUDE.md` ("Automation: manual by
+default", "Staged-for-approval", "Single-operator auth"). Rename/Dedup/Purge
+do carry one bounded bulk-apply exception since 2026-07-17 (an opt-in,
+same-screen multi-select of already-reviewed Pending proposals — see
+CLAUDE.md's amended engineering-convention note); it is unrelated to Seerr's
+multi-user bulk request model and doesn't change anything below.
 
 This list is validated against what actually shipped in Stage 1 Wave 3 (the
 read-only Discover view). Each later wave that ports a mutating workflow must
@@ -31,7 +34,7 @@ re-check its own additions against the "NOT adopted" column before landing.
 |---|---|
 | **Multi-user request queue** (users submit, an admin approves) | sakms is single-operator; there is no "requester" vs. "approver" split, no request inbox, no pending-approval list. |
 | **User accounts, roles, per-user permissions** | One login gates the whole app across all three auth modes; no user table, no roles surface. Adding any per-user UI is out of scope. |
-| **Bulk request / "request all seasons" / multi-select grab** | Every mutating action in sakms operates on exactly one already-approved item. No "apply everything", no multi-select, no batch grab affordance — anywhere. Stage 2's per-card auto-grab is still strictly one title/scene per user action. |
+| **Bulk request / "request all seasons" / multi-select grab** | Discover/grab stays strictly one title/scene per user action — no "request all seasons," no multi-select grab, no batch request queue. (Rename/Dedup/Purge's 2026-07-17 bulk-apply is a different thing: an opt-in, same-screen multi-select of proposals the operator already individually reviewed at Scan time, not a Seerr-style bulk *request*. See CLAUDE.md's amended note.) |
 | **Approval / decline queues, request-status dashboards** | No request lifecycle exists to track; nothing is queued for someone else to action. |
 | **Issue reporting / comments / notifications-to-requesters** | Social/multi-user collaboration features with no place in a single-operator tool. |
 | **"Requested by" / user avatars / watchlist-per-user** | Identity-scoped UI; sakms has exactly one operator identity. |

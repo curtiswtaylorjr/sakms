@@ -1,5 +1,5 @@
 // Stage 3 Dedup UI tests — the staged scan→propose→apply DEDUPLICATION queue,
-// per mode, plus the explicit no-bulk-action assertion (Acceptance Criterion 6).
+// per mode, plus the bounded bulk-apply exception.
 //
 // Dedup is structurally different from Rename/Purge: a proposal is a GROUP of
 // candidate files, and Apply carries a body ({keepIndex} or {keepAll}) picking
@@ -12,11 +12,21 @@
 //      index-0 candidate when it isn't the winner sends {keepIndex: 0}, never an
 //      empty body (which would let the backend delete the operator's keeper).
 //
+// Bulk apply (a deliberate, documented reversal of the original
+// no-apply-everything rule — see ROADMAP.md and the top-level CLAUDE.md) adds an
+// opt-in multi-select of Pending groups, applied in ONE apply-batch. Its own
+// correctness trap: a batched group sends keepIndex ONLY when the operator
+// changed that group's radio (an explicit keepSel override) — otherwise the item
+// omits keepIndex so the backend keeps its own auto-winner. The bulk tests pin
+// that per-item shape plus: checkboxes only on Pending cards, "Apply Selected"
+// only with a non-empty selection, one apply-batch (not N single applies), and
+// selection-clears-after-batch.
+//
 // Covered: Movies apply-one (default winner index), Series re-pick a NON-winner
 // (keepIndex = chosen index), the index-0 pick, Keep All ({keepAll: true}, no
-// keepIndex), Dismiss, Scan→refetch, the no-bulk invariant (one Apply per group,
-// no apply-all/resolve-all/select-all, no checkboxes, one proposal id per click),
-// and Adult per-mode endpoint wiring.
+// keepIndex), Dismiss, Scan→refetch, bulk apply (checkbox gating, per-item
+// keepIndex-only-on-override, one batch call, selection clears), and Adult
+// per-mode endpoint wiring.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
@@ -76,6 +86,16 @@ const stubFetch = (handler: Handler) => {
 
 const applyCalls = (calls: Call[]) =>
   calls.filter((c) => c.url.includes("/apply"));
+
+// batchCalls / singleApplyCalls disambiguate the two apply routes: "/apply-batch"
+// also matches ".includes('/apply')", so bulk tests match "/apply-batch"
+// precisely and exclude it when counting single-item applies.
+const batchCalls = (calls: Call[]) =>
+  calls.filter((c) => c.url.includes("/apply-batch"));
+const singleApplyCalls = (calls: Call[]) =>
+  calls.filter(
+    (c) => c.url.includes("/apply") && !c.url.includes("/apply-batch"),
+  );
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -263,8 +283,8 @@ describe("Dedup — Keep All and Dismiss", () => {
   });
 });
 
-describe("Dedup — no bulk actions (Acceptance Criterion 6)", () => {
-  it("renders one Apply per group and no queue-wide resolve-all affordance", async () => {
+describe("Dedup — single-group apply is still one group per click", () => {
+  it("resolves exactly the clicked group's proposal id, per-group Apply/Keep All/Dismiss present", async () => {
     const calls = stubFetch((url, init) => {
       if (url.includes("/api/modes/movies/dedup/proposals"))
         return jsonResponse([
@@ -272,7 +292,10 @@ describe("Dedup — no bulk actions (Acceptance Criterion 6)", () => {
           dedupProposal({ id: 2, title: "B" }),
           dedupProposal({ id: 3, title: "C" }),
         ]);
-      if (url.includes("/apply") && (init?.method ?? "").toUpperCase() === "POST")
+      if (
+        url.includes("/api/proposals/2/apply") &&
+        (init?.method ?? "").toUpperCase() === "POST"
+      )
         return noContent();
       throw new Error("unexpected fetch: " + url);
     });
@@ -280,21 +303,108 @@ describe("Dedup — no bulk actions (Acceptance Criterion 6)", () => {
     render(() => <Dedup />);
     await screen.findByText("A");
 
-    // One Apply / Keep All / Dismiss per group — never a single batch control.
+    // Each group keeps its own Apply / Keep All / Dismiss controls.
     expect(screen.getAllByText("Apply")).toHaveLength(3);
     expect(screen.getAllByText("Keep All")).toHaveLength(3);
     expect(screen.getAllByText("Dismiss")).toHaveLength(3);
-    expect(screen.queryByText(/apply all/i)).toBeNull();
-    expect(screen.queryByText(/resolve all/i)).toBeNull();
-    expect(screen.queryByText(/dedup all/i)).toBeNull();
-    expect(screen.queryByText(/select all/i)).toBeNull();
-    // The keeper is picked with radios, never selection checkboxes.
-    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
 
-    // Clicking one group's Apply resolves exactly that one proposal id.
+    // Clicking one group's Apply resolves exactly that one proposal id — one
+    // single-item apply, no batch.
     fireEvent.click(screen.getAllByText("Apply")[1]!);
-    await waitFor(() => expect(applyCalls(calls)).toHaveLength(1));
-    expect(applyCalls(calls)[0]!.url).toContain("/api/proposals/2/apply");
+    await waitFor(() => expect(singleApplyCalls(calls)).toHaveLength(1));
+    expect(singleApplyCalls(calls)[0]!.url).toContain("/api/proposals/2/apply");
+    expect(batchCalls(calls)).toHaveLength(0);
+  });
+});
+
+describe("Dedup — bulk apply (opt-in multi-select of Pending groups)", () => {
+  it("renders a checkbox only for Pending cards, never for a non-pending one", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/movies/dedup/proposals"))
+        return jsonResponse([
+          dedupProposal({ id: 1, title: "Pending One", status: "pending" }),
+          dedupProposal({ id: 2, title: "Pending Two", status: "pending" }),
+          dedupProposal({ id: 3, title: "Done Group", status: "applied" }),
+        ]);
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Dedup />);
+    await screen.findByText("Pending One");
+
+    expect(screen.getByLabelText("Select Pending One")).toBeInTheDocument();
+    expect(screen.getByLabelText("Select Pending Two")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Select Done Group")).toBeNull();
+    // Two pending card checkboxes + one select-all checkbox = 3. (Keepers are
+    // radios, not checkboxes, so they don't count here.)
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
+  });
+
+  it("shows 'Apply Selected' only once a group is selected", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/movies/dedup/proposals"))
+        return jsonResponse([dedupProposal({ id: 1, title: "Only" })]);
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Dedup />);
+    await screen.findByText("Only");
+
+    expect(screen.queryByText(/Apply Selected/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("Select Only"));
+    expect(await screen.findByText("Apply Selected (1)")).toBeInTheDocument();
+  });
+
+  it("sends ONE apply-batch, with keepIndex only for a group whose radio was overridden, then clears the selection", async () => {
+    const calls = stubFetch((url, init) => {
+      if (url.includes("/api/modes/movies/dedup/proposals"))
+        return jsonResponse([
+          dedupProposal({
+            id: 1,
+            title: "Group One",
+            candidates: [
+              candidate({ label: "one-keep", winner: true }),
+              candidate({ label: "one-dupe", winner: false }),
+            ],
+          }),
+          dedupProposal({
+            id: 2,
+            title: "Group Two",
+            candidates: [
+              candidate({ label: "two-keep", winner: true }),
+              candidate({ label: "two-better", winner: false }),
+            ],
+          }),
+        ]);
+      if (
+        url.includes("/api/proposals/apply-batch") &&
+        (init?.method ?? "").toUpperCase() === "POST"
+      )
+        return jsonResponse({
+          results: [
+            { id: 1, ok: true },
+            { id: 2, ok: true },
+          ],
+        });
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Dedup />);
+    await screen.findByText("Group One");
+
+    // Select all pending; override only Group Two's keeper radio (index 1).
+    fireEvent.click(screen.getByLabelText("Select all pending"));
+    fireEvent.click(screen.getByLabelText("Keep two-better"));
+    fireEvent.click(await screen.findByText("Apply Selected (2)"));
+
+    await waitFor(() => expect(batchCalls(calls)).toHaveLength(1));
+    expect(singleApplyCalls(calls)).toHaveLength(0);
+    // Group One kept its auto-winner → no keepIndex; Group Two overridden → 1.
+    expect(batchCalls(calls)[0]!.body).toEqual({
+      items: [{ id: 1 }, { id: 2, keepIndex: 1 }],
+    });
+    expect(await screen.findByText("2 applied, 0 failed")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/Apply Selected/)).toBeNull());
   });
 });
 

@@ -17,6 +17,7 @@ import {
   useContext,
 } from "solid-js";
 import type { Mode } from "../api/discover";
+import type { ApplyBatchResponse } from "@dto";
 
 export const inputClass =
   "w-full truncate rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg " +
@@ -309,6 +310,40 @@ export const StatusPill: Component<{ status: string }> = (props) => (
     {props.status}
   </span>
 );
+
+// BatchResultSummary renders the outcome of one "Apply Selected" batch: an
+// "N applied, M failed" line plus, when any failed, a per-item list of the
+// skipped titles and their errors. The backend applies items sequentially and
+// skips-and-continues, so a batch can partially succeed — this surfaces exactly
+// which items were left Pending and why. Failed items carry no proposal in the
+// response (only OK items do), so the screen passes `titleOf` to resolve a
+// still-known id back to its row title; an id no longer in the list falls back
+// to "#id".
+export const BatchResultSummary: Component<{
+  result: ApplyBatchResponse;
+  titleOf: (id: number) => string;
+}> = (props) => {
+  const applied = () => props.result.results.filter((r) => r.ok).length;
+  const failed = () => props.result.results.filter((r) => !r.ok);
+  return (
+    <div class="mt-3 rounded-md border border-border bg-surface-2 p-3 text-sm">
+      <p class="text-fg">
+        {applied()} applied, {failed().length} failed
+      </p>
+      <Show when={failed().length > 0}>
+        <ul class="mt-1 list-disc pl-5 text-danger">
+          <For each={failed()}>
+            {(r) => (
+              <li>
+                {props.titleOf(r.id) || `#${r.id}`}: {r.error || "failed"}
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </div>
+  );
+};
 
 // PillSelector is the labeled row of pill buttons shared by the Discover
 // detail popup's resolution/tier/protocol selectors and Settings' per-mode

@@ -652,6 +652,53 @@ type DedupApplyRequest struct {
 	KeepAll   bool `json:"keepAll,omitempty"`
 }
 
+// --- Bulk apply: same-screen multi-select of Pending proposals -------------
+//
+// POST /api/proposals/apply-batch applies several already-reviewed Pending
+// proposals from ONE screen (single workflow+mode) in a single call, applied
+// sequentially with skip-and-continue per-item results. It is the bounded,
+// opt-in exception to the "one item at a time" apply principle (see
+// CLAUDE.md / docs/ARCHITECTURE.md), NOT a global "apply everything" bypass.
+// Mirrors internal/api's applyBatchItem/applyBatchRequest.
+
+// ApplyBatchItem is one selected proposal plus its optional Dedup override.
+// KeepIndex/KeepAll carry the same three-state Dedup semantics as
+// DedupApplyRequest (a Dedup group's radio the operator changed before adding
+// it to the batch); Rename and Purge items omit both. KeepIndex MUST be sent
+// even when it is 0 — see DedupApplyRequest's doc comment for why a dropped
+// literal 0 can delete the wrong file.
+type ApplyBatchItem struct {
+	ID        int64 `json:"id"`
+	KeepIndex *int  `json:"keepIndex,omitempty"`
+	KeepAll   bool  `json:"keepAll,omitempty"`
+}
+
+// ApplyBatchRequest is POST /api/proposals/apply-batch's body. Items is capped
+// server-side (200); an empty Items is rejected.
+type ApplyBatchRequest struct {
+	Items []ApplyBatchItem `json:"items"`
+}
+
+// ApplyBatchResultItem is one item's outcome — every requested id gets exactly
+// one, in request order, whether it applied or was skipped. OK true means the
+// proposal was applied and Proposal holds its refreshed (now-applied) row; OK
+// false means it was skipped and Error explains why (the batch never aborts on
+// a single failure). Proposal is the curated review-queue shape (same subset
+// the Rename/Purge/Dedup views already consume), not the full domain struct.
+type ApplyBatchResultItem struct {
+	ID       int64     `json:"id"`
+	OK       bool      `json:"ok"`
+	Error    string    `json:"error,omitempty"`
+	Proposal *Proposal `json:"proposal,omitempty"`
+}
+
+// ApplyBatchResponse is POST /api/proposals/apply-batch's response — always
+// HTTP 200; per-item success/failure lives here in Results, not in the status
+// code.
+type ApplyBatchResponse struct {
+	Results []ApplyBatchResultItem `json:"results"`
+}
+
 // --- Tag workflow: vocabulary + tracked-item picker ------------------------
 //
 // The Tag workflow is direct CRUD on a tracked item's tags — no staged

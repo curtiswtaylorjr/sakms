@@ -1,17 +1,25 @@
-// Purge — the staged scan→propose→apply DELETE queue, ported verbatim from the
-// vanilla-JS frontend (internal/web/static/index.html's renderPurge). Layout,
-// top to bottom: Scan button → Allowlist (tag chips + add input) → Proposals
-// table. Scan matches the mode's tag allowlist against every tracked item and
-// enqueues one delete proposal per match; the operator reviews the queue and
-// acts on EXACTLY ONE item per click — Apply (Delete) / Dismiss a proposal, or
-// add/remove a single allowlist tag. There is no bulk affordance ANYWHERE
-// (proposals OR allowlist) per the project's no-bulk invariant; dedicated tests
-// assert both halves.
+// Purge — the staged scan→propose→apply DELETE queue, ported from the vanilla-JS
+// frontend (internal/web/static/index.html's renderPurge). Layout, top to
+// bottom: Scan button → Allowlist (tag chips + add input) → Proposals table.
+// Scan matches the mode's tag allowlist against every tracked item and enqueues
+// one delete proposal per match; the operator reviews the queue and acts on each
+// item via its own single-item control — Apply (Delete) / Dismiss a proposal, or
+// add/remove a single allowlist tag.
 //
-// Verbatim deltas from Rename (Purge is NOT structurally identical — verified
-// against the old frontend, do not "align" these with Rename):
+// One bounded bulk affordance now exists on the PROPOSALS queue only: Pending
+// rows carry a selection checkbox plus a select-all-pending header toggle, and
+// with a non-empty selection an "Apply Selected (N)" button (behind the same
+// window.confirm guard the single delete has, worded for the count) posts one
+// apply-batch that the backend applies sequentially with skip-and-continue. It
+// is NOT a queue-wide delete-all and does not change how any single row deletes.
+// The ALLOWLIST stays deliberately bulk-free — one × per chip, one Add per
+// input, no clear-all/remove-all path; a dedicated test still asserts that half.
+//
+// Deltas from Rename (Purge is NOT structurally identical — verified against the
+// old frontend, do not "align" these with Rename):
 //   - No Source column. Columns are Title / Status / Root Folder / Reason /
-//     Actions (title cell = p.title || p.sourceName || "").
+//     Actions (title cell = p.title || p.sourceName || ""), preceded by the
+//     selection-checkbox column.
 //   - Actions appear ONLY on a pending row: "Apply (Delete)" (danger-styled,
 //     behind a window.confirm guard because it permanently deletes files) and
 //     "Dismiss". No Re-pick, no Give back, no draft — Purge has none of those.
@@ -25,11 +33,13 @@ import {
   For,
   Show,
 } from "solid-js";
+import type { ApplyBatchItem, ApplyBatchResponse } from "@dto";
 import type { Mode } from "../api/discover";
 import {
   type Proposal,
   type ProposalStatus,
   addAllowlistTag,
+  applyBatch,
   applyProposal,
   dismissProposal,
   fetchAllowlist,
@@ -38,13 +48,14 @@ import {
   scanPurge,
 } from "../api/purge";
 import {
+  BatchResultSummary,
   Button,
   ErrorText,
   ModeTabs,
   Muted,
   StatusPill,
 } from "../components/ui";
-import { useWorkflowActions } from "./workflowHooks";
+import { useBulkSelection, useWorkflowActions } from "./workflowHooks";
 
 // PurgeView is one mode's allowlist editor + delete-review queue. Keyed on
 // props.mode so both resources refetch when the shell switches tabs.
@@ -65,14 +76,34 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
   const [applyingIds, setApplyingIds] = createSignal<ReadonlySet<number>>(
     new Set(),
   );
+  // Bulk selection of Pending delete proposals + the last "Apply Selected"
+  // outcome. Selection clears on mode-change/scan/act; batchResult persists past
+  // act (so its own summary survives) but clears on the next scan, mode-change,
+  // or new batch. Selection lives on the proposals queue only — the allowlist
+  // has no batch path.
+  const selection = useBulkSelection();
+  const [batchResult, setBatchResult] = createSignal<ApplyBatchResponse | null>(
+    null,
+  );
 
-  // Switching modes clears the stale add-input and action error — the old
-  // frontend rebuilt the whole view on a mode change, which had this effect.
+  // Switching modes clears the stale add-input, action error, selection, and the
+  // previous batch summary — the old frontend rebuilt the whole view on a mode
+  // change, which had this effect. act clears the selection but NOT batchResult,
+  // so a batch's own summary survives the act that produced it.
   const { actionError, setActionError, scanning, scan, act } = useWorkflowActions(
     () => props.mode,
     {
-      resetOnModeChange: () => setNewTag(""),
+      resetOnModeChange: () => {
+        setNewTag("");
+        selection.clear();
+        setBatchResult(null);
+      },
       scanFn: scanPurge,
+      resetAfterScan: () => {
+        selection.clear();
+        setBatchResult(null);
+      },
+      resetAfterAct: () => selection.clear(),
       refetch: refetchProposals,
     },
   );
@@ -95,6 +126,35 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
         next.delete(id);
         return next;
       });
+    });
+  };
+
+  // pendingIds are the rows selectable/batchable — only Pending rows can Apply.
+  const pendingIds = (): number[] =>
+    (proposals() ?? []).filter((p) => p.status === "pending").map((p) => p.id);
+  const allPendingSelected = (): boolean => {
+    const ids = pendingIds();
+    return ids.length > 0 && ids.every((id) => selection.has(id));
+  };
+  const toggleSelectAll = (): void => {
+    if (allPendingSelected()) selection.clear();
+    else selection.selectAll(pendingIds());
+  };
+  const titleOf = (id: number): string => {
+    const p = (proposals() ?? []).find((x) => x.id === id);
+    return p ? p.title || p.sourceName || "" : "";
+  };
+  // applySelected deletes the selected Pending rows in one apply-batch. Guarded
+  // by the same confirm the single delete has, worded for the count — bulk must
+  // not skip the safety check single-item delete enforces.
+  const applySelected = (): void => {
+    const ids = [...selection.selected()];
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} items from ${props.mode}?`)) return;
+    const items: ApplyBatchItem[] = ids.map((id) => ({ id }));
+    setBatchResult(null);
+    void act(async () => {
+      setBatchResult(await applyBatch(items));
     });
   };
 
@@ -128,10 +188,21 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
         <Button variant="primary" onClick={() => void scan(props.mode)} disabled={scanning()}>
           {scanning() ? "Scanning…" : "Scan"}
         </Button>
+        <Show when={selection.size() > 0}>
+          <Button
+            class="!bg-danger !text-accent-fg"
+            onClick={applySelected}
+          >
+            Apply Selected ({selection.size()})
+          </Button>
+        </Show>
       </div>
 
       <Show when={actionError()}>
         <ErrorText>{actionError()}</ErrorText>
+      </Show>
+      <Show when={batchResult()}>
+        {(res) => <BatchResultSummary result={res()} titleOf={titleOf} />}
       </Show>
 
       {/* Allowlist — Purge-only. One × per chip, one Add per input. */}
@@ -190,6 +261,15 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
             <table class="w-full text-left text-sm">
               <thead>
                 <tr class="border-b border-border text-xs uppercase tracking-wide text-muted">
+                  <th class="px-2 py-2 font-medium">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all pending"
+                      checked={allPendingSelected()}
+                      disabled={pendingIds().length === 0}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
                   <th class="px-2 py-2 font-medium">Title</th>
                   <th class="px-2 py-2 font-medium">Status</th>
                   <th class="px-2 py-2 font-medium">Root Folder</th>
@@ -203,6 +283,16 @@ const PurgeView: Component<{ mode: Mode }> = (props) => {
                     const status = p.status as ProposalStatus;
                     return (
                       <tr class="border-b border-border/60 align-top">
+                        <td class="px-2 py-2">
+                          <Show when={status === "pending"}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${p.title || p.sourceName || ""}`}
+                              checked={selection.has(p.id)}
+                              onChange={() => selection.toggle(p.id)}
+                            />
+                          </Show>
+                        </td>
                         <td class="px-2 py-2 text-fg">
                           {p.title || p.sourceName || ""}
                         </td>

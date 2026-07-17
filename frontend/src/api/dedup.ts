@@ -1,12 +1,17 @@
-// Dedup workflow data access (Stage 3). Ported verbatim from the vanilla-JS
-// frontend (internal/web/static/index.html's renderDedup). Dedup is the staged
+// Dedup workflow data access (Stage 3). Ported from the vanilla-JS frontend
+// (internal/web/static/index.html's renderDedup). Dedup is the staged
 // scan→propose→apply DEDUPLICATION queue: Scan finds content identified twice
 // (an already-tracked copy plus one or more orphan files that resolve to the
 // SAME identity) and enqueues one proposal PER DUPLICATE GROUP, each carrying
 // the group's candidate files with the quality winner pre-flagged. The operator
-// reviews each group and resolves EXACTLY ONE group per Apply click — there is
-// no apply-all/resolve-all path across the queue, matching the old frontend and
-// the project's no-bulk-action invariant.
+// reviews each group and resolves it with that group's OWN Apply/Keep All — one
+// group per click. On top of that there is now one bounded bulk affordance —
+// applyBatch, backing the opt-in "Apply Selected" multi-select of already-
+// reviewed Pending groups — applied sequentially server-side with skip-and-
+// continue. It is NOT a queue-wide resolve-all and does not change how any
+// single group resolves. Each batched group keeps the auto-winner unless the
+// operator changed that group's Keep radio first, in which case that chosen
+// index rides along as the item's keepIndex.
 //
 // Structurally DIFFERENT from Rename and Purge (verified against the old
 // frontend, do NOT "align" them): a Rename/Purge proposal is a single flat row
@@ -24,7 +29,13 @@
 // shapes are the generated DTOs (@dto), never hand-duplicated (plan Guardrail #4).
 
 import { api } from "./client";
-import type { Candidate, DedupApplyRequest, Proposal } from "@dto";
+import type {
+  ApplyBatchItem,
+  ApplyBatchResponse,
+  Candidate,
+  DedupApplyRequest,
+  Proposal,
+} from "@dto";
 import type { Mode, ProposalStatus } from "./discover";
 
 export type { Candidate, Proposal };
@@ -78,4 +89,21 @@ export function applyKeepAll(id: number): Promise<unknown> {
 // anything (leaves both copies on disk, unresolved).
 export function dismissProposal(id: number): Promise<unknown> {
   return api(`/api/proposals/${id}/dismiss`, { method: "POST" });
+}
+
+// applyBatch resolves several already-reviewed Pending duplicate groups in one
+// request (the "Apply Selected" affordance). The backend resolves them
+// sequentially and skips-and-continues on a per-item failure, returning one
+// result per requested id. Per group the caller sends keepIndex ONLY when the
+// operator overrode that group's Keep radio before selecting it — an item with
+// keepIndex omitted lets the backend fall back to its own auto-winner (the same
+// nil-vs-0 semantics as applyKeep/applyKeepAll: a real chosen index, including
+// 0, must be sent, never dropped). No keepAll is sent from the batch path.
+export function applyBatch(
+  items: ApplyBatchItem[],
+): Promise<ApplyBatchResponse> {
+  return api<ApplyBatchResponse>(`/api/proposals/apply-batch`, {
+    method: "POST",
+    body: JSON.stringify({ items }),
+  });
 }

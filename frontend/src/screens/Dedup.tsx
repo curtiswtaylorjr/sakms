@@ -17,14 +17,24 @@
 // that lives entirely in the backend Scan — this view is identical across modes,
 // exactly as the single mode-agnostic renderDedup was.
 //
-// No-bulk invariant (Acceptance Criterion 6): the unit of action is the GROUP.
-// Each pending card resolves with its OWN explicit Apply — there is no
-// apply-all/resolve-all control across the queue. (Removing multiple losers
-// inside one group is that one group's atomic resolution, verbatim backend
-// behavior — dedup.ApplyLibrary* deletes every non-kept candidate in a single
-// call; there is no single-candidate removal endpoint, and inventing one would
-// regress "port verbatim.") A dedicated test asserts one Apply per group and no
-// queue-wide control.
+// Unit of action is the GROUP: each pending card resolves with its OWN explicit
+// Apply/Keep All — one group per click. (Removing multiple losers inside one
+// group is that one group's atomic resolution, verbatim backend behavior —
+// dedup.ApplyLibrary* deletes every non-kept candidate in a single call; there
+// is no single-candidate removal endpoint.)
+//
+// Bulk apply — the one bounded exception to the project's original "one item at
+// a time, no apply-everything" rule (a deliberate, documented reversal; see
+// ROADMAP.md's Bulk apply entry and the top-level CLAUDE.md's amended
+// engineering-conventions note). Pending cards carry a selection checkbox
+// alongside their existing keep-radio table, plus a select-all-pending toggle;
+// with a non-empty selection an "Apply Selected (N)" button posts one
+// apply-batch covering exactly those already-reviewed groups, applied
+// sequentially server-side with skip-and-continue. Per group the batch sends an
+// explicit keepIndex ONLY when the operator changed that group's radio (an
+// explicit keepSel override); otherwise the item omits keepIndex and the backend
+// keeps its own auto-winner. This is NOT a queue-wide resolve-all and does not
+// change how any single group still resolves via its own Apply.
 //
 // keepIndex is an ARRAY INDEX into the proposal's `candidates` in received
 // order. Candidates are rendered in exactly that order and NEVER sorted — the
@@ -38,11 +48,13 @@ import {
   For,
   Show,
 } from "solid-js";
+import type { ApplyBatchItem, ApplyBatchResponse } from "@dto";
 import type { Mode } from "../api/discover";
 import {
   type Candidate,
   type Proposal,
   type ProposalStatus,
+  applyBatch,
   applyKeep,
   applyKeepAll,
   dismissProposal,
@@ -50,13 +62,14 @@ import {
   scanDedup,
 } from "../api/dedup";
 import {
+  BatchResultSummary,
   Button,
   ErrorText,
   ModeTabs,
   Muted,
   StatusPill,
 } from "../components/ui";
-import { useWorkflowActions } from "./workflowHooks";
+import { useBulkSelection, useWorkflowActions } from "./workflowHooks";
 
 // winnerIndex returns the index of the group's flagged keeper, defaulting to 0
 // when none is flagged (mirrors the backend's own winnerIndex fallback).
@@ -81,16 +94,37 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
   // "use the group's flagged winner" (the pre-checked radio). Cleared on refetch
   // and mode switch so a stale selection never leaks onto a re-scanned queue.
   const [keepSel, setKeepSel] = createSignal<Record<number, number>>({});
+  // Bulk selection of Pending groups + the last "Apply Selected" outcome. The
+  // selection and keepSel clear together on mode-change/scan/act; batchResult
+  // persists past act (so its own summary survives) but clears on the next
+  // scan, mode-change, or new batch.
+  const selection = useBulkSelection();
+  const [batchResult, setBatchResult] = createSignal<ApplyBatchResponse | null>(
+    null,
+  );
 
-  // Both scan and act clear keepSel on success — stale radio selections must
-  // not survive a queue refresh or mode switch in either direction.
+  // Both scan and act clear keepSel and the selection on success — stale radio
+  // selections or checkbox picks must not survive a queue refresh or mode switch
+  // in either direction. act clears the selection but NOT batchResult, so a
+  // batch's own summary survives the act that produced it.
   const { actionError, scanning, scan, act } = useWorkflowActions(
     () => props.mode,
     {
-      resetOnModeChange: () => setKeepSel({}),
+      resetOnModeChange: () => {
+        setKeepSel({});
+        selection.clear();
+        setBatchResult(null);
+      },
       scanFn: scanDedup,
-      resetAfterScan: () => setKeepSel({}),
-      resetAfterAct: () => setKeepSel({}),
+      resetAfterScan: () => {
+        setKeepSel({});
+        selection.clear();
+        setBatchResult(null);
+      },
+      resetAfterAct: () => {
+        setKeepSel({});
+        selection.clear();
+      },
       refetch,
     },
   );
@@ -103,16 +137,68 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
     return chosen ?? winnerIndex(p.candidates ?? []);
   };
 
+  // pendingIds are the groups selectable/batchable — only Pending cards resolve.
+  const pendingIds = (): number[] =>
+    (proposals() ?? []).filter((p) => p.status === "pending").map((p) => p.id);
+  const allPendingSelected = (): boolean => {
+    const ids = pendingIds();
+    return ids.length > 0 && ids.every((id) => selection.has(id));
+  };
+  const toggleSelectAll = (): void => {
+    if (allPendingSelected()) selection.clear();
+    else selection.selectAll(pendingIds());
+  };
+  const titleOf = (id: number): string => {
+    const p = (proposals() ?? []).find((x) => x.id === id);
+    return p ? p.title || p.sourceName || "" : "";
+  };
+  // applySelected posts ONE apply-batch for the selected Pending groups. Per
+  // group, keepIndex rides along ONLY when the operator overrode that group's
+  // radio (keepSel has an explicit entry) — otherwise the item omits keepIndex
+  // and the backend keeps its own auto-winner. keepSel()[id] may legitimately be
+  // 0, so the presence check is `!== undefined`, never a falsy test.
+  const applySelected = (): void => {
+    const overrides = keepSel();
+    const items: ApplyBatchItem[] = [...selection.selected()].map((id) => {
+      const chosen = overrides[id];
+      return chosen === undefined ? { id } : { id, keepIndex: chosen };
+    });
+    if (items.length === 0) return;
+    setBatchResult(null);
+    void act(async () => {
+      setBatchResult(await applyBatch(items));
+    });
+  };
+
   return (
     <div>
       <div class="flex items-center gap-3">
         <Button variant="primary" onClick={() => void scan(props.mode)} disabled={scanning()}>
           {scanning() ? "Scanning…" : "Scan"}
         </Button>
+        <Show when={pendingIds().length > 0}>
+          <label class="flex items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              aria-label="Select all pending"
+              checked={allPendingSelected()}
+              onChange={toggleSelectAll}
+            />
+            Select all pending
+          </label>
+        </Show>
+        <Show when={selection.size() > 0}>
+          <Button variant="primary" onClick={applySelected}>
+            Apply Selected ({selection.size()})
+          </Button>
+        </Show>
       </div>
 
       <Show when={actionError()}>
         <ErrorText>{actionError()}</ErrorText>
+      </Show>
+      <Show when={batchResult()}>
+        {(res) => <BatchResultSummary result={res()} titleOf={titleOf} />}
       </Show>
 
       <Show when={proposals.error}>
@@ -139,6 +225,14 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
                 return (
                   <div class="rounded-xl border border-border bg-surface p-4">
                     <div class="flex items-center gap-2">
+                      <Show when={status() === "pending"}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${p.title || p.sourceName || ""}`}
+                          checked={selection.has(p.id)}
+                          onChange={() => selection.toggle(p.id)}
+                        />
+                      </Show>
                       <strong class="text-fg">
                         {p.title || p.sourceName || ""}
                       </strong>

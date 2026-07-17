@@ -1,15 +1,20 @@
 // Stage 3 Purge UI tests — the staged scan→propose→apply DELETE queue plus the
-// Purge-only tag allowlist, per mode, and the explicit no-bulk-action assertion
-// (Acceptance Criterion 6) across BOTH mutating surfaces Purge has: proposals
-// AND the allowlist. This is the half most easily under-covered — Rename had no
-// allowlist, so its no-bulk test only covered proposals; Purge must assert both.
+// Purge-only tag allowlist, per mode. Purge has two mutating surfaces with
+// DIFFERENT bulk policies now, and the tests assert each:
+//   - PROPOSALS gained the bounded bulk-apply exception (a deliberate,
+//     documented reversal — see ROADMAP.md and the top-level CLAUDE.md): an
+//     opt-in multi-select of Pending delete rows applied in ONE apply-batch,
+//     behind the same window.confirm the single delete has, worded for the
+//     count. Single-item delete still works one row at a time.
+//   - The ALLOWLIST stays deliberately bulk-free — one × per chip, one Add per
+//     input, no clear-all/remove-all. That half's no-bulk test is unchanged.
 //
 // Covered: Movies apply-one (behind the confirm guard) + the confirm CANCEL
-// branch (no apply fires), Dismiss, Scan→refetch, the no-bulk invariant on
-// proposals (one Apply per pending row, no apply-all / select-all / checkboxes),
-// the no-bulk invariant on the allowlist (one × per chip = one DELETE, one Add
-// acting on one tag, no clear-all / remove-all affordance), and Series/Adult
-// allowlist add/remove wiring.
+// branch (no apply fires), Dismiss, Scan→refetch, bulk apply on proposals
+// (checkbox gating, confirm guard incl. cancel, one apply-batch not N singles,
+// selection clears), the no-bulk invariant on the allowlist (one × per chip =
+// one DELETE, one Add acting on one tag, no clear-all / remove-all affordance),
+// and Series/Adult allowlist add/remove wiring.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
@@ -56,6 +61,16 @@ const stubFetch = (handler: Handler) => {
 
 const applyCalls = (calls: Call[]) =>
   calls.filter((c) => c.url.includes("/apply"));
+
+// batchCalls / singleApplyCalls disambiguate the two apply routes: "/apply-batch"
+// also matches ".includes('/apply')", so bulk tests match "/apply-batch"
+// precisely and exclude it when counting single-item applies.
+const batchCalls = (calls: Call[]) =>
+  calls.filter((c) => c.url.includes("/apply-batch"));
+const singleApplyCalls = (calls: Call[]) =>
+  calls.filter(
+    (c) => c.url.includes("/apply") && !c.url.includes("/apply-batch"),
+  );
 
 // Default allowlist stub so every render's GET .../purge/allowlist resolves.
 const emptyAllowlist = (url: string): Response | null =>
@@ -212,9 +227,33 @@ describe("Purge — Dismiss (single row)", () => {
   });
 });
 
-describe("Purge — no bulk actions on PROPOSALS (Acceptance Criterion 6)", () => {
-  it("renders one Apply per pending row and no apply-all / select-all affordance", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+describe("Purge — bulk apply on PROPOSALS (opt-in multi-select, confirm-guarded)", () => {
+  it("renders a checkbox only for Pending rows, never for a non-pending one", async () => {
+    stubFetch((url) => {
+      const al = emptyAllowlist(url);
+      if (al) return al;
+      if (url.includes("/api/modes/movies/purge/proposals"))
+        return jsonResponse([
+          proposal({ id: 1, title: "A", status: "pending" }),
+          proposal({ id: 2, title: "B", status: "pending" }),
+          proposal({ id: 3, title: "C", status: "dismissed" }),
+        ]);
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Purge />);
+    await screen.findByText("A");
+
+    expect(screen.getByLabelText("Select A")).toBeInTheDocument();
+    expect(screen.getByLabelText("Select B")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Select C")).toBeNull();
+    // Two pending row checkboxes + one select-all header checkbox = 3. The
+    // allowlist (empty here) contributes none.
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
+  });
+
+  it("deletes several selected rows in ONE apply-batch behind a count-worded confirm, then clears the selection", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const calls = stubFetch((url, init) => {
       const al = emptyAllowlist(url);
       if (al) return al;
@@ -224,25 +263,60 @@ describe("Purge — no bulk actions on PROPOSALS (Acceptance Criterion 6)", () =
           proposal({ id: 2, title: "B" }),
           proposal({ id: 3, title: "C" }),
         ]);
-      if (url.includes("/apply") && (init?.method ?? "").toUpperCase() === "POST")
-        return noContent();
+      if (
+        url.includes("/api/proposals/apply-batch") &&
+        (init?.method ?? "").toUpperCase() === "POST"
+      )
+        return jsonResponse({
+          results: [
+            { id: 1, ok: true },
+            { id: 3, ok: true },
+          ],
+        });
       throw new Error("unexpected fetch: " + url);
     });
 
     render(() => <Purge />);
     await screen.findByText("A");
 
-    const applyButtons = screen.getAllByText("Apply (Delete)");
-    expect(applyButtons).toHaveLength(3);
-    expect(screen.queryByText(/apply all/i)).toBeNull();
-    expect(screen.queryByText(/delete all/i)).toBeNull();
-    expect(screen.queryByText(/select all/i)).toBeNull();
-    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    fireEvent.click(screen.getByLabelText("Select A"));
+    fireEvent.click(screen.getByLabelText("Select C"));
+    fireEvent.click(await screen.findByText("Apply Selected (2)"));
 
-    // Clicking one Apply mutates exactly one proposal — not the batch.
-    fireEvent.click(applyButtons[1]!);
-    await waitFor(() => expect(applyCalls(calls)).toHaveLength(1));
-    expect(applyCalls(calls)[0]!.url).toContain("/api/proposals/2/apply");
+    // Confirm was consulted with the count, then exactly ONE apply-batch fired.
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(confirmSpy.mock.calls[0]![0]).toContain("Delete 2 items");
+    await waitFor(() => expect(batchCalls(calls)).toHaveLength(1));
+    expect(singleApplyCalls(calls)).toHaveLength(0);
+    expect(batchCalls(calls)[0]!.body).toEqual({
+      items: [{ id: 1 }, { id: 3 }],
+    });
+    expect(await screen.findByText("2 applied, 0 failed")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/Apply Selected/)).toBeNull());
+  });
+
+  it("does NOT fire an apply-batch when the bulk confirm is cancelled", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const calls = stubFetch((url) => {
+      const al = emptyAllowlist(url);
+      if (al) return al;
+      if (url.includes("/api/modes/movies/purge/proposals"))
+        return jsonResponse([
+          proposal({ id: 1, title: "A" }),
+          proposal({ id: 2, title: "B" }),
+        ]);
+      throw new Error("unexpected fetch: " + url);
+    });
+
+    render(() => <Purge />);
+    await screen.findByText("A");
+    fireEvent.click(screen.getByLabelText("Select A"));
+    fireEvent.click(await screen.findByText("Apply Selected (1)"));
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledOnce());
+    expect(batchCalls(calls)).toHaveLength(0);
+    // Selection survives a cancelled confirm — the button is still shown.
+    expect(screen.getByText("Apply Selected (1)")).toBeInTheDocument();
   });
 });
 

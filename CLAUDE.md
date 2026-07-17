@@ -57,10 +57,17 @@ priori.
 ## Automation: manual by default, scheduling earns its way back in
 
 Every workflow SAK has built so far is human-triggered: Scan proposes,
-a person approves, Apply commits exactly that one item — no bulk actions,
-no background pollers, no scheduler infrastructure exists anywhere in this
-codebase today. That's the default for anything new, too — **don't build
-speculative scheduling ahead of proven manual usage.**
+a person approves, Apply commits exactly that item — no background pollers,
+no scheduler infrastructure exists anywhere in this codebase today. That's
+the default for anything new, too — **don't build speculative scheduling
+ahead of proven manual usage.**
+
+(Bulk apply, added 2026-07-17, is a same-screen multi-select of
+already-reviewed Pending proposals — see the amended engineering-convention
+note below. It doesn't change this section: there is still no automation,
+no scheduler, no background trigger of any kind. Every batch is a human
+clicking "Apply Selected" after reviewing each row, not the system acting on
+its own.)
 
 But this isn't a permanent ban on automation. The *arr apps automate
 things (RSS, scheduled searches, quality-cutoff upgrades) safely and
@@ -75,9 +82,27 @@ the other way around.
 These aren't just style preferences — they're load-bearing for the mission
 above, so don't drop them for convenience:
 
-- **Staged-for-approval, one item at a time.** Every mutating action
-  (Apply, grab, tag) acts on exactly one already-approved thing. There is
-  no "apply everything" path anywhere, by design.
+- **Staged-for-approval.** Every mutating action (Apply, grab, tag) acts
+  only on already-approved things — nothing is ever auto-applied without a
+  human having reviewed it first at Scan/Discover time.
+  - **AMENDED 2026-07-17 — bounded bulk-apply exception (a deliberate,
+    documented reversal, not a silent one; see `docs/ROADMAP.md`'s Bulk
+    apply entry and `CHANGELOG.md`).** The original text here read "one
+    item at a time... no 'apply everything' path anywhere, by design." That
+    blanket rule is now narrowed, not dropped: Rename, Dedup, and Purge's
+    review queues each carry an opt-in, same-screen multi-select — the
+    operator checks several already-reviewed Pending rows/groups from ONE
+    workflow+mode screen and clicks "Apply Selected," which POSTs one
+    `apply-batch` request. The backend applies each item sequentially with
+    skip-and-continue semantics (one item's failure never blocks the rest;
+    every item gets its own ok/error result, no automatic retry) and fires
+    one combined player-notify for the whole batch. This is still NOT a
+    queue-wide "apply everything," a scheduler, or cross-mode/cross-workflow
+    batching — every single row's own Apply/Give back/Re-pick/Dismiss button
+    still acts on exactly one item, unchanged, and a batch never includes
+    anything the operator didn't explicitly check. Grabs and tag actions are
+    untouched by this — they still take exactly one already-approved thing,
+    same as always.
 - **Secrets encrypted at rest** (`internal/secrets`, a locally generated
   key file, not an OS keychain — the primary deployment target is a
   headless container with no keychain to use).
@@ -250,9 +275,12 @@ above, so don't drop them for convenience:
   (`pattern static: no matching files found`) until the frontend is built —
   the Dockerfile's discarded Node stage does this automatically. Load-bearing
   decisions the redesign preserves (don't quietly reverse them):
-  - **No bulk actions, single-operator, staged-for-approval** carry over
-    verbatim — the visual style is from Seerr, its multi-user
-    request/approval model is explicitly NOT (see `frontend/SEERR_SCOPE.md`).
+  - **Single-operator, staged-for-approval** carry over verbatim — the
+    visual style is from Seerr, its multi-user request/approval model is
+    explicitly NOT (see `frontend/SEERR_SCOPE.md`). Bulk apply (2026-07-17,
+    see the amended note above) is an opt-in, same-screen multi-select of
+    already-reviewed proposals within sakms's own single-operator model —
+    not Seerr's multi-user bulk request pattern, which stays out of scope.
   - **API request/response types are generated from Go DTOs**
     (`internal/apidto` → `ts/dto.gen.ts` via `go run ./cmd/gendto`), never
     hand-duplicated. The `*T`/`omitempty` three-state secret rule

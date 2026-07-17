@@ -1,12 +1,18 @@
-// Purge workflow data access (Stage 3). Ported verbatim from the vanilla-JS
-// frontend (internal/web/static/index.html's renderPurge). Purge is the staged
+// Purge workflow data access (Stage 3). Ported from the vanilla-JS frontend
+// (internal/web/static/index.html's renderPurge). Purge is the staged
 // scan→propose→apply DELETE queue keyed off an editable tag allowlist: Scan
 // matches each mode's allowlist against every tracked item's tags and enqueues
-// one delete proposal per match, the operator reviews the queue, and every
-// mutating action — Apply (Delete) / Dismiss on a proposal, and add/remove on
-// the allowlist itself — acts on EXACTLY ONE item. No bulk path exists anywhere
-// (proposals OR allowlist), matching the old frontend and the project's
-// no-bulk-action invariant.
+// one delete proposal per match, the operator reviews the queue, and each
+// single-item action — Apply (Delete) / Dismiss on a proposal, add/remove on
+// the allowlist — still acts on EXACTLY ONE item via its own control.
+//
+// One bounded bulk affordance now exists on the PROPOSALS queue only: applyBatch
+// backs the opt-in "Apply Selected" multi-select of already-reviewed Pending
+// delete proposals, applied sequentially server-side with skip-and-continue
+// (behind the same window.confirm guard the single delete has). It is NOT a
+// queue-wide delete-all and does not change how any single row deletes. The
+// ALLOWLIST stays deliberately bulk-free — one × per chip, one Add per input,
+// no clear-all/remove-all path.
 //
 // Unlike Rename, Purge has NO re-pick / give-back / draft: a proposal is only
 // ever Applied (delete the file + drop the record) or Dismissed. Its proposal
@@ -19,7 +25,12 @@
 // cookie and the global 401 → re-boot session-expiry fallback.
 
 import { api } from "./client";
-import type { Proposal, AllowlistAddRequest } from "@dto";
+import type {
+  ApplyBatchItem,
+  ApplyBatchResponse,
+  Proposal,
+  AllowlistAddRequest,
+} from "@dto";
 import type { Mode, ProposalStatus } from "./discover";
 
 export type { Proposal };
@@ -56,6 +67,21 @@ export function applyProposal(id: number): Promise<unknown> {
 // dismissProposal drops one proposal from the queue without deleting anything.
 export function dismissProposal(id: number): Promise<unknown> {
   return api(`/api/proposals/${id}/dismiss`, { method: "POST" });
+}
+
+// applyBatch deletes several already-reviewed Pending purge proposals in one
+// request (the "Apply Selected" affordance, gated behind a count-worded
+// window.confirm at the call site). The backend applies them sequentially and
+// skips-and-continues on a per-item failure, returning one result per requested
+// id. Purge items carry only an id (no Dedup keepIndex/keepAll). Applies only to
+// the proposals queue — the allowlist has no batch path.
+export function applyBatch(
+  items: ApplyBatchItem[],
+): Promise<ApplyBatchResponse> {
+  return api<ApplyBatchResponse>(`/api/proposals/apply-batch`, {
+    method: "POST",
+    body: JSON.stringify({ items }),
+  });
 }
 
 // fetchAllowlist returns one mode's current Purge tag allowlist — a bare array

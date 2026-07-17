@@ -624,6 +624,48 @@ export interface DedupApplyRequest {
   keepAll?: boolean;
 }
 /**
+ * ApplyBatchItem is one selected proposal plus its optional Dedup override.
+ * KeepIndex/KeepAll carry the same three-state Dedup semantics as
+ * DedupApplyRequest (a Dedup group's radio the operator changed before adding
+ * it to the batch); Rename and Purge items omit both. KeepIndex MUST be sent
+ * even when it is 0 — see DedupApplyRequest's doc comment for why a dropped
+ * literal 0 can delete the wrong file.
+ */
+export interface ApplyBatchItem {
+  id: number /* int64 */;
+  keepIndex?: number /* int */;
+  keepAll?: boolean;
+}
+/**
+ * ApplyBatchRequest is POST /api/proposals/apply-batch's body. Items is capped
+ * server-side (200); an empty Items is rejected.
+ */
+export interface ApplyBatchRequest {
+  items: ApplyBatchItem[];
+}
+/**
+ * ApplyBatchResultItem is one item's outcome — every requested id gets exactly
+ * one, in request order, whether it applied or was skipped. OK true means the
+ * proposal was applied and Proposal holds its refreshed (now-applied) row; OK
+ * false means it was skipped and Error explains why (the batch never aborts on
+ * a single failure). Proposal is the curated review-queue shape (same subset
+ * the Rename/Purge/Dedup views already consume), not the full domain struct.
+ */
+export interface ApplyBatchResultItem {
+  id: number /* int64 */;
+  ok: boolean;
+  error?: string;
+  proposal?: Proposal;
+}
+/**
+ * ApplyBatchResponse is POST /api/proposals/apply-batch's response — always
+ * HTTP 200; per-item success/failure lives here in Results, not in the status
+ * code.
+ */
+export interface ApplyBatchResponse {
+  results: ApplyBatchResultItem[];
+}
+/**
  * TagEntry is one entry in a mode's tag vocabulary — mirrors internal/api's
  * libraryTagEntry. A local tag has no numeric id, so ID and Label are the same
  * string value; ID exists only to keep the {id, label} shape the frontend's

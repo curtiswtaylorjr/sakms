@@ -1,5 +1,5 @@
 // workflowHooks — shared reactive patterns extracted from the four workflow
-// screens (Rename, Purge, Dedup, Tag). Two patterns are extracted:
+// screens (Rename, Purge, Dedup, Tag). Three patterns are extracted:
 //
 //   Pattern A — mode-change cleanup: a `createEffect + on` block that clears
 //   the shared actionError and any screen-specific state on mode switch.
@@ -7,7 +7,13 @@
 //   Pattern B — scan and act async wrappers: error capture, busy signal
 //   management, and post-success callbacks parameterized per screen.
 //
-// Only these two patterns are here. Screen-specific logic (Purge allowlist
+//   Pattern C — bulk selection (useBulkSelection): a Set<number> of selected
+//   proposal ids backing the opt-in "Apply Selected" multi-select on Rename,
+//   Purge, and Dedup. Genuinely identical across those three (a set of ids with
+//   toggle/select-all/clear); Tag has no bulk-apply surface and does not use it.
+//   That 3-of-4 sharing is why it belongs here rather than triplicated inline.
+//
+// Only these three patterns are here. Screen-specific logic (Purge allowlist
 // mutations, Dedup keepSel indexing, Rename re-pick panel, Tag draft map) is
 // NOT here — it only qualifies if it is genuinely identical or trivially
 // parameterizable across all four screens.
@@ -115,5 +121,42 @@ export function useWorkflowActions(
     scanning,
     scan,
     act,
+  };
+}
+
+// Pattern C — bulk selection. A reactive Set<number> of selected proposal ids
+// plus the three mutations the "Apply Selected" affordance needs. Every mutation
+// assigns a NEW Set (never mutates in place) so SolidJS re-renders the checkbox
+// column and action bar — same discipline as Purge's applyingIds guard.
+export interface BulkSelection {
+  /** The current set of selected proposal ids (read to track reactively). */
+  selected: Accessor<ReadonlySet<number>>;
+  /** True if id is currently selected — reactive when read in JSX. */
+  has: (id: number) => boolean;
+  /** How many ids are selected (0 = hide the action bar). */
+  size: Accessor<number>;
+  /** Add id if absent, remove it if present. */
+  toggle: (id: number) => void;
+  /** Replace the selection with exactly these ids (the select-all header). */
+  selectAll: (ids: number[]) => void;
+  /** Drop every selection — wired into mode-change, scan, and post-apply. */
+  clear: () => void;
+}
+
+export function useBulkSelection(): BulkSelection {
+  const [selected, setSelected] = createSignal<ReadonlySet<number>>(new Set());
+  return {
+    selected,
+    has: (id) => selected().has(id),
+    size: () => selected().size,
+    toggle: (id) =>
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    selectAll: (ids) => setSelected(new Set(ids)),
+    clear: () => setSelected(new Set()),
   };
 }

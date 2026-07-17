@@ -57,6 +57,12 @@ func TestHandlerDTOMirrorNoDrift(t *testing.T) {
 		{"addAllowlistTagRequest/AllowlistAddRequest", addAllowlistTagRequest{}, apidto.AllowlistAddRequest{}},
 		{"dismissSetupRequest/DismissSetupRequest", dismissSetupRequest{}, apidto.DismissSetupRequest{}},
 		{"applyProposalRequest/DedupApplyRequest", applyProposalRequest{}, apidto.DedupApplyRequest{}},
+		// applyBatchRequest/ApplyBatchResultItem/ApplyBatchResponse are excluded:
+		// each has a nested named-type field (a []applyBatchItem or a curated
+		// *proposals.Proposal) whose Go type string differs from its apidto
+		// mirror by construction, same reason Proposal/Candidate are excluded.
+		// applyBatchItem is all primitives, so it IS a full mirror worth guarding.
+		{"applyBatchItem/ApplyBatchItem", applyBatchItem{}, apidto.ApplyBatchItem{}},
 		{"repickProposalRequest/RepickRequest", repickProposalRequest{}, apidto.RepickRequest{}},
 		{"libraryTagEntry/TagEntry", libraryTagEntry{}, apidto.TagEntry{}},
 		{"libraryTrackedItem/TrackedItem", libraryTrackedItem{}, apidto.TrackedItem{}},

@@ -1,14 +1,23 @@
 // Rename workflow data access (Stage 3). The staged scan→propose→apply review
 // queue: Scan enqueues proposals server-side, the operator reviews each row, and
-// every mutating action (Apply / Give back / Re-pick / Dismiss) acts on EXACTLY
-// ONE already-listed proposal — no bulk path exists, matching the vanilla-JS
-// frontend this ports (internal/web/static/index.html's renderRename). Every
-// call goes through api() (src/api/client.ts) so it inherits the session cookie
-// and the global 401 → re-boot session-expiry fallback. Response shapes are the
+// each single-item mutating action (Apply / Give back / Re-pick / Dismiss) still
+// acts on EXACTLY ONE already-listed proposal via its own button. On top of that
+// there is now one bounded bulk affordance — applyBatch, backing the opt-in
+// "Apply Selected" multi-select of already-reviewed Pending rows — which the
+// backend applies sequentially with skip-and-continue (not a queue-wide
+// apply-all, and it does not change how any single row applies). Every call goes
+// through api() (src/api/client.ts) so it inherits the session cookie and the
+// global 401 → re-boot session-expiry fallback. Response shapes are the
 // generated DTOs (@dto), never hand-duplicated (plan Guardrail #4).
 
 import { api } from "./client";
-import type { DiscoverItem, Proposal, RepickRequest } from "@dto";
+import type {
+  ApplyBatchItem,
+  ApplyBatchResponse,
+  DiscoverItem,
+  Proposal,
+  RepickRequest,
+} from "@dto";
 import type { Mode, ProposalStatus } from "./discover";
 
 export type { Proposal, RepickRequest };
@@ -42,6 +51,21 @@ export function applyProposal(id: number): Promise<unknown> {
 // dismissProposal drops one proposal from the queue without acting on the file.
 export function dismissProposal(id: number): Promise<unknown> {
   return api(`/api/proposals/${id}/dismiss`, { method: "POST" });
+}
+
+// applyBatch applies several already-reviewed Pending proposals in one request
+// (the "Apply Selected" affordance). The backend applies them sequentially and
+// skips-and-continues on a per-item failure, returning one result per requested
+// id — never aborting the batch on a single failure. Rename items carry only an
+// id (no Dedup keepIndex/keepAll). Defined locally per workflow api module (like
+// applyProposal) so each screen stays self-contained on the shared route.
+export function applyBatch(
+  items: ApplyBatchItem[],
+): Promise<ApplyBatchResponse> {
+  return api<ApplyBatchResponse>(`/api/proposals/apply-batch`, {
+    method: "POST",
+    body: JSON.stringify({ items }),
+  });
 }
 
 // submitDraft ("Give back") hands one unmatched proposal back to the community

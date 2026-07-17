@@ -49,6 +49,22 @@ type applyProposalRequest struct {
 	KeepAll   bool `json:"keepAll,omitempty"`
 }
 
+// proposalApplyStore is the subset of *proposals.Store the apply paths touch —
+// the two lookups the handlers need plus the two "record the outcome" writes
+// applyByWorkflow performs. It exists only as a test seam: there is no natural
+// way to make a real store's post-commit MarkApplied write fail while the
+// physical move/delete already succeeded (SQLite won't fail an UPDATE of an
+// existing row), yet that exact partial-success case — committed file change +
+// failed DB write — is what the batch handler's unconditional change
+// accumulation must handle. A test wraps a real *proposals.Store and overrides
+// one method to exercise it. *proposals.Store satisfies this interface, so
+// NewMux's wiring is unchanged.
+type proposalApplyStore interface {
+	Get(ctx context.Context, id int64) (*proposals.Proposal, error)
+	MarkApplied(ctx context.Context, id int64, trackedID int) error
+	MarkFingerprintSubmitted(ctx context.Context, id int64) error
+}
+
 // applyProposalHandler commits exactly the one proposal ID in the URL, never
 // a batch, matching the design's staged-for-approval principle: a Scan
 // proposes, a human picks, Apply commits exactly that. The proposal's own
@@ -87,7 +103,16 @@ func applyProposalHandler(httpClient *http.Client, connStore *connections.Store,
 			return
 		}
 
-		if err := applyByWorkflow(ctx, settingsStore, propStore, libStore, sess, *p, req); err != nil {
+		// applyByWorkflow no longer notifies internally — it returns whatever
+		// it committed so the two call sites can choose when to fire
+		// NotifyPlayers (per-item here; once after the whole loop in the batch
+		// handler). The notify happens even when err is non-nil, preserving the
+		// partial-success rule the old internal defer had: a committed file move
+		// still reaches the players even if a later step (e.g. MarkApplied)
+		// failed. NotifyPlayers no-ops on empty changes.
+		changes, err := applyByWorkflow(ctx, settingsStore, propStore, libStore, sess, *p, req)
+		sess.NotifyPlayers(ctx, changes)
+		if err != nil {
 			if errors.Is(err, errUnknownWorkflow) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			} else {
@@ -117,19 +142,16 @@ var errUnknownWorkflow = errors.New("unknown proposal workflow")
 // give-back); Purge's delete either fully succeeds or fully fails; Dedup's
 // Apply returns the resulting tracked id the same way Rename's does — so each
 // branch marks the queue accordingly rather than forcing all three through
-// one shared success rule. A committed file move is still fed to
-// sess.NotifyPlayers even when the branch returns a non-nil err afterward
-// (partial-success rule; changes is captured before the error check).
-func applyByWorkflow(ctx context.Context, settingsStore *settings.Store, propStore *proposals.Store, libStore *library.Store, sess *mode.Session, p proposals.Proposal, req applyProposalRequest) error {
-	// changes accumulates whatever file-level mutations the branch below
-	// actually commits to disk; the deferred NotifyPlayers fires on
-	// whatever landed in it even when the branch goes on to return a
-	// non-nil err (partial success — see each Apply function's doc
-	// comment). Nil changes on an early error means nothing committed, so
-	// NotifyPlayers correctly no-ops (len(changes) == 0 short-circuit).
-	var changes []mode.PathChange
-	defer func() { sess.NotifyPlayers(ctx, changes) }()
-
+// one shared success rule. It returns whatever file moves/deletes it
+// committed to disk (changes) alongside the error, so the caller can feed
+// those to sess.NotifyPlayers even when err is non-nil (partial-success rule
+// — a committed move still reaches the players; see each Apply function's doc
+// comment). It deliberately does NOT notify itself: the single-item handler
+// notifies per call, while the batch handler suppresses the per-item notify
+// and fires one combined call after its whole loop. changes is nil on an
+// early error (nothing committed), which makes NotifyPlayers correctly no-op
+// (len(changes) == 0 short-circuit).
+func applyByWorkflow(ctx context.Context, settingsStore *settings.Store, propStore proposalApplyStore, libStore *library.Store, sess *mode.Session, p proposals.Proposal, req applyProposalRequest) ([]mode.PathChange, error) {
 	switch p.Workflow {
 	case proposals.Rename:
 		switch p.Mode {
@@ -141,99 +163,225 @@ func applyByWorkflow(ctx context.Context, settingsStore *settings.Store, propSto
 			// anything precomputed at Scan.
 			preset, err := resolveNamingPreset(ctx, settingsStore, p.Mode)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if p.Mode == mode.Movies {
-				itemID, c, err := rename.ApplyLibrary(ctx, libStore, p, preset)
-				changes = c
+				itemID, changes, err := rename.ApplyLibrary(ctx, libStore, p, preset)
 				if err != nil {
-					return err
+					return changes, err
 				}
-				return propStore.MarkApplied(ctx, p.ID, int(itemID))
+				return changes, propStore.MarkApplied(ctx, p.ID, int(itemID))
 			}
-			episodeID, c, err := rename.ApplyLibrarySeries(ctx, libStore, p, preset)
-			changes = c
+			episodeID, changes, err := rename.ApplyLibrarySeries(ctx, libStore, p, preset)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, int(episodeID))
+			return changes, propStore.MarkApplied(ctx, p.ID, int(episodeID))
 		case mode.Adult:
 			// Adult owns its own library now too (Whisparr eliminated,
 			// Stage 4): relocate+rename to the AdultFileName scheme and
 			// UpsertScene, never touching Whisparr. sess is threaded in only
-			// for fingerprint give-back (best-effort). changes is captured
+			// for fingerprint give-back (best-effort). changes is returned
 			// before the error check so a post-move UpsertScene failure still
 			// notifies Stash of what physically moved (partial-success rule,
 			// same as the Movies/Series library path).
-			sceneID, fingerprintSubmitted, c, err := rename.ApplyLibraryAdult(ctx, sess, libStore, p)
-			changes = c
+			sceneID, fingerprintSubmitted, changes, err := rename.ApplyLibraryAdult(ctx, sess, libStore, p)
 			if err != nil {
-				return err
+				return changes, err
 			}
 			if markErr := propStore.MarkApplied(ctx, p.ID, int(sceneID)); markErr != nil {
-				return markErr
+				return changes, markErr
 			}
 			if fingerprintSubmitted {
-				return propStore.MarkFingerprintSubmitted(ctx, p.ID)
+				return changes, propStore.MarkFingerprintSubmitted(ctx, p.ID)
 			}
-			return nil
+			return changes, nil
 		default:
-			return fmt.Errorf("rename for unknown mode %q", p.Mode)
+			return nil, fmt.Errorf("rename for unknown mode %q", p.Mode)
 		}
 	case proposals.Purge:
 		switch p.Mode {
 		case mode.Movies:
-			c, err := purge.ApplyLibrary(ctx, libStore, p)
-			changes = c
+			changes, err := purge.ApplyLibrary(ctx, libStore, p)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
+			return changes, propStore.MarkApplied(ctx, p.ID, p.TrackedID)
 		case mode.Series:
-			c, err := purge.ApplyLibrarySeries(ctx, libStore, p)
-			changes = c
+			changes, err := purge.ApplyLibrarySeries(ctx, libStore, p)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
+			return changes, propStore.MarkApplied(ctx, p.ID, p.TrackedID)
 		case mode.Adult:
-			c, err := purge.ApplyLibraryAdult(ctx, libStore, p)
-			changes = c
+			changes, err := purge.ApplyLibraryAdult(ctx, libStore, p)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, p.TrackedID)
+			return changes, propStore.MarkApplied(ctx, p.ID, p.TrackedID)
 		default:
-			return fmt.Errorf("purge for unknown mode %q", p.Mode)
+			return nil, fmt.Errorf("purge for unknown mode %q", p.Mode)
 		}
 	case proposals.Dedup:
 		switch p.Mode {
 		case mode.Movies:
-			itemID, c, err := dedup.ApplyLibrary(ctx, libStore, p, req.KeepIndex, req.KeepAll)
-			changes = c
+			itemID, changes, err := dedup.ApplyLibrary(ctx, libStore, p, req.KeepIndex, req.KeepAll)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, int(itemID))
+			return changes, propStore.MarkApplied(ctx, p.ID, int(itemID))
 		case mode.Series:
-			episodeID, c, err := dedup.ApplyLibrarySeries(ctx, libStore, p, req.KeepIndex, req.KeepAll)
-			changes = c
+			episodeID, changes, err := dedup.ApplyLibrarySeries(ctx, libStore, p, req.KeepIndex, req.KeepAll)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, int(episodeID))
+			return changes, propStore.MarkApplied(ctx, p.ID, int(episodeID))
 		case mode.Adult:
-			sceneID, c, err := dedup.ApplyLibraryAdult(ctx, libStore, p, req.KeepIndex, req.KeepAll)
-			changes = c
+			sceneID, changes, err := dedup.ApplyLibraryAdult(ctx, libStore, p, req.KeepIndex, req.KeepAll)
 			if err != nil {
-				return err
+				return changes, err
 			}
-			return propStore.MarkApplied(ctx, p.ID, int(sceneID))
+			return changes, propStore.MarkApplied(ctx, p.ID, int(sceneID))
 		default:
-			return fmt.Errorf("dedup for unknown mode %q", p.Mode)
+			return nil, fmt.Errorf("dedup for unknown mode %q", p.Mode)
 		}
 	default:
-		return fmt.Errorf("%w: %q", errUnknownWorkflow, p.Workflow)
+		return nil, fmt.Errorf("%w: %q", errUnknownWorkflow, p.Workflow)
+	}
+}
+
+// maxBatchItems bounds one apply-batch request. The proposals List endpoint
+// has no pagination cap of its own to reuse, so this is the plan's fallback
+// bound (200): a screen's worth of already-reviewed Pending rows applied in
+// one click, not an unbounded firehose.
+const maxBatchItems = 200
+
+// applyBatchItem is one entry in an apply-batch request. It carries the same
+// per-item Dedup override fields as applyProposalRequest (KeepIndex/KeepAll);
+// Rename and Purge items ignore them, exactly as the single-item path does.
+type applyBatchItem struct {
+	ID        int64 `json:"id"`
+	KeepIndex *int  `json:"keepIndex,omitempty"`
+	KeepAll   bool  `json:"keepAll,omitempty"`
+}
+
+// applyBatchRequest is the body of POST /api/proposals/apply-batch — a
+// same-screen (single workflow+mode) multi-select of already-reviewed Pending
+// proposals to apply sequentially. No mode/workflow in the path: each proposal
+// carries its own, looked up per item, so the existing applyByWorkflow
+// dispatch is reused unchanged, just looped.
+type applyBatchRequest struct {
+	Items []applyBatchItem `json:"items"`
+}
+
+// applyBatchResultItem is one item's outcome. OK true means the proposal was
+// applied and Proposal holds its refreshed (now Applied) row; OK false means
+// it was skipped with Error explaining why — the batch never aborts early, so
+// every requested id gets exactly one result.
+type applyBatchResultItem struct {
+	ID       int64               `json:"id"`
+	OK       bool                `json:"ok"`
+	Error    string              `json:"error,omitempty"`
+	Proposal *proposals.Proposal `json:"proposal,omitempty"`
+}
+
+type applyBatchResponse struct {
+	Results []applyBatchResultItem `json:"results"`
+}
+
+// applyBatchHandler applies a same-screen selection of Pending proposals
+// sequentially with skip-and-continue semantics: one item's failure never
+// stops the batch, every requested id gets an individual ok/error result, and
+// the response is always 200 (per-item success lives in the body, not the HTTP
+// status). Each item's file mutations are accumulated and fed to
+// NotifyPlayers exactly once after the whole loop — one combined player-rescan
+// notification instead of one per item. Sequential (not concurrent) by design:
+// it matches today's one-at-a-time mental model and avoids reasoning about
+// concurrent filesystem mutations across items that may touch overlapping
+// paths (e.g. the same series folder). See .omc/plans/bulk-apply.md.
+func applyBatchHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore proposalApplyStore, libStore *library.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		var req applyBatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if len(req.Items) == 0 {
+			http.Error(w, "items must not be empty", http.StatusBadRequest)
+			return
+		}
+		if len(req.Items) > maxBatchItems {
+			http.Error(w, fmt.Sprintf("too many items: %d exceeds the %d-item batch cap", len(req.Items), maxBatchItems), http.StatusBadRequest)
+			return
+		}
+
+		// A batch is scoped to one screen (single workflow+mode), so every
+		// item shares a mode in normal use. Sessions are built lazily and
+		// cached by mode so mode.Build runs at most once per distinct mode
+		// rather than once per item. changesByMode groups committed mutations
+		// by mode so the post-loop notify fires exactly once per mode through
+		// the correct mode-scoped session — routing changes through a single
+		// last-built session would misroute a cross-mode batch's player
+		// notifications (best-effort only, but correctness is free here).
+		sessions := make(map[mode.Mode]*mode.Session)
+		changesByMode := make(map[mode.Mode][]mode.PathChange)
+		results := make([]applyBatchResultItem, 0, len(req.Items))
+
+		for _, item := range req.Items {
+			p, err := propStore.Get(ctx, item.ID)
+			if err != nil {
+				results = append(results, applyBatchResultItem{ID: item.ID, OK: false, Error: err.Error()})
+				continue
+			}
+
+			sess, ok := sessions[p.Mode]
+			if !ok {
+				sess, err = mode.Build(ctx, connStore, settingsStore, httpClient, p.Mode)
+				if err != nil {
+					results = append(results, applyBatchResultItem{ID: item.ID, OK: false, Error: err.Error()})
+					continue
+				}
+				sessions[p.Mode] = sess
+			}
+
+			changes, err := applyByWorkflow(ctx, settingsStore, propStore, libStore, sess, *p, applyProposalRequest{KeepIndex: item.KeepIndex, KeepAll: item.KeepAll})
+			// Accumulate committed changes unconditionally — independent of the
+			// item's ok/error result. applyByWorkflow returns non-nil changes
+			// alongside a non-nil err when the physical move/delete committed
+			// but a later step (e.g. the MarkApplied DB write) failed: the file
+			// really moved, so the players must be told regardless of whether
+			// the proposal row got marked Applied. This mirrors the single-item
+			// handler's unconditional notify (partial-success rule). Only the
+			// Results entry below depends on err.
+			changesByMode[p.Mode] = append(changesByMode[p.Mode], changes...)
+			if err != nil {
+				results = append(results, applyBatchResultItem{ID: item.ID, OK: false, Error: err.Error()})
+				continue
+			}
+
+			updated, err := propStore.Get(ctx, item.ID)
+			if err != nil {
+				results = append(results, applyBatchResultItem{ID: item.ID, OK: false, Error: err.Error()})
+				continue
+			}
+			results = append(results, applyBatchResultItem{ID: item.ID, OK: true, Proposal: updated})
+		}
+
+		// Fire one NotifyPlayers call per mode so each mode's changes reach
+		// the correct mode-scoped players (Jellyfin for Movies/Series, Stash
+		// for Adult). sessions[m] is always non-nil here since a mode entry is
+		// only added after a successful mode.Build. NotifyPlayers is a no-op
+		// on an empty slice.
+		for m, changes := range changesByMode {
+			if sess := sessions[m]; sess != nil {
+				sess.NotifyPlayers(ctx, changes)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(applyBatchResponse{Results: results})
 	}
 }
 

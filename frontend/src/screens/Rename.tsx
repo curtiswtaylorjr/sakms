@@ -4,9 +4,18 @@
 // follow-up, see .omc/handoffs/stage-3-rename.md — the old frontend's single
 // generic table never surfaced these, and an earlier wave correctly declined to
 // add them without an explicit decision). Scan enqueues proposals; the operator
-// reviews a table of them and acts on EXACTLY ONE per click. There is no bulk
-// affordance anywhere — no "apply all", no multi-select (Guardrail #3 / the
-// project's no-bulk invariant); a dedicated test asserts this.
+// reviews a table of them and acts on each row via its own single-item button.
+//
+// Bulk apply — the one bounded exception to the project's original "one item at
+// a time, no apply-everything" rule (a deliberate, documented reversal; see
+// ROADMAP.md's Bulk apply entry and the top-level CLAUDE.md's amended
+// engineering-conventions note). Pending rows carry a selection checkbox plus a
+// select-all-pending header toggle; with a non-empty selection an "Apply
+// Selected (N)" button posts one apply-batch request covering exactly those
+// already-reviewed rows, which the backend applies sequentially with
+// skip-and-continue and reports per item. This is NOT a queue-wide apply-all,
+// and it does not change how any single row still applies one at a time via its
+// own Apply button.
 //
 // Table shape:
 //   - Shared columns, every mode: Source / Title / Status / Root Folder /
@@ -34,9 +43,11 @@ import {
   Show,
 } from "solid-js";
 import type { Mode } from "../api/discover";
+import type { ApplyBatchItem, ApplyBatchResponse } from "@dto";
 import {
   type Proposal,
   type ProposalStatus,
+  applyBatch,
   applyProposal,
   dismissProposal,
   fetchProposals,
@@ -46,6 +57,7 @@ import {
   tmdbSearch,
 } from "../api/rename";
 import {
+  BatchResultSummary,
   Button,
   ErrorText,
   ModeTabs,
@@ -53,7 +65,7 @@ import {
   StatusPill,
   yearOf,
 } from "../components/ui";
-import { useWorkflowActions } from "./workflowHooks";
+import { useBulkSelection, useWorkflowActions } from "./workflowHooks";
 
 // shortHash renders the PHash column value — the full scheme-tagged hash is
 // too long to usefully show inline, so the cell shows a short prefix and the
@@ -191,22 +203,71 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
     (m) => fetchProposals(m),
   );
   const [repickFor, setRepickFor] = createSignal<Proposal | null>(null);
+  // Bulk selection of Pending rows + the last "Apply Selected" outcome. The
+  // selection clears on mode-change/scan/act (stale ids must not survive a
+  // re-fetched queue); batchResult persists past act (so the summary survives
+  // its own apply) but is cleared on the next scan, mode-change, or new batch.
+  const selection = useBulkSelection();
+  const [batchResult, setBatchResult] = createSignal<ApplyBatchResponse | null>(
+    null,
+  );
 
-  // Switching modes clears any open re-pick panel and stale action error — the
-  // old frontend rebuilt the whole view on a mode change, which had this effect.
-  // scan does NOT close repickFor (scan and act have independent post-success
-  // resets); only act closes it.
+  // Switching modes clears any open re-pick panel, stale action error, the
+  // selection, and the previous batch summary — the old frontend rebuilt the
+  // whole view on a mode change, which had this effect. scan does NOT close
+  // repickFor (scan and act have independent post-success resets); only act
+  // closes it. act clears the selection but NOT batchResult, so a batch's own
+  // summary survives the act that produced it.
   const { actionError, setActionError, scanning, scan, act } = useWorkflowActions(
     () => props.mode,
     {
-      resetOnModeChange: () => setRepickFor(null),
+      resetOnModeChange: () => {
+        setRepickFor(null);
+        selection.clear();
+        setBatchResult(null);
+      },
       scanFn: scanRename,
-      resetAfterAct: () => setRepickFor(null),
+      resetAfterScan: () => {
+        selection.clear();
+        setBatchResult(null);
+      },
+      resetAfterAct: () => {
+        setRepickFor(null);
+        selection.clear();
+      },
       refetch,
     },
   );
 
   const isTitleMode = () => props.mode === "movies" || props.mode === "series";
+
+  // pendingIds are the ids selectable/batchable — only Pending rows can Apply.
+  const pendingIds = (): number[] =>
+    (proposals() ?? []).filter((p) => p.status === "pending").map((p) => p.id);
+  const allPendingSelected = (): boolean => {
+    const ids = pendingIds();
+    return ids.length > 0 && ids.every((id) => selection.has(id));
+  };
+  const toggleSelectAll = (): void => {
+    if (allPendingSelected()) selection.clear();
+    else selection.selectAll(pendingIds());
+  };
+  const titleOf = (id: number): string => {
+    const p = (proposals() ?? []).find((x) => x.id === id);
+    return p ? p.title || p.sourceName || "" : "";
+  };
+  // applySelected posts ONE apply-batch for the current selection (already-
+  // reviewed Pending rows). Rename items carry only an id.
+  const applySelected = (): void => {
+    const items: ApplyBatchItem[] = [...selection.selected()].map((id) => ({
+      id,
+    }));
+    if (items.length === 0) return;
+    setBatchResult(null);
+    void act(async () => {
+      setBatchResult(await applyBatch(items));
+    });
+  };
 
   return (
     <div>
@@ -214,10 +275,18 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
         <Button variant="primary" onClick={() => void scan(props.mode)} disabled={scanning()}>
           {scanning() ? "Scanning…" : "Scan"}
         </Button>
+        <Show when={selection.size() > 0}>
+          <Button variant="primary" onClick={applySelected}>
+            Apply Selected ({selection.size()})
+          </Button>
+        </Show>
       </div>
 
       <Show when={actionError()}>
         <ErrorText>{actionError()}</ErrorText>
+      </Show>
+      <Show when={batchResult()}>
+        {(res) => <BatchResultSummary result={res()} titleOf={titleOf} />}
       </Show>
       <Show when={proposals.error}>
         <ErrorText>{(proposals.error as Error)?.message}</ErrorText>
@@ -232,6 +301,15 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
             <table class="w-full text-left text-sm">
               <thead>
                 <tr class="border-b border-border text-xs uppercase tracking-wide text-muted">
+                  <th class="px-2 py-2 font-medium">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all pending"
+                      checked={allPendingSelected()}
+                      disabled={pendingIds().length === 0}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
                   <th class="px-2 py-2 font-medium">Source</th>
                   <th class="px-2 py-2 font-medium">Title</th>
                   <Show when={props.mode === "movies" || props.mode === "series"}>
@@ -260,6 +338,16 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
                       status === "pending" || status === "unmatched";
                     return (
                       <tr class="border-b border-border/60 align-top">
+                        <td class="px-2 py-2">
+                          <Show when={status === "pending"}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${p.sourceName}`}
+                              checked={selection.has(p.id)}
+                              onChange={() => selection.toggle(p.id)}
+                            />
+                          </Show>
+                        </td>
                         <td class="px-2 py-2 text-fg">{p.sourceName}</td>
                         <td class="px-2 py-2 text-fg">{p.title || ""}</td>
                         <Show when={props.mode === "movies" || props.mode === "series"}>
