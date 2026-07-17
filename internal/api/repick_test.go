@@ -15,12 +15,19 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/tmdb"
 )
 
-// fakeTMDBRepickServer serves /search/movie, returning results keyed by the
-// exact query string — lets a single fake TMDB stand in for both Scan's
-// automatic (weak) search and the operator's manual re-pick search.
+// fakeTMDBRepickServer serves /search/movie and /movie/{id} — the latter is
+// called by enrichMovieCollection after Apply; a no-collection response is
+// returned so the enrichment is a no-op for test movies.
 func fakeTMDBRepickServer(t *testing.T, results map[string]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/movie/") {
+			// Minimal details response with no belongs_to_collection.
+			id := strings.TrimPrefix(r.URL.Path, "/movie/")
+			json.NewEncoder(w).Encode(map[string]any{"id": id})
+			return
+		}
 		if r.URL.Path != "/search/movie" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -29,7 +36,6 @@ func fakeTMDBRepickServer(t *testing.T, results map[string]string) *httptest.Ser
 		if !ok {
 			t.Fatalf("unexpected search query %q", query)
 		}
-		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(body))
 	}))
 }

@@ -80,6 +80,7 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("POST /api/netscan/prowlarr-key", netscanProwlarrKeyHandler(httpClient))
 
 	mux.HandleFunc("GET /api/modes/{mode}/tracked", listTrackedHandler(httpClient, connStore, settingsStore, libStore))
+	mux.HandleFunc("GET /api/modes/{mode}/collections", collectionsHandler(libStore))
 	mux.HandleFunc("GET /api/modes/{mode}/library/root-folder", getLibraryRootFolderHandler(settingsStore))
 	mux.HandleFunc("PUT /api/modes/{mode}/library/root-folder", putLibraryRootFolderHandler(settingsStore))
 	// Validates that a candidate root folder both exists and is writable (SAK

@@ -40,13 +40,14 @@ import { Rename } from "./Rename";
 import { Purge } from "./Purge";
 import { Dedup } from "./Dedup";
 import { Tag } from "./Tag";
+import { Collections } from "./Collections";
 import { Settings } from "./Settings";
 
 // APP_ROUTES is the exhaustive list of client-side route patterns the router
 // serves. Guardrail #2 / requirement #7: the router must NEVER claim any
 // /api/* path (the OIDC callback /api/auth/oidc/callback is a real server
 // route). A unit test asserts none of these start with "/api".
-export const APP_ROUTES = ["/dashboard", "/", "/discover", "/grabs", "/rename", "/purge", "/dedup", "/tag", "/settings"] as const;
+export const APP_ROUTES = ["/dashboard", "/", "/discover", "/grabs", "/rename", "/purge", "/dedup", "/tag", "/collections", "/settings"] as const;
 
 // SIDEBAR_COLLAPSED_KEY persists the sidebar's collapsed/expanded choice across
 // reloads. A single boolean is enough ("true" = collapsed).
@@ -141,6 +142,12 @@ const IconTag: Component = () => (
     <circle cx="7.5" cy="7.5" r="1.2" />
   </svg>
 );
+const IconCollections: Component = () => (
+  <svg {...svgProps}>
+    <rect x="2" y="7" width="16" height="13" rx="2" />
+    <path d="M6 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2" />
+  </svg>
+);
 const IconSettings: Component = () => (
   <svg {...svgProps}>
     <circle cx="12" cy="12" r="3" />
@@ -170,6 +177,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/purge", label: "Purge", icon: IconPurge },
   { href: "/dedup", label: "Dedup", icon: IconDedup },
   { href: "/tag", label: "Tag", icon: IconTag },
+  { href: "/collections", label: "Collections", icon: IconCollections },
   { href: "/settings", label: "Settings", icon: IconSettings },
 ];
 
@@ -397,6 +405,7 @@ export const AppShell: Component<{
       <Route path="/purge" component={Purge} />
       <Route path="/dedup" component={Dedup} />
       <Route path="/tag" component={Tag} />
+      <Route path="/collections" component={Collections} />
       <Route
         path="/settings"
         component={() => <Settings onReboot={props.onLoggedOut} />}

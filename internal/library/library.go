@@ -60,6 +60,12 @@ type Item struct {
 	PHashFileMTime string `json:"phashFileMtime,omitempty"`
 	CreatedAt      string `json:"createdAt"`
 	UpdatedAt      string `json:"updatedAt"`
+	// TMDBCollectionID and CollectionName are populated by List/Get/GetByTMDBID
+	// via a LEFT JOIN on library_collections. Both are zero/empty for movies
+	// with no franchise collection. Never written by Upsert — use
+	// UpsertCollection + SetItemCollection instead.
+	TMDBCollectionID int    `json:"tmdbCollectionId,omitempty"`
+	CollectionName   string `json:"collectionName,omitempty"`
 }
 
 type Store struct {
@@ -119,8 +125,12 @@ func (s *Store) UpdatePHash(ctx context.Context, id int64, phash string, fileSiz
 // List returns every item tracked for m, ordered by title.
 func (s *Store) List(ctx context.Context, m mode.Mode) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, created_at, updated_at
-		FROM library_items WHERE mode = ? ORDER BY title
+		SELECT li.id, li.mode, li.tmdb_id, li.title, li.year, li.file_path, li.root_folder_path,
+		       li.phash, li.phash_file_size, li.phash_file_mtime, li.created_at, li.updated_at,
+		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, '')
+		FROM library_items li
+		LEFT JOIN library_collections c ON c.id = li.collection_id
+		WHERE li.mode = ? ORDER BY li.title
 	`, string(m))
 	if err != nil {
 		return nil, fmt.Errorf("listing library items: %w", err)
@@ -141,8 +151,12 @@ func (s *Store) List(ctx context.Context, m mode.Mode) ([]Item, error) {
 // Get returns a single item by ID.
 func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, created_at, updated_at
-		FROM library_items WHERE id = ?
+		SELECT li.id, li.mode, li.tmdb_id, li.title, li.year, li.file_path, li.root_folder_path,
+		       li.phash, li.phash_file_size, li.phash_file_mtime, li.created_at, li.updated_at,
+		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, '')
+		FROM library_items li
+		LEFT JOIN library_collections c ON c.id = li.collection_id
+		WHERE li.id = ?
 	`, id)
 	item, err := scanItem(row)
 	if err != nil {
@@ -159,8 +173,12 @@ func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
 // TVDB/TMDB-keyed TrackedItem list.
 func (s *Store) GetByTMDBID(ctx context.Context, m mode.Mode, tmdbID int) (*Item, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, created_at, updated_at
-		FROM library_items WHERE mode = ? AND tmdb_id = ?
+		SELECT li.id, li.mode, li.tmdb_id, li.title, li.year, li.file_path, li.root_folder_path,
+		       li.phash, li.phash_file_size, li.phash_file_mtime, li.created_at, li.updated_at,
+		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, '')
+		FROM library_items li
+		LEFT JOIN library_collections c ON c.id = li.collection_id
+		WHERE li.mode = ? AND li.tmdb_id = ?
 	`, string(m), tmdbID)
 	item, err := scanItem(row)
 	if err != nil {
@@ -260,9 +278,74 @@ func (s *Store) TagVocabulary(ctx context.Context, m mode.Mode) ([]string, error
 	return out, rows.Err()
 }
 
+// UpsertCollection inserts a TMDB collection or updates its name if it already
+// exists, returning the library_collections.id. Idempotent — safe to call on
+// every Movies Rename Apply without risk of duplicating collection rows.
+func (s *Store) UpsertCollection(ctx context.Context, tmdbCollectionID int, name string) (int64, error) {
+	row := s.db.QueryRowContext(ctx, `
+		INSERT INTO library_collections (tmdb_collection_id, name)
+		VALUES (?, ?)
+		ON CONFLICT(tmdb_collection_id) DO UPDATE SET name = excluded.name
+		RETURNING id
+	`, tmdbCollectionID, name)
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		return 0, fmt.Errorf("upserting collection %q: %w", name, err)
+	}
+	return id, nil
+}
+
+// SetItemCollection sets the collection_id FK on an existing library_items row.
+// Matching Delete's convention, acting on a non-existent id is not an error.
+func (s *Store) SetItemCollection(ctx context.Context, itemID, collectionID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE library_items
+		SET collection_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		WHERE id = ?
+	`, collectionID, itemID)
+	if err != nil {
+		return fmt.Errorf("setting collection on library item %d: %w", itemID, err)
+	}
+	return nil
+}
+
+// ListCollections returns every TMDB collection referenced by at least one
+// tracked movie, with the count of tracked movies in each, ordered by name.
+func (s *Store) ListCollections(ctx context.Context) ([]CollectionSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.tmdb_collection_id, c.name, COUNT(li.id)
+		FROM library_collections c
+		JOIN library_items li ON li.collection_id = c.id AND li.mode = 'movies'
+		GROUP BY c.id, c.tmdb_collection_id, c.name
+		ORDER BY c.name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("listing collections: %w", err)
+	}
+	defer rows.Close()
+
+	out := []CollectionSummary{}
+	for rows.Next() {
+		var cs CollectionSummary
+		if err := rows.Scan(&cs.TMDBCollectionID, &cs.Name, &cs.Count); err != nil {
+			return nil, fmt.Errorf("scanning collection: %w", err)
+		}
+		out = append(out, cs)
+	}
+	return out, rows.Err()
+}
+
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+// CollectionSummary is one TMDB collection referenced by at least one tracked
+// movie, with the count of tracked movies belonging to it.
+type CollectionSummary struct {
+	TMDBCollectionID int
+	Name             string
+	Count            int
 }
 
 func scanItem(row rowScanner) (Item, error) {
@@ -271,7 +354,8 @@ func scanItem(row rowScanner) (Item, error) {
 	err := row.Scan(&item.ID, &m, &item.TMDBID, &item.Title, &item.Year,
 		&item.FilePath, &item.RootFolderPath,
 		&item.PHash, &item.PHashFileSize, &item.PHashFileMTime,
-		&item.CreatedAt, &item.UpdatedAt)
+		&item.CreatedAt, &item.UpdatedAt,
+		&item.TMDBCollectionID, &item.CollectionName)
 	item.Mode = mode.Mode(m)
 	return item, err
 }

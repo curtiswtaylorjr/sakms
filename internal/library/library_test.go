@@ -436,6 +436,112 @@ func TestScanRootFolder_SkipsKnownSubdirectoryEntirely(t *testing.T) {
 	}
 }
 
+func TestUpsertCollection_IdempotentUpdatesName(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	id1, err := s.UpsertCollection(ctx, 12345, "Avengers Collection")
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	if id1 == 0 {
+		t.Fatal("expected non-zero id")
+	}
+
+	// Second call with same tmdbCollectionID but updated name — must update, not duplicate.
+	id2, err := s.UpsertCollection(ctx, 12345, "Avengers Collection (updated)")
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if id2 != id1 {
+		t.Errorf("expected idempotent upsert to return same id %d, got %d", id1, id2)
+	}
+}
+
+func TestSetItemCollection_SetsCollectionOnItem(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	item, err := s.Upsert(ctx, Item{
+		Mode: mode.Movies, TMDBID: 42, Title: "Iron Man", Year: 2008,
+		FilePath: "/movies/Iron Man/movie.mkv", RootFolderPath: "/movies",
+	})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	collID, err := s.UpsertCollection(ctx, 131292, "Iron Man Collection")
+	if err != nil {
+		t.Fatalf("upsert collection: %v", err)
+	}
+
+	if err := s.SetItemCollection(ctx, item.ID, collID); err != nil {
+		t.Fatalf("SetItemCollection: %v", err)
+	}
+
+	all, err := s.List(ctx, mode.Movies)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(all))
+	}
+	if all[0].TMDBCollectionID != 131292 {
+		t.Errorf("TMDBCollectionID: want 131292, got %d", all[0].TMDBCollectionID)
+	}
+	if all[0].CollectionName != "Iron Man Collection" {
+		t.Errorf("CollectionName: want %q, got %q", "Iron Man Collection", all[0].CollectionName)
+	}
+}
+
+func TestListCollections_CountsMoviesPerCollection(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	collID, _ := s.UpsertCollection(ctx, 500, "MCU")
+
+	for i, title := range []string{"Iron Man", "Thor", "Captain America"} {
+		item, _ := s.Upsert(ctx, Item{
+			Mode: mode.Movies, TMDBID: i + 1, Title: title, Year: 2010 + i,
+			FilePath: "/movies/" + title + "/movie.mkv", RootFolderPath: "/movies",
+		})
+		s.SetItemCollection(ctx, item.ID, collID) //nolint:errcheck
+	}
+
+	cols, err := s.ListCollections(ctx)
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(cols) != 1 {
+		t.Fatalf("expected 1 collection, got %d", len(cols))
+	}
+	if cols[0].TMDBCollectionID != 500 {
+		t.Errorf("TMDBCollectionID: want 500, got %d", cols[0].TMDBCollectionID)
+	}
+	if cols[0].Name != "MCU" {
+		t.Errorf("Name: want %q, got %q", "MCU", cols[0].Name)
+	}
+	if cols[0].Count != 3 {
+		t.Errorf("Count: want 3, got %d", cols[0].Count)
+	}
+}
+
+func TestListCollections_EmptyWhenNoMoviesInCollection(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// A collection exists but no movies are linked — must not appear in the list.
+	s.UpsertCollection(ctx, 999, "Orphan Collection") //nolint:errcheck
+
+	cols, err := s.ListCollections(ctx)
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(cols) != 0 {
+		t.Errorf("expected empty list for unlinked collection, got %+v", cols)
+	}
+}
+
 func TestScanRootFolder_ExcludesBonusContentDirectories(t *testing.T) {
 	dir := t.TempDir()
 	movieDir := filepath.Join(dir, "Title (2024)")

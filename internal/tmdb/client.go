@@ -213,11 +213,20 @@ func (c *Client) ExternalIDs(ctx context.Context, tmdbTVID int) (tvdbID int, err
 	return resp.TVDBID, nil
 }
 
+// CollectionRef is the subset of TMDB's belongs_to_collection object SAK
+// records when a movie belongs to a franchise collection. ID == 0 means the
+// movie has no collection entry on TMDB (field absent or null in the response).
+type CollectionRef struct {
+	ID   int    // TMDB collection id
+	Name string
+}
+
 // MovieDetails is the subset of TMDB's /movie/{id} response SAK needs to
 // turn a picked TMDB id into a precise, id-based indexer query — chiefly
 // IMDBID, which /movie/{id} carries natively at the top level (no separate
 // external_ids round-trip, unlike TV — see TVDetails). Runtime/Genres are
-// cheap extras from the same response.
+// cheap extras from the same response. Collection carries the
+// belongs_to_collection franchise data (zero value when absent).
 type MovieDetails struct {
 	ID         int
 	Title      string
@@ -225,6 +234,7 @@ type MovieDetails struct {
 	IMDBID     string // "" if TMDB has none on file
 	Runtime    int    // minutes; 0 if TMDB reports null
 	Genres     []string
+	Collection CollectionRef // zero (ID==0) when movie has no franchise collection
 }
 
 type movieDetailsResponse struct {
@@ -236,6 +246,10 @@ type movieDetailsResponse struct {
 	Genres     []struct {
 		Name string `json:"name"`
 	} `json:"genres"`
+	BelongsToCollection struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	} `json:"belongs_to_collection"`
 }
 
 // MovieDetails fetches TMDB's /movie/{id} — the details-by-id lookup that
@@ -258,6 +272,12 @@ func (c *Client) MovieDetails(ctx context.Context, tmdbID int) (MovieDetails, er
 	}
 	for i, g := range resp.Genres {
 		details.Genres[i] = g.Name
+	}
+	if resp.BelongsToCollection.ID != 0 {
+		details.Collection = CollectionRef{
+			ID:   resp.BelongsToCollection.ID,
+			Name: resp.BelongsToCollection.Name,
+		}
 	}
 	return details, nil
 }

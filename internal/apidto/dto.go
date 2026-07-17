@@ -740,11 +740,20 @@ type TagEntry struct {
 // auto-grab; Year is display-only. The Tag picker (this type's original
 // caller) ignores both.
 type TrackedItem struct {
-	ID     int64    `json:"id"`
-	Title  string   `json:"title"`
-	Tags   []string `json:"tags"`
-	TmdbId int      `json:"tmdbId,omitempty"`
-	Year   int      `json:"year,omitempty"`
+	ID             int64    `json:"id"`
+	Title          string   `json:"title"`
+	Tags           []string `json:"tags"`
+	TmdbId         int      `json:"tmdbId,omitempty"`
+	Year           int      `json:"year,omitempty"`
+	CollectionName string   `json:"collectionName,omitempty"`
+}
+
+// CollectionSummary is one entry from GET /api/modes/movies/collections —
+// a TMDB franchise collection with the count of tracked movies belonging to it.
+type CollectionSummary struct {
+	TMDBCollectionID int    `json:"tmdbCollectionId"`
+	Name             string `json:"name"`
+	Count            int    `json:"count"`
 }
 
 // --- Stage 4: Settings + Advanced Settings ---------------------------------

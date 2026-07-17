@@ -697,6 +697,16 @@ export interface TrackedItem {
   tags: string[];
   tmdbId?: number /* int */;
   year?: number /* int */;
+  collectionName?: string;
+}
+/**
+ * CollectionSummary is one entry from GET /api/modes/movies/collections —
+ * a TMDB franchise collection with the count of tracked movies belonging to it.
+ */
+export interface CollectionSummary {
+  tmdbCollectionId: number /* int */;
+  name: string;
+  count: number /* int */;
 }
 /**
  * ConnectionTestRequest is POST /api/connections/test's body — enough to

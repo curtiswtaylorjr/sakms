@@ -170,6 +170,7 @@ func applyByWorkflow(ctx context.Context, settingsStore *settings.Store, propSto
 				if err != nil {
 					return changes, err
 				}
+				enrichMovieCollection(ctx, sess, libStore, itemID, p.TMDBID)
 				return changes, propStore.MarkApplied(ctx, p.ID, int(itemID))
 			}
 			episodeID, changes, err := rename.ApplyLibrarySeries(ctx, libStore, p, preset)
@@ -529,4 +530,23 @@ func proposalNotFoundOr500(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+// enrichMovieCollection is a best-effort post-Apply step that fetches
+// belongs_to_collection from TMDB and records it on the just-relocated movie
+// row. Any error (TMDB unavailable, movie with no collection) is silently
+// ignored — Apply already succeeded and the file is already relocated.
+func enrichMovieCollection(ctx context.Context, sess *mode.Session, libStore *library.Store, itemID int64, tmdbID int) {
+	if sess.TMDB == nil {
+		return
+	}
+	details, err := sess.TMDB.MovieDetails(ctx, tmdbID)
+	if err != nil || details.Collection.ID == 0 {
+		return
+	}
+	collID, err := libStore.UpsertCollection(ctx, details.Collection.ID, details.Collection.Name)
+	if err != nil {
+		return
+	}
+	_ = libStore.SetItemCollection(ctx, itemID, collID)
 }

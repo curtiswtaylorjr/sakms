@@ -131,7 +131,14 @@ const TagView: Component<{ mode: Mode }> = (props) => {
                 <For each={tracked()}>
                   {(item) => (
                     <tr class="border-b border-border/60 align-top">
-                      <td class="px-2 py-2 text-fg">{item.title}</td>
+                      <td class="px-2 py-2 text-fg">
+                        {item.title}
+                        <Show when={item.collectionName}>
+                          <div class="text-xs text-muted">
+                            {item.collectionName}
+                          </div>
+                        </Show>
+                      </td>
                       <td class="px-2 py-2">
                         <div class="flex flex-wrap gap-1">
                           <For each={item.tags ?? []}>

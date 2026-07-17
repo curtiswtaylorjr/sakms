@@ -114,17 +114,24 @@ func TestRenameWorkflow_Series_ScanThenApply_EndToEnd(t *testing.T) {
 	}
 }
 
-// fakeTMDBSearchHandler serves TMDB's /search/movie endpoint with one
-// canned result, for Movies' libStore-backed Rename path.
+// fakeTMDBSearchHandler serves TMDB's /search/movie and /movie/{id} endpoints
+// for Movies' libStore-backed Rename path. /movie/{id} is called by
+// enrichMovieCollection after Apply to fetch belongs_to_collection; the canned
+// response has no collection so the enrichment is a no-op for test movies.
 func fakeTMDBSearchHandler(t *testing.T, tmdbID int, title string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/search/movie" {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/search/movie":
+			json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
+				{"id": tmdbID, "title": title},
+			}})
+		case r.URL.Path == "/movie/"+strconv.Itoa(tmdbID):
+			// No belongs_to_collection — most movies don't have one.
+			json.NewEncoder(w).Encode(map[string]any{"id": tmdbID, "title": title})
+		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
-			{"id": tmdbID, "title": title},
-		}})
 	}
 }
 
