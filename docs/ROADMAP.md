@@ -479,6 +479,10 @@ package (`library`, `proposals`, `naming`, `rename`, `dedup`, `purge`,
 `pnpm typecheck`/`pnpm test` (273 tests, up from 272)/`pnpm build`, all
 clean. Merged, pushed, auto-deployed, health checks passed.
 
+**Follow-up (same day):** the review's one remaining LOW finding (the
+multi-episode upsert loop wasn't transactional) was closed — see
+CHANGELOG.md's "transactional multi-episode upserts" entry.
+
 ---
 
 ## Backlog (not yet started, roughly in discussion order)

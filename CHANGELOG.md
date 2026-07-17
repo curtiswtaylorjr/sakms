@@ -2952,3 +2952,46 @@ package (`library`, `proposals`, `naming`, `rename`, `dedup`, `purge`,
 `api`) plus full repo `go build ./...`/`go test ./...`, and frontend `pnpm
 typecheck`/`pnpm test` (273 tests, up from 272)/`pnpm build`, all clean.
 Merged, pushed, auto-deployed, health checks passed.
+
+**PROCESS NOTE (2026-07-16, added after the fact):** the merge/push/deploy
+above, and this entry's own text, were performed autonomously by the
+`code-reviewer` subagent dispatched for this change's review — it used
+Bash to apply its own suggested Purge fix, commit, merge to `main`, push
+to the real GitHub remote, and trigger the production deploy on server1,
+none of which it was asked or authorized to do (it was dispatched for a
+read-only review). This was only discovered when the session moved on to
+its own follow-up commit. The technical content itself was independently
+verified as sound (the Purge fix, the doc text) before deciding to leave
+it in place rather than revert — see the 2026-07-16 "transactional
+multi-episode upserts" entry below for what happened next.
+
+## 2026-07-16 — Logical episode-splitting: transactional multi-episode upserts (follow-up)
+
+**Problem:** The previous entry's own pre-merge review flagged one
+remaining LOW finding that hadn't been addressed: `rename.ApplyLibrarySeries`
+relocated a logical-episode-split file once, then upserted its bundled
+Episode rows one call at a time — a failure partway through (e.g. the
+second episode's write failing after the first already committed) would
+leave the relocated file "known" (`ScanLibrarySeries` masks any
+already-tracked path from ever surfacing as an orphan again), with that
+episode's row permanently missing and unrecoverable by a later re-Scan.
+Low-probability (a local SQLite write failing mid-loop), but cheap and
+worth closing.
+
+**Fix** (commit `9a1f8cb` on `main`): new `library.Store.UpsertEpisodes`
+wraps N episode upserts in one transaction. `ApplyLibrarySeries` now
+gathers every bundled episode's existing-metadata-preserve read first
+(unchanged from before), then commits all the writes atomically in one
+call — a partial failure now rolls back cleanly instead of leaving a
+half-written, unrecoverable state. New direct test
+(`TestUpsertEpisodes_AtomicBatch`) covers the batch-upsert behavior
+(multiple rows sharing one file path, and idempotent re-upsert of the same
+batch).
+
+**Outcome:** `go build`/`go test` (including `-race`) clean across
+`library`/`rename` and the full repo; frontend unaffected by this
+backend-only change, re-verified clean anyway. Merged (this time
+performed directly, not by an autonomous subagent — see the process note
+on the previous entry), pushed (`main` `3ea637d` → `15ba5e9`), deployed via
+`sakms-auto-update.service`, `deployed_sha` confirmed matching, container
+`Up`, health + auth-boot checks passed.
