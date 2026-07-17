@@ -169,6 +169,24 @@ organizational authority.
 
 ## Recently shipped (outside this backlog)
 
+### TVDB fallback for Movies/Series Rename — shipped 2026-07-17
+When TMDB search returns zero results or a below-threshold confidence match
+during Rename scan (Movies and Series), SAK now tries TheTVDB v4 as a
+secondary source before returning Unmatched. The TVDB match is translated
+back to a TMDB ID via TMDB's `/find?external_source=tvdb_id` endpoint, so
+the library stays TMDB-keyed throughout — no schema changes, no dual-ID
+tracking. TVDB is configured as a connection (Settings → Connections →
+"TheTVDB") with an API key; when absent, the fallback silently skips and
+the existing Unmatched behavior is unchanged.
+
+Key files: `internal/tvdb/client.go` (new v4 client, bearer-token cached
+29 days, `SearchSeries`/`SearchMovies`/`Ping`), `internal/tmdb/client.go`
+(new `FindMovieByTVDBID`/`FindTVByTVDBID` methods), `internal/mode/mode.go`
+(`Session.TVDB` field + `buildSearchPipeline` wiring), `internal/rename/rename.go`
+(`tvdbFallbackMovie`/`tvdbFallbackSeries` helpers injected at both zero-result
+and low-confidence sites in `proposeOneLibrary`/`proposeOneEpisodeLibrary`),
+`internal/api/connections.go` (`testTVDB` + `"tvdb"` case).
+
 ### System dashboard — shipped 2026-07-17
 Fourth item off the "least complex to most complex" backlog ordering.
 New `internal/sysinfo` package reads five Linux pseudo-filesystem sources
@@ -675,12 +693,9 @@ started — no design, no client package, no schema.
   below.
 
 ### Metadata expansion
-- **TVDB/IMDB as fallback metadata sources** — today Movies/Series
-  identification is TMDB-only; TVDB is only ever a *derived* id via TMDB's
-  `/find` endpoint, never a primary search source. Real, substantial
-  feature: new client package(s) + a per-mode source-priority order. Note:
-  IMDB has no official public API — would need a paid third-party mirror
-  or scraping, worth deciding on going in.
+- **TVDB as fallback metadata source** — shipped 2026-07-17, see "Recently
+  shipped" below. IMDB deferred: no official public API (would need a paid
+  third-party mirror or scraping), judged not worth the complexity.
 - **Local `.nfo`/artwork preference** — confirmed zero support today:
   `.nfo` is purely in `config.SidecarExts` (skip-only, contents never
   read), and there is no local poster/fanart-reuse logic anywhere. Would

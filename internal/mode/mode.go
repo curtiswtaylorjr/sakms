@@ -32,6 +32,7 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/throttle"
 	"github.com/curtiswtaylorjr/sakms/internal/tmdb"
 	"github.com/curtiswtaylorjr/sakms/internal/tpdbrest"
+	"github.com/curtiswtaylorjr/sakms/internal/tvdb"
 )
 
 // Mode is one of SAK's three isolated library contexts. Never blended —
@@ -193,6 +194,13 @@ type Session struct {
 	// Prowlarr/QBittorrent/NZBGet above.
 	TMDB *tmdb.Client
 
+	// TVDB is TheTVDB's v4 client, used as a search fallback in Movies/Series
+	// Rename when TMDB search returns no results or a below-threshold
+	// confidence match. Nil when no "tvdb" connection is configured — callers
+	// must nil-check before use. Adult Rename uses its own phash-first
+	// identification pipeline, not TVDB, so this field is unused for Adult.
+	TVDB *tvdb.Client
+
 	// Stash is the LOCAL Stash instance's own GraphQL client (internal/stashapi
 	// — distinct from the stash-box protocol used for StashDB/FansDB/TPDB),
 	// populated ONLY for Adult mode and ONLY when a "stash" connection is
@@ -312,6 +320,13 @@ func buildSearchPipeline(ctx context.Context, store *connections.Store, httpClie
 		// TMDB is a fixed public service — its base URL is the hardcoded
 		// tmdb.DefaultBaseURL, never conn.URL (which is not collected for it).
 		sess.TMDB = tmdb.New(tmdb.Config{BaseURL: tmdb.DefaultBaseURL, APIKey: conn.APIKey}, httpClient)
+	}
+
+	if conn, err := optionalConn(ctx, store, "tvdb"); err != nil {
+		return err
+	} else if conn != nil {
+		// TVDB is a fixed public service — same reasoning as TMDB above.
+		sess.TVDB = tvdb.New(tvdb.Config{BaseURL: tvdb.DefaultBaseURL, APIKey: conn.APIKey}, httpClient)
 	}
 
 	return nil

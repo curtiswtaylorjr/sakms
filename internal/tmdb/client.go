@@ -755,3 +755,53 @@ func (c *Client) HasUSRelease(ctx context.Context, tmdbID int) (bool, error) {
 	}
 	return false, nil
 }
+
+// findResponse is the envelope for TMDB's /find/{external_id} endpoint, which
+// cross-references an external id (TVDB, IMDB, etc.) to a TMDB id.
+//
+// UNVERIFIED ASSUMPTION: the field names (movie_results/tv_results, id within
+// each) are modeled from TMDB's public API documentation — not confirmed
+// against a live call. A mismatch returns 0 (not found) rather than an error.
+type findResponse struct {
+	MovieResults []struct {
+		ID int `json:"id"`
+	} `json:"movie_results"`
+	TVResults []struct {
+		ID int `json:"id"`
+	} `json:"tv_results"`
+}
+
+// FindMovieByTVDBID looks up a TMDB movie id by a TheTVDB movie id via
+// TMDB's /find endpoint with external_source=tvdb_id. Returns 0 if the
+// cross-reference is absent from TMDB's database (common for movies, since
+// TVDB added movies more recently than TV shows). The caller should fall back
+// to a name-based search when 0 is returned.
+func (c *Client) FindMovieByTVDBID(ctx context.Context, tvdbID int) (tmdbID int, err error) {
+	q := url.Values{}
+	q.Set("external_source", "tvdb_id")
+	var resp findResponse
+	if err := c.do(ctx, fmt.Sprintf("/find/%d", tvdbID), q, &resp); err != nil {
+		return 0, err
+	}
+	if len(resp.MovieResults) > 0 {
+		return resp.MovieResults[0].ID, nil
+	}
+	return 0, nil
+}
+
+// FindTVByTVDBID looks up a TMDB TV show id by a TheTVDB series id via
+// TMDB's /find endpoint with external_source=tvdb_id. Returns 0 if the
+// cross-reference is absent. TVDB is historically the canonical database for
+// TV, so TMDB's cross-reference coverage here is much better than for movies.
+func (c *Client) FindTVByTVDBID(ctx context.Context, tvdbID int) (tmdbID int, err error) {
+	q := url.Values{}
+	q.Set("external_source", "tvdb_id")
+	var resp findResponse
+	if err := c.do(ctx, fmt.Sprintf("/find/%d", tvdbID), q, &resp); err != nil {
+		return 0, err
+	}
+	if len(resp.TVResults) > 0 {
+		return resp.TVResults[0].ID, nil
+	}
+	return 0, nil
+}

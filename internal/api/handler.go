@@ -395,11 +395,11 @@ type upsertConnectionRequest struct {
 }
 
 // fixedURLServices are the connections whose outbound base URL is a hardcoded
-// package constant (internal/tmdb, internal/stashbox, internal/tpdbrest), not a
+// package constant (internal/tmdb, internal/tvdb, internal/stashbox, internal/tpdbrest), not a
 // user-supplied field — so the UI collects no URL for them and `url` is
 // optional in their upsert requests. Every other service still requires a URL.
 // Mirrors SERVICES_WITH_FIXED_URL in the frontend (frontend/src/api/settings.ts).
-var fixedURLServices = map[string]bool{"tmdb": true, "stashdb": true, "fansdb": true, "tpdb": true}
+var fixedURLServices = map[string]bool{"tmdb": true, "tvdb": true, "stashdb": true, "fansdb": true, "tpdb": true}
 
 func upsertConnectionHandler(store *connections.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -252,6 +252,9 @@ func proposeOneLibrary(
 		return p
 	}
 	if len(items) == 0 {
+		if fb := tvdbFallbackMovie(ctx, sess, term, byTMDB, generalRoot, foundRoot, confidenceThreshold, p); fb != nil {
+			return *fb
+		}
 		p.Status = proposals.Unmatched
 		p.Reason = fmt.Sprintf("no TMDB match for %q", term)
 		return p
@@ -265,6 +268,9 @@ func proposeOneLibrary(
 	// accepting it, same tolerance-of-failure as the zero-results case
 	// above.
 	if confidence := matchConfidence(term, match.Title, match.ReleaseDate); confidence < confidenceThreshold {
+		if fb := tvdbFallbackMovie(ctx, sess, term, byTMDB, generalRoot, foundRoot, confidenceThreshold, p); fb != nil {
+			return *fb
+		}
 		p.Status = proposals.Unmatched
 		p.Reason = fmt.Sprintf("weak TMDB match for %q: best result %q (confidence %d%%, threshold %d%%) — needs manual review", term, match.Title, confidence, confidenceThreshold)
 		return p
@@ -498,6 +504,9 @@ func proposeOneEpisodeLibrary(
 		return p
 	}
 	if len(items) == 0 {
+		if fb := tvdbFallbackSeries(ctx, sess, term, tracked, generalRoot, foundRoot, season, episode, extraEpisodes, confidenceThreshold, p); fb != nil {
+			return *fb
+		}
 		p.Status = proposals.Unmatched
 		p.Reason = fmt.Sprintf("no TMDB match for %q", term)
 		return p
@@ -508,6 +517,9 @@ func proposeOneEpisodeLibrary(
 	// proposeOneLibrary: TMDB's best-ranked result isn't automatically a
 	// good one for a messy/opaque search term.
 	if confidence := matchConfidence(term, match.Title, match.ReleaseDate); confidence < confidenceThreshold {
+		if fb := tvdbFallbackSeries(ctx, sess, term, tracked, generalRoot, foundRoot, season, episode, extraEpisodes, confidenceThreshold, p); fb != nil {
+			return *fb
+		}
 		p.Status = proposals.Unmatched
 		p.Reason = fmt.Sprintf("weak TMDB match for %q: best result %q (confidence %d%%, threshold %d%%) — needs manual review", term, match.Title, confidence, confidenceThreshold)
 		return p
@@ -558,6 +570,145 @@ func proposeOneEpisodeLibrary(
 		p.Cast = cast
 	}
 	return p
+}
+
+// tvdbFallbackMovie attempts to resolve a movie via TheTVDB when TMDB
+// search returned no results or a below-threshold confidence match. It
+// searches TVDB by term, applies the same confidence gate, then translates
+// the TVDB movie id to a TMDB movie id via TMDB's /find endpoint — which
+// keeps the library TMDB-keyed while using TVDB as the search index.
+// Returns nil when TVDB finds nothing, the confidence is still too low,
+// or the TMDB cross-reference is absent; the caller should then return its
+// original Unmatched proposal unchanged.
+func tvdbFallbackMovie(
+	ctx context.Context, sess *mode.Session,
+	term string, byTMDB map[int]bool,
+	generalRoot, foundRoot string, confidenceThreshold int,
+	base proposals.Proposal,
+) *proposals.Proposal {
+	if sess.TVDB == nil || sess.TMDB == nil {
+		return nil
+	}
+	results, err := sess.TVDB.SearchMovies(ctx, term)
+	if err != nil || len(results) == 0 {
+		return nil
+	}
+	best := results[0]
+	// Build a synthetic date string so matchConfidence can use the year from
+	// TVDB's year-only field — TVDB doesn't return a full release date.
+	dateStr := ""
+	if best.Year > 0 {
+		dateStr = fmt.Sprintf("%d-01-01", best.Year)
+	}
+	if matchConfidence(term, best.Name, dateStr) < confidenceThreshold {
+		return nil
+	}
+	tmdbID, err := sess.TMDB.FindMovieByTVDBID(ctx, best.TVDBID)
+	if err != nil || tmdbID == 0 {
+		return nil
+	}
+	if byTMDB[tmdbID] {
+		p := base
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("TVDB match %q appears to already be in the library — leaving in place for manual review", best.Name)
+		return &p
+	}
+	details, err := sess.TMDB.MovieDetails(ctx, tmdbID)
+	if err != nil {
+		return nil
+	}
+	targetRoot := generalRoot
+	switch {
+	case foundRoot == sess.KidsRootPath:
+		targetRoot = sess.KidsRootPath
+	case sess.KidsRootPath != "" && sess.MainstreamAI != nil:
+		if result, err := classify.WithAI(ctx, sess.MainstreamAI, details.Title, details.Overview); err == nil && result.IsKids {
+			targetRoot = sess.KidsRootPath
+		}
+	}
+	p := base
+	p.Status = proposals.Pending
+	p.Title = details.Title
+	p.TMDBID = details.ID
+	p.Year = yearFromReleaseDate(details.ReleaseDate)
+	p.RootFolderPath = targetRoot
+	p.Genres = details.Genres
+	if cast, err := sess.TMDB.MovieCredits(ctx, details.ID); err == nil {
+		p.Cast = cast
+	}
+	return &p
+}
+
+// tvdbFallbackSeries attempts to resolve a TV series via TheTVDB when TMDB
+// search returned no results or a below-threshold confidence match. Mirrors
+// tvdbFallbackMovie but uses SearchSeries and FindTVByTVDBID.
+func tvdbFallbackSeries(
+	ctx context.Context, sess *mode.Session,
+	term string, tracked map[episodeKey]bool,
+	generalRoot, foundRoot string,
+	season, episode int, extraEpisodes []int,
+	confidenceThreshold int,
+	base proposals.Proposal,
+) *proposals.Proposal {
+	if sess.TVDB == nil || sess.TMDB == nil {
+		return nil
+	}
+	results, err := sess.TVDB.SearchSeries(ctx, term)
+	if err != nil || len(results) == 0 {
+		return nil
+	}
+	best := results[0]
+	dateStr := ""
+	if best.Year > 0 {
+		dateStr = fmt.Sprintf("%d-01-01", best.Year)
+	}
+	if matchConfidence(term, best.Name, dateStr) < confidenceThreshold {
+		return nil
+	}
+	tmdbID, err := sess.TMDB.FindTVByTVDBID(ctx, best.TVDBID)
+	if err != nil || tmdbID == 0 {
+		return nil
+	}
+	if tracked[episodeKey{tmdbID: tmdbID, season: season, episode: episode}] {
+		p := base
+		p.Status = proposals.Unmatched
+		p.Reason = fmt.Sprintf("TVDB match %q appears to already be in the library as S%02dE%02d — leaving in place for manual review", best.Name, season, episode)
+		return &p
+	}
+	if _, err := sess.TMDB.SeasonDetails(ctx, tmdbID, season); err != nil {
+		return nil
+	}
+	det, err := sess.TMDB.TVDetails(ctx, tmdbID)
+	if err != nil {
+		return nil
+	}
+	targetRoot := generalRoot
+	switch {
+	case foundRoot == sess.KidsRootPath:
+		targetRoot = sess.KidsRootPath
+	case sess.KidsRootPath != "" && sess.MainstreamAI != nil:
+		// TVDetails has no Overview field; pass the title alone — conservative
+		// classification (misses overview signals) is safer than skipping it.
+		if result, err := classify.WithAI(ctx, sess.MainstreamAI, det.Title, ""); err == nil && result.IsKids {
+			targetRoot = sess.KidsRootPath
+		}
+	}
+	p := base
+	p.Status = proposals.Pending
+	p.Title = det.Title
+	p.TMDBID = tmdbID
+	p.Year = best.Year
+	p.SeasonNumber = season
+	p.EpisodeNumber = episode
+	if len(extraEpisodes) > 0 {
+		p.ExtraEpisodeNumbers = extraEpisodes
+	}
+	p.RootFolderPath = targetRoot
+	p.Genres = det.Genres
+	if cast, err := sess.TMDB.TVAggregateCredits(ctx, tmdbID); err == nil {
+		p.Cast = cast
+	}
+	return &p
 }
 
 // RelocateEpisode moves sourcePath into a preset-formatted

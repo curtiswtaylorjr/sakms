@@ -78,7 +78,7 @@ export const SERVICES_WITH_USERNAME = ["qbittorrent", "nzbget"];
 // internal/tpdbrest) — the operator never types a URL for them. Their rows show
 // only an API Key field, and the backend accepts an upsert with no `url` for
 // exactly these services (mirrors fixedURLServices in internal/api/handler.go).
-export const SERVICES_WITH_FIXED_URL = ["tmdb", "stashdb", "fansdb", "tpdb"];
+export const SERVICES_WITH_FIXED_URL = ["tmdb", "tvdb", "stashdb", "fansdb", "tpdb"];
 
 // SERVICES_WITH_HOST_LOOKUP are the services the netscan package can identify
 // on the LAN, enabling a "look up on a different host" input on their rows.
@@ -96,6 +96,7 @@ export const CONNECTION_SERVICES = [
   "qbittorrent",
   "nzbget",
   "tmdb",
+  "tvdb",
   "stashdb",
   "fansdb",
   "tpdb",
