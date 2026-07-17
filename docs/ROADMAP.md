@@ -251,6 +251,50 @@ dated reversal with a cross-reference, not a silent edit. `.gitignore` gained
 an unanchored `.omc/` line so subdirectory OMC agent state is never swept
 into a commit.
 
+### Structured Genre/Actor tagging — shipped 2026-07-17
+Fifth item off the "least complex to most complex" backlog ordering. Movies
+and Series proposals and library records now carry structured `genres`
+(`[]string`, TMDB genre names) and `cast` (`[]CastMember{Name, Character,
+Order}`) fields populated at Scan time from TMDB's `/movie/{id}/credits` and
+`/tv/{id}/credits` endpoints. Both are stored as JSON columns in
+`library_items`, `library_series`, and `proposals` (`genres`, `cast` —
+the latter column name required quoting in SQL expressions as `"cast"` since
+it is a SQLite reserved word; plain `COALESCE(cast, '[]')` was parsed as a
+broken `CAST()` invocation and produced `SQL logic error: near ",": syntax
+error`). Enrichment runs per-match after each TMDB search result resolves,
+with a soft 404-on-error policy — a missing credits endpoint never fails
+the whole Scan. Frontend test mock servers for all four rename/series test
+files were updated to return `http.NotFound` (instead of `t.Fatalf`) for
+enrichment paths that carry no `query` parameter.
+
+### Watch folders (inotify) — shipped 2026-07-17
+Sixth item off the "least complex to most complex" backlog ordering.
+`internal/api/watchfolders.go` (new, ~300 lines): a background goroutine
+(`RunWatchFolders`) launched from `main.go` that monitors each mode's
+configured library root folder via `fsnotify` (v1.8.0, the only new
+dependency). Design decisions kept:
+
+- **Scan-only, never auto-Apply** — proposals land in the Rename queue and
+  still require a human Apply click, preserving the staged-for-approval
+  invariant.
+- **10-second debounce per mode** — absorbs burst events from a download
+  client dropping a full directory tree into the root folder; a single
+  `time.AfterFunc` is reset on every `Create`/`Rename` event and fires once
+  after 10 s of quiet.
+- **30-second settings poll** — the outer loop re-reads `watch_folders_enabled`
+  and root paths every 30 s, so enabling/disabling or changing a root folder
+  takes effect without a restart.
+- **Gated off by default** (`watch_folders_enabled = false`). Settings toggle
+  in the Advanced tab (`GET /api/admin/watch-folders`,
+  `PUT /api/admin/watch-folders/enabled`).
+
+`scanFromWatcher` reuses the same `mode.Build`/`resolveNamingPreset`/
+`resolveConfidenceThreshold`/`rename.Scan*`/`propStore.ReplacePending`
+chain as the manual Scan button — same proposals, same queue, same Apply
+path. Errors are logged and dropped; the manual Scan button always remains
+the fallback. The feature inherits the same `ctx`-cancellation path as
+`recheck.Run` and `adultnewest.Run`, so shutdown cancels it cleanly.
+
 ### Clearer mount-disconnect error messaging — shipped 2026-07-11
 `library.ScanRootFolder`'s single error-return point (all four Rename/Dedup
 Scan call sites share it) now classifies the underlying OS error: a missing
@@ -646,19 +690,10 @@ started — no design, no client package, no schema.
   movie details, the natural seed. Movies-only (Series has no TMDB
   equivalent — same asymmetry pattern as Kids-root-path). Needs a new
   `collections` table + item→collection FK + whatever UI surfaces it.
-- **Structured Genre/Actor tagging** — richer than today's flat per-mode
-  tag vocabulary. Needs its own schema (genres, cast), sourced from TMDB's
-  `/movie/{id}/credits` + genre list (new TMDB client methods, a new
-  per-item fetch). Decide whether this replaces free-form tags or sits
-  alongside them.
+- **Structured Genre/Actor tagging** — shipped 2026-07-17, see "Recently shipped" below.
 
 ### Automation
-- **Watch folders (inotify)** — real tension with "manual by default," but
-  CLAUDE.md explicitly allows earned automation once a manual workflow is
-  proven, and Rename/Dedup/Purge all qualify by now. Firm design
-  constraint: a watch-folder trigger may only ever auto-run *Scan* (new
-  proposals appear, still need a human Apply click) — never auto-Apply.
-  Auto-Apply would break the one invariant this whole project is built on.
+- **Watch folders (inotify)** — shipped 2026-07-17, see "Recently shipped" below.
 - **Background task queue** — the exact "scheduler infrastructure" CLAUDE.md
   says doesn't exist, by design. Only build this if/when watch-folders
   actually need it (so Scan doesn't block an HTTP handler) — no current
