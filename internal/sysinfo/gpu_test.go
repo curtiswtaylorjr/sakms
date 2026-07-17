@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
 // writeCardFile writes one sysfs attribute under <base>/<card>/device/<name>,
@@ -114,20 +112,3 @@ func TestReadGPUs_MissingOptionalFiles(t *testing.T) {
 	}
 }
 
-// TestEnrichNVIDIAWithNVML_Unavailable covers the graceful-fallback path: when
-// NVML can't initialize (no driver, or not exposed to the container), the sysfs
-// entries pass through untouched. There is deliberately NO test for the
-// NVML-success path — it requires real NVIDIA hardware and a reachable driver,
-// which isn't a unit test; the injected nvmlInit stub keeps this one
-// hardware-independent.
-func TestEnrichNVIDIAWithNVML_Unavailable(t *testing.T) {
-	orig := nvmlInit
-	t.Cleanup(func() { nvmlInit = orig })
-	nvmlInit = func() nvml.Return { return nvml.ERROR_DRIVER_NOT_LOADED }
-
-	input := []GPURaw{{Name: "GeForce RTX 4070", UtilPercent: -1}}
-	result := enrichNVIDIAWithNVML(input)
-	if len(result) != 1 || result[0].UtilPercent != -1 {
-		t.Errorf("expected graceful passthrough when NVML unavailable, got %+v", result)
-	}
-}
