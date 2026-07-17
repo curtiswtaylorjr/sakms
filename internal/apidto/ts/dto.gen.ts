@@ -578,6 +578,13 @@ export interface Proposal {
   reason?: string;
   draftId?: string;
   candidates?: Candidate[];
+  /**
+   * Genres/Cast are populated for Movies/Series Rename proposals only —
+   * empty for Dedup/Purge/Adult. Soft-fail: absent when TMDB credits
+   * call failed at Scan time.
+   */
+  genres?: string[];
+  cast?: string[];
 }
 /**
  * AllowlistAddRequest is the body of POST /api/modes/{mode}/purge/allowlist —
@@ -698,6 +705,8 @@ export interface TrackedItem {
   tmdbId?: number /* int */;
   year?: number /* int */;
   collectionName?: string;
+  genres?: string[];
+  cast?: string[];
 }
 /**
  * CollectionSummary is one entry from GET /api/modes/movies/collections —

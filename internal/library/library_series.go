@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,14 +18,18 @@ import (
 // Item, there's no Mode field: this table only ever holds Series, so the
 // omission is deliberate, not an oversight.
 type Series struct {
-	ID             int64  `json:"id"`
-	TMDBID         int    `json:"tmdbId"`
-	TVDBID         int    `json:"tvdbId,omitempty"`
-	Title          string `json:"title"`
-	Year           int    `json:"year,omitempty"`
-	RootFolderPath string `json:"rootFolderPath"`
-	CreatedAt      string `json:"createdAt"`
-	UpdatedAt      string `json:"updatedAt"`
+	ID             int64    `json:"id"`
+	TMDBID         int      `json:"tmdbId"`
+	TVDBID         int      `json:"tvdbId,omitempty"`
+	Title          string   `json:"title"`
+	Year           int      `json:"year,omitempty"`
+	RootFolderPath string   `json:"rootFolderPath"`
+	// Genres and Cast are populated at Apply time from the proposal's TMDB
+	// enrichment. Empty for series applied before this feature landed.
+	Genres         []string `json:"genres,omitempty"`
+	Cast           []string `json:"cast,omitempty"`
+	CreatedAt      string   `json:"createdAt"`
+	UpdatedAt      string   `json:"updatedAt"`
 }
 
 // Episode is one canonical episode of a Series, whether or not it's
@@ -60,17 +65,27 @@ type Episode struct {
 // shape, used both by the one-time Sonarr importer and Rename/Search's
 // get-or-create-by-TMDBID calls.
 func (s *Store) UpsertSeries(ctx context.Context, series Series) (Series, error) {
+	genresJSON, err := marshalStringSlice(series.Genres)
+	if err != nil {
+		return Series{}, fmt.Errorf("encoding genres for %q: %w", series.Title, err)
+	}
+	castJSON, err := marshalStringSlice(series.Cast)
+	if err != nil {
+		return Series{}, fmt.Errorf("encoding cast for %q: %w", series.Title, err)
+	}
 	row := s.db.QueryRowContext(ctx, `
-		INSERT INTO library_series (tmdb_id, tvdb_id, title, year, root_folder_path)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO library_series (tmdb_id, tvdb_id, title, year, root_folder_path, genres, cast)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tmdb_id) DO UPDATE SET
 			tvdb_id = excluded.tvdb_id,
 			title = excluded.title,
 			year = excluded.year,
 			root_folder_path = excluded.root_folder_path,
+			genres = excluded.genres,
+			cast = excluded.cast,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		RETURNING id, created_at, updated_at
-	`, series.TMDBID, series.TVDBID, series.Title, series.Year, series.RootFolderPath)
+	`, series.TMDBID, series.TVDBID, series.Title, series.Year, series.RootFolderPath, genresJSON, castJSON)
 
 	if err := row.Scan(&series.ID, &series.CreatedAt, &series.UpdatedAt); err != nil {
 		return Series{}, fmt.Errorf("upserting series %q: %w", series.Title, err)
@@ -82,7 +97,9 @@ func (s *Store) UpsertSeries(ctx context.Context, series Series) (Series, error)
 // detection/get-or-create key Rename, Search, and the Sonarr importer use.
 func (s *Store) GetSeriesByTMDBID(ctx context.Context, tmdbID int) (*Series, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, tmdb_id, tvdb_id, title, year, root_folder_path, created_at, updated_at
+		SELECT id, tmdb_id, tvdb_id, title, year, root_folder_path,
+		       COALESCE(genres, '[]'), COALESCE(cast, '[]'),
+		       created_at, updated_at
 		FROM library_series WHERE tmdb_id = ?
 	`, tmdbID)
 	series, err := scanSeries(row)
@@ -98,7 +115,9 @@ func (s *Store) GetSeriesByTMDBID(ctx context.Context, tmdbID int) (*Series, err
 // ListSeries returns every tracked series, ordered by title.
 func (s *Store) ListSeries(ctx context.Context) ([]Series, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, tmdb_id, tvdb_id, title, year, root_folder_path, created_at, updated_at
+		SELECT id, tmdb_id, tvdb_id, title, year, root_folder_path,
+		       COALESCE(genres, '[]'), COALESCE(cast, '[]'),
+		       created_at, updated_at
 		FROM library_series ORDER BY title
 	`)
 	if err != nil {
@@ -400,9 +419,19 @@ func (s *Store) SeriesTagVocabulary(ctx context.Context) ([]string, error) {
 
 func scanSeries(row rowScanner) (Series, error) {
 	var series Series
-	err := row.Scan(&series.ID, &series.TMDBID, &series.TVDBID, &series.Title, &series.Year,
-		&series.RootFolderPath, &series.CreatedAt, &series.UpdatedAt)
-	return series, err
+	var genresJSON, castJSON string
+	if err := row.Scan(&series.ID, &series.TMDBID, &series.TVDBID, &series.Title, &series.Year,
+		&series.RootFolderPath, &genresJSON, &castJSON,
+		&series.CreatedAt, &series.UpdatedAt); err != nil {
+		return Series{}, err
+	}
+	if err := json.Unmarshal([]byte(genresJSON), &series.Genres); err != nil {
+		return Series{}, fmt.Errorf("decoding genres for series %d: %w", series.ID, err)
+	}
+	if err := json.Unmarshal([]byte(castJSON), &series.Cast); err != nil {
+		return Series{}, fmt.Errorf("decoding cast for series %d: %w", series.ID, err)
+	}
+	return series, nil
 }
 
 func scanEpisode(row rowScanner) (Episode, error) {

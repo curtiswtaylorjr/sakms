@@ -32,6 +32,8 @@ type libraryTrackedItem struct {
 	TMDBID         int      `json:"tmdbId,omitempty"`
 	Year           int      `json:"year,omitempty"`
 	CollectionName string   `json:"collectionName,omitempty"`
+	Genres         []string `json:"genres,omitempty"`
+	Cast           []string `json:"cast,omitempty"`
 }
 
 // listTrackedHandler returns every item {mode} currently tracks — straight
@@ -60,7 +62,7 @@ func listTrackedHandler(httpClient *http.Client, connStore *connections.Store, s
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				out[i] = libraryTrackedItem{ID: item.ID, Title: item.Title, Tags: tags, TMDBID: item.TMDBID, Year: item.Year, CollectionName: item.CollectionName}
+				out[i] = libraryTrackedItem{ID: item.ID, Title: item.Title, Tags: tags, TMDBID: item.TMDBID, Year: item.Year, CollectionName: item.CollectionName, Genres: item.Genres, Cast: item.Cast}
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(out)
@@ -79,7 +81,7 @@ func listTrackedHandler(httpClient *http.Client, connStore *connections.Store, s
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				out[i] = libraryTrackedItem{ID: s.ID, Title: s.Title, Tags: tags, TMDBID: s.TMDBID, Year: s.Year}
+				out[i] = libraryTrackedItem{ID: s.ID, Title: s.Title, Tags: tags, TMDBID: s.TMDBID, Year: s.Year, Genres: s.Genres, Cast: s.Cast}
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(out)

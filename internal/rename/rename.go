@@ -237,6 +237,10 @@ func proposeOneLibrary(
 		p.TMDBID = details.ID
 		p.Year = yearFromReleaseDate(details.ReleaseDate)
 		p.RootFolderPath = targetRoot
+		p.Genres = details.Genres
+		if cast, err := sess.TMDB.MovieCredits(ctx, details.ID); err == nil {
+			p.Cast = cast
+		}
 		return p
 	}
 
@@ -289,6 +293,12 @@ func proposeOneLibrary(
 	p.TMDBID = match.ID
 	p.Year = yearFromReleaseDate(match.ReleaseDate)
 	p.RootFolderPath = targetRoot
+	if det, err := sess.TMDB.MovieDetails(ctx, match.ID); err == nil {
+		p.Genres = det.Genres
+	}
+	if cast, err := sess.TMDB.MovieCredits(ctx, match.ID); err == nil {
+		p.Cast = cast
+	}
 	return p
 }
 
@@ -359,6 +369,7 @@ func ApplyLibrary(ctx context.Context, libStore *library.Store, p proposals.Prop
 	item, err := libStore.Upsert(ctx, library.Item{
 		Mode: mode.Movies, TMDBID: p.TMDBID, Title: p.Title, Year: p.Year,
 		FilePath: destPath, RootFolderPath: p.RootFolderPath,
+		Genres: p.Genres, Cast: p.Cast,
 	})
 	if err != nil {
 		return 0, changes, fmt.Errorf("recording %q in the library: %w", p.Title, err)
@@ -540,6 +551,12 @@ func proposeOneEpisodeLibrary(
 		p.ExtraEpisodeNumbers = extraEpisodes
 	}
 	p.RootFolderPath = targetRoot
+	if det, err := sess.TMDB.TVDetails(ctx, match.ID); err == nil {
+		p.Genres = det.Genres
+	}
+	if cast, err := sess.TMDB.TVAggregateCredits(ctx, match.ID); err == nil {
+		p.Cast = cast
+	}
 	return p
 }
 
@@ -630,6 +647,7 @@ func ApplyLibrarySeries(ctx context.Context, libStore *library.Store, p proposal
 
 	series, err := libStore.UpsertSeries(ctx, library.Series{
 		TMDBID: p.TMDBID, Title: p.Title, Year: p.Year, RootFolderPath: p.RootFolderPath,
+		Genres: p.Genres, Cast: p.Cast,
 	})
 	if err != nil {
 		return 0, changes, fmt.Errorf("recording series %q: %w", p.Title, err)

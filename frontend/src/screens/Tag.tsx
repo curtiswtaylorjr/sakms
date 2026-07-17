@@ -138,6 +138,17 @@ const TagView: Component<{ mode: Mode }> = (props) => {
                             {item.collectionName}
                           </div>
                         </Show>
+                        <Show when={(item.genres ?? []).length > 0}>
+                          <div class="mt-0.5 flex flex-wrap gap-1">
+                            <For each={item.genres}>
+                              {(g) => (
+                                <span class="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
+                                  {g}
+                                </span>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
                       </td>
                       <td class="px-2 py-2">
                         <div class="flex flex-wrap gap-1">

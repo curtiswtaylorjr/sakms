@@ -592,6 +592,11 @@ type Proposal struct {
 	Reason              string      `json:"reason,omitempty"`
 	DraftID             string      `json:"draftId,omitempty"`
 	Candidates          []Candidate `json:"candidates,omitempty"`
+	// Genres/Cast are populated for Movies/Series Rename proposals only —
+	// empty for Dedup/Purge/Adult. Soft-fail: absent when TMDB credits
+	// call failed at Scan time.
+	Genres []string `json:"genres,omitempty"`
+	Cast   []string `json:"cast,omitempty"`
 }
 
 // --- Purge allowlist (Stage 3) --------------------------------------------
@@ -746,6 +751,8 @@ type TrackedItem struct {
 	TmdbId         int      `json:"tmdbId,omitempty"`
 	Year           int      `json:"year,omitempty"`
 	CollectionName string   `json:"collectionName,omitempty"`
+	Genres         []string `json:"genres,omitempty"`
+	Cast           []string `json:"cast,omitempty"`
 }
 
 // CollectionSummary is one entry from GET /api/modes/movies/collections —

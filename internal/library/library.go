@@ -23,6 +23,7 @@ package library
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -66,6 +67,10 @@ type Item struct {
 	// UpsertCollection + SetItemCollection instead.
 	TMDBCollectionID int    `json:"tmdbCollectionId,omitempty"`
 	CollectionName   string `json:"collectionName,omitempty"`
+	// Genres and Cast are populated at Apply time from the proposal's TMDB
+	// enrichment. Empty for items applied before this feature landed.
+	Genres []string `json:"genres,omitempty"`
+	Cast   []string `json:"cast,omitempty"`
 }
 
 type Store struct {
@@ -82,9 +87,17 @@ func New(db *sql.DB) *Store {
 // re-scan or a re-grab of something already in the library updates it in
 // place rather than erroring or duplicating.
 func (s *Store) Upsert(ctx context.Context, item Item) (Item, error) {
+	genresJSON, err := marshalStringSlice(item.Genres)
+	if err != nil {
+		return Item{}, fmt.Errorf("encoding genres for %q: %w", item.Title, err)
+	}
+	castJSON, err := marshalStringSlice(item.Cast)
+	if err != nil {
+		return Item{}, fmt.Errorf("encoding cast for %q: %w", item.Title, err)
+	}
 	row := s.db.QueryRowContext(ctx, `
-		INSERT INTO library_items (mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO library_items (mode, tmdb_id, title, year, file_path, root_folder_path, phash, phash_file_size, phash_file_mtime, genres, cast)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(mode, tmdb_id) DO UPDATE SET
 			title = excluded.title,
 			year = excluded.year,
@@ -93,9 +106,11 @@ func (s *Store) Upsert(ctx context.Context, item Item) (Item, error) {
 			phash = excluded.phash,
 			phash_file_size = excluded.phash_file_size,
 			phash_file_mtime = excluded.phash_file_mtime,
+			genres = excluded.genres,
+			cast = excluded.cast,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		RETURNING id, created_at, updated_at
-	`, string(item.Mode), item.TMDBID, item.Title, item.Year, item.FilePath, item.RootFolderPath, item.PHash, item.PHashFileSize, item.PHashFileMTime)
+	`, string(item.Mode), item.TMDBID, item.Title, item.Year, item.FilePath, item.RootFolderPath, item.PHash, item.PHashFileSize, item.PHashFileMTime, genresJSON, castJSON)
 
 	if err := row.Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return Item{}, fmt.Errorf("upserting library item %q: %w", item.Title, err)
@@ -127,7 +142,8 @@ func (s *Store) List(ctx context.Context, m mode.Mode) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT li.id, li.mode, li.tmdb_id, li.title, li.year, li.file_path, li.root_folder_path,
 		       li.phash, li.phash_file_size, li.phash_file_mtime, li.created_at, li.updated_at,
-		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, '')
+		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, ''),
+		       COALESCE(li.genres, '[]'), COALESCE(li.cast, '[]')
 		FROM library_items li
 		LEFT JOIN library_collections c ON c.id = li.collection_id
 		WHERE li.mode = ? ORDER BY li.title
@@ -153,7 +169,8 @@ func (s *Store) Get(ctx context.Context, id int64) (*Item, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT li.id, li.mode, li.tmdb_id, li.title, li.year, li.file_path, li.root_folder_path,
 		       li.phash, li.phash_file_size, li.phash_file_mtime, li.created_at, li.updated_at,
-		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, '')
+		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, ''),
+		       COALESCE(li.genres, '[]'), COALESCE(li.cast, '[]')
 		FROM library_items li
 		LEFT JOIN library_collections c ON c.id = li.collection_id
 		WHERE li.id = ?
@@ -175,7 +192,8 @@ func (s *Store) GetByTMDBID(ctx context.Context, m mode.Mode, tmdbID int) (*Item
 	row := s.db.QueryRowContext(ctx, `
 		SELECT li.id, li.mode, li.tmdb_id, li.title, li.year, li.file_path, li.root_folder_path,
 		       li.phash, li.phash_file_size, li.phash_file_mtime, li.created_at, li.updated_at,
-		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, '')
+		       COALESCE(c.tmdb_collection_id, 0), COALESCE(c.name, ''),
+		       COALESCE(li.genres, '[]'), COALESCE(li.cast, '[]')
 		FROM library_items li
 		LEFT JOIN library_collections c ON c.id = li.collection_id
 		WHERE li.mode = ? AND li.tmdb_id = ?
@@ -350,14 +368,34 @@ type CollectionSummary struct {
 
 func scanItem(row rowScanner) (Item, error) {
 	var item Item
-	var m string
-	err := row.Scan(&item.ID, &m, &item.TMDBID, &item.Title, &item.Year,
+	var m, genresJSON, castJSON string
+	if err := row.Scan(&item.ID, &m, &item.TMDBID, &item.Title, &item.Year,
 		&item.FilePath, &item.RootFolderPath,
 		&item.PHash, &item.PHashFileSize, &item.PHashFileMTime,
 		&item.CreatedAt, &item.UpdatedAt,
-		&item.TMDBCollectionID, &item.CollectionName)
+		&item.TMDBCollectionID, &item.CollectionName,
+		&genresJSON, &castJSON); err != nil {
+		return Item{}, err
+	}
 	item.Mode = mode.Mode(m)
-	return item, err
+	if err := json.Unmarshal([]byte(genresJSON), &item.Genres); err != nil {
+		return Item{}, fmt.Errorf("decoding genres for item %d: %w", item.ID, err)
+	}
+	if err := json.Unmarshal([]byte(castJSON), &item.Cast); err != nil {
+		return Item{}, fmt.Errorf("decoding cast for item %d: %w", item.ID, err)
+	}
+	return item, nil
+}
+
+func marshalStringSlice(ss []string) (string, error) {
+	if len(ss) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(ss)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // UnmappedEntry is one file or directory found directly under a root folder

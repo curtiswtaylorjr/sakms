@@ -349,7 +349,20 @@ const RenameQueue: Component<{ mode: Mode }> = (props) => {
                           </Show>
                         </td>
                         <td class="px-2 py-2 text-fg">{p.sourceName}</td>
-                        <td class="px-2 py-2 text-fg">{p.title || ""}</td>
+                        <td class="px-2 py-2 text-fg">
+                          {p.title || ""}
+                          <Show when={(p.genres ?? []).length > 0}>
+                            <div class="mt-0.5 flex flex-wrap gap-1">
+                              <For each={p.genres}>
+                                {(g) => (
+                                  <span class="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted">
+                                    {g}
+                                  </span>
+                                )}
+                              </For>
+                            </div>
+                          </Show>
+                        </td>
                         <Show when={props.mode === "movies" || props.mode === "series"}>
                           <td class="px-2 py-2 text-muted">{p.year || ""}</td>
                         </Show>

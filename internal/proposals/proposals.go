@@ -142,8 +142,13 @@ type Proposal struct {
 	// once, never cleared, same "never submit twice" guard as DraftID/
 	// DraftSubmittedAt.
 	FingerprintSubmittedAt string `json:"fingerprintSubmittedAt,omitempty"`
-	CreatedAt              string `json:"createdAt"`
-	AppliedAt              string `json:"appliedAt,omitempty"`
+	// Genres and Cast are populated at Scan time from TMDB for Movies/Series
+	// Rename proposals — enrichment only; empty for Dedup/Purge/Adult.
+	// Soft-fail: a failed credits call leaves them nil without blocking.
+	Genres    []string `json:"genres,omitempty"`
+	Cast      []string `json:"cast,omitempty"`
+	CreatedAt string   `json:"createdAt"`
+	AppliedAt string   `json:"appliedAt,omitempty"`
 }
 
 type Store struct {
@@ -183,18 +188,28 @@ func (s *Store) ReplacePending(ctx context.Context, m mode.Mode, wf Workflow, fr
 		if err != nil {
 			return nil, fmt.Errorf("encoding extra episode numbers for %q: %w", p.SourceName, err)
 		}
+		genresJSON, err := marshalStringSlice(p.Genres)
+		if err != nil {
+			return nil, fmt.Errorf("encoding genres for %q: %w", p.SourceName, err)
+		}
+		castJSON, err := marshalStringSlice(p.Cast)
+		if err != nil {
+			return nil, fmt.Errorf("encoding cast for %q: %w", p.SourceName, err)
+		}
 		row := tx.QueryRowContext(ctx, `
 			INSERT INTO proposals (
 				mode, workflow, status, source_name, source_path, root_folder_path,
 				title, tvdb_id, tmdb_id, season_number, episode_number, year, quality_profile_id, reason, tracked_id,
 				foreign_id, item_type, candidates_json, studio, scene_date,
-				phash, duration_seconds, give_back_box, give_back_scene_id, extra_episode_numbers
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				phash, duration_seconds, give_back_box, give_back_scene_id, extra_episode_numbers,
+				genres, cast
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			RETURNING id, created_at
 		`, string(p.Mode), string(p.Workflow), string(p.Status), p.SourceName, p.SourcePath, p.RootFolderPath,
 			p.Title, p.TVDBID, p.TMDBID, p.SeasonNumber, p.EpisodeNumber, p.Year, p.QualityProfileID, p.Reason, p.TrackedID,
 			p.ForeignID, p.ItemType, string(candidatesJSON), p.Studio, p.Date,
-			p.PHash, p.DurationSeconds, p.GiveBackBox, p.GiveBackSceneID, extraEpisodesJSON)
+			p.PHash, p.DurationSeconds, p.GiveBackBox, p.GiveBackSceneID, extraEpisodesJSON,
+			genresJSON, castJSON)
 		if err := row.Scan(&p.ID, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("inserting proposal for %q: %w", p.SourceName, err)
 		}
@@ -215,7 +230,8 @@ func (s *Store) List(ctx context.Context, m mode.Mode, wf Workflow) ([]Proposal,
 		       foreign_id, item_type, candidates_json, studio, scene_date,
 		       draft_id, COALESCE(draft_submitted_at, ''),
 		       phash, duration_seconds, give_back_box, give_back_scene_id, COALESCE(fingerprint_submitted_at, ''),
-		       created_at, COALESCE(applied_at, ''), extra_episode_numbers
+		       created_at, COALESCE(applied_at, ''), extra_episode_numbers,
+		       COALESCE(genres, '[]'), COALESCE(cast, '[]')
 		FROM proposals WHERE mode = ? AND workflow = ? ORDER BY id DESC
 	`, string(m), string(wf))
 	if err != nil {
@@ -246,7 +262,8 @@ func (s *Store) Get(ctx context.Context, id int64) (*Proposal, error) {
 		       foreign_id, item_type, candidates_json, studio, scene_date,
 		       draft_id, COALESCE(draft_submitted_at, ''),
 		       phash, duration_seconds, give_back_box, give_back_scene_id, COALESCE(fingerprint_submitted_at, ''),
-		       created_at, COALESCE(applied_at, ''), extra_episode_numbers
+		       created_at, COALESCE(applied_at, ''), extra_episode_numbers,
+		       COALESCE(genres, '[]'), COALESCE(cast, '[]')
 		FROM proposals WHERE id = ?
 	`, id)
 	p, err := scanProposal(row)
@@ -337,13 +354,14 @@ type rowScanner interface {
 
 func scanProposal(row rowScanner) (Proposal, error) {
 	var p Proposal
-	var m, wf, status, candidatesJSON, extraEpisodesJSON string
+	var m, wf, status, candidatesJSON, extraEpisodesJSON, genresJSON, castJSON string
 	if err := row.Scan(&p.ID, &m, &wf, &status, &p.SourceName, &p.SourcePath, &p.RootFolderPath,
 		&p.Title, &p.TVDBID, &p.TMDBID, &p.SeasonNumber, &p.EpisodeNumber, &p.Year, &p.QualityProfileID, &p.Reason, &p.TrackedID,
 		&p.ForeignID, &p.ItemType, &candidatesJSON, &p.Studio, &p.Date,
 		&p.DraftID, &p.DraftSubmittedAt,
 		&p.PHash, &p.DurationSeconds, &p.GiveBackBox, &p.GiveBackSceneID, &p.FingerprintSubmittedAt,
-		&p.CreatedAt, &p.AppliedAt, &extraEpisodesJSON); err != nil {
+		&p.CreatedAt, &p.AppliedAt, &extraEpisodesJSON,
+		&genresJSON, &castJSON); err != nil {
 		return Proposal{}, err
 	}
 	p.Mode, p.Workflow, p.Status = mode.Mode(m), Workflow(wf), Status(status)
@@ -355,12 +373,18 @@ func scanProposal(row rowScanner) (Proposal, error) {
 			return Proposal{}, fmt.Errorf("decoding extra episode numbers for proposal %d: %w", p.ID, err)
 		}
 	}
+	if err := json.Unmarshal([]byte(genresJSON), &p.Genres); err != nil {
+		return Proposal{}, fmt.Errorf("decoding genres for proposal %d: %w", p.ID, err)
+	}
+	if err := json.Unmarshal([]byte(castJSON), &p.Cast); err != nil {
+		return Proposal{}, fmt.Errorf("decoding cast for proposal %d: %w", p.ID, err)
+	}
 	return p, nil
 }
 
 // marshalExtraEpisodes encodes nums for the extra_episode_numbers column —
 // "" (not "null"/"[]") for the empty/nil case, matching the column's own
-// NOT NULL DEFAULT ” "empty string means absent" convention (the same
+// NOT NULL DEFAULT " "empty string means absent" convention (the same
 // convention FilePath already uses), rather than always storing a JSON
 // array even when there's nothing to say.
 func marshalExtraEpisodes(nums []int) (string, error) {
@@ -368,6 +392,19 @@ func marshalExtraEpisodes(nums []int) (string, error) {
 		return "", nil
 	}
 	b, err := json.Marshal(nums)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// marshalStringSlice encodes ss as a JSON array — always [] for the nil/empty
+// case, matching the genres/cast columns' DEFAULT '[]'.
+func marshalStringSlice(ss []string) (string, error) {
+	if len(ss) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(ss)
 	if err != nil {
 		return "", err
 	}

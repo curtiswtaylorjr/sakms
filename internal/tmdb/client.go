@@ -331,6 +331,53 @@ func (c *Client) TVDetails(ctx context.Context, tmdbID int) (TVDetails, error) {
 	return details, nil
 }
 
+type movieCreditsResponse struct {
+	Cast []struct {
+		Name string `json:"name"`
+	} `json:"cast"`
+}
+
+// MovieCredits returns the top 10 cast member names from TMDB's
+// /movie/{id}/credits. Soft-fail: callers treat errors as enrichment
+// gaps, not blocking failures.
+func (c *Client) MovieCredits(ctx context.Context, tmdbID int) ([]string, error) {
+	var resp movieCreditsResponse
+	if err := c.do(ctx, fmt.Sprintf("/movie/%d/credits", tmdbID), nil, &resp); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, 10)
+	for i, m := range resp.Cast {
+		if i >= 10 {
+			break
+		}
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
+type tvAggregateCreditsResponse struct {
+	Cast []struct {
+		Name string `json:"name"`
+	} `json:"cast"`
+}
+
+// TVAggregateCredits returns the top 10 cast member names from TMDB's
+// /tv/{id}/aggregate_credits. Soft-fail same as MovieCredits.
+func (c *Client) TVAggregateCredits(ctx context.Context, tmdbID int) ([]string, error) {
+	var resp tvAggregateCreditsResponse
+	if err := c.do(ctx, fmt.Sprintf("/tv/%d/aggregate_credits", tmdbID), nil, &resp); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, 10)
+	for i, m := range resp.Cast {
+		if i >= 10 {
+			break
+		}
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
 // SeasonEpisode is one episode as TMDB's season-details endpoint reports
 // it — enough to record a canonical episode row even before any file for
 // it exists on disk (see internal/library's Episode). Runtime (minutes; 0
