@@ -579,6 +579,13 @@ export interface Proposal {
   draftId?: string;
   candidates?: Candidate[];
   /**
+   * PHashSimilarity is the minimum pairwise phash similarity across the
+   * duplicate group [0.0–1.0], populated only by phash-primary scans
+   * (Movies/Series). Zero means the proposal was produced by the legacy
+   * TMDB-keyed path and no similarity score was computed.
+   */
+  pHashSimilarity?: number /* float64 */;
+  /**
    * Genres/Cast are populated for Movies/Series Rename proposals only —
    * empty for Dedup/Purge/Adult. Soft-fail: absent when TMDB credits
    * call failed at Scan time.

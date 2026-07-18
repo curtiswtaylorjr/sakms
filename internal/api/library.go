@@ -362,23 +362,33 @@ func putNamingPresetHandler(settingsStore *settings.Store) http.HandlerFunc {
 // of an int (per-frame average Hamming bits).
 func phashThresholdKey(m mode.Mode) string { return string(m) + "_phash_dedup_threshold" }
 
+// phashModeDefault returns the factory-default per-frame Hamming threshold for
+// mode m. Movies uses 25 (≈60% similarity) — more permissive than Series
+// because there is no within-show shared-intro false-positive risk for Movies.
+// All other modes use phash.DefaultThreshold (10).
+func phashModeDefault(m mode.Mode) int {
+	if m == mode.Movies {
+		return phash.DefaultMoviesThreshold
+	}
+	return phash.DefaultThreshold
+}
+
 // resolvePHashThreshold loads m's Dedup phash similarity threshold, defaulting
-// to phash.DefaultThreshold when unset — the same fallback
-// getPHashThresholdHandler reports, reused by dedup.go's Scan handler so
-// ScanLibrary gates on whatever is configured. A stored value is always a
+// to phashModeDefault(m) when unset — the same fallback getPHashThresholdHandler
+// reports, reused by dedup.go's Scan handler. A stored value is always a
 // validated int (putPHashThresholdHandler rejects otherwise), so a parse
-// failure falls back to the default rather than failing a Scan.
+// failure falls back to the mode default rather than failing a Scan.
 func resolvePHashThreshold(ctx context.Context, settingsStore *settings.Store, m mode.Mode) (int, error) {
 	raw, err := settingsStore.Get(ctx, phashThresholdKey(m))
 	if err != nil && !errors.Is(err, settings.ErrNotFound) {
 		return 0, err
 	}
 	if raw == "" {
-		return phash.DefaultThreshold, nil
+		return phashModeDefault(m), nil
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil {
-		return phash.DefaultThreshold, nil
+		return phashModeDefault(m), nil
 	}
 	return v, nil
 }
@@ -541,8 +551,8 @@ func putIdentifyEnabledHandler(settingsStore *settings.Store) http.HandlerFunc {
 }
 
 // getPHashThresholdHandler returns {mode}'s Dedup perceptual-hash similarity
-// threshold (per-frame average Hamming bits) — defaults to
-// phash.DefaultThreshold when unset.
+// threshold (per-frame average Hamming bits) — defaults to phashModeDefault(m)
+// when unset (25 for Movies, phash.DefaultThreshold for all other modes).
 func getPHashThresholdHandler(settingsStore *settings.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		threshold, err := resolvePHashThreshold(r.Context(), settingsStore, mode.Mode(r.PathValue("mode")))

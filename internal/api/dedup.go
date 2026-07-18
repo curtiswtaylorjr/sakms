@@ -13,18 +13,17 @@ import (
 	"github.com/curtiswtaylorjr/sakms/internal/settings"
 )
 
-// dedupScanHandler runs the Dedup workflow's propose-phase for {mode}:
-// identifies every unmapped file, groups it with any already-tracked item
-// sharing the same identifier (TMDB ID for Movies, (show, season, episode)
-// for Series, foreignID for Adult), ffprobes every candidate, and replaces
-// the live Dedup queue with whatever duplicate groups it found. prober
-// takes dedup.Prober's interface, not the concrete *mediainfo.Prober, so
-// tests can inject a fake instead of depending on a real ffprobe binary.
-// Every mode dispatches to a library-backed sibling now (no *arr app
-// involved): Movies/Series to dedup.ScanLibrary/ScanLibrarySeries, Adult to
-// dedup.ScanLibraryAdult (Whisparr eliminated, Stage 4), which groups by
-// (box, scene_id) and refines by perceptual similarity — so the Adult branch
-// resolves the same per-mode threshold and forwards the in-scope hasher.
+// dedupScanHandler runs the Dedup workflow's propose-phase for {mode} and
+// replaces the live Dedup queue with whatever duplicate groups it found.
+// prober takes dedup.Prober's interface, not the concrete *mediainfo.Prober,
+// so tests can inject a fake instead of depending on a real ffprobe binary.
+//
+// Movies/Series dispatch to the phash-primary scan (ScanLibraryPHash /
+// ScanLibrarySeriesPHash): all files — tracked and orphans — are grouped by
+// perceptual similarity alone; TMDB is used only for display labels and never
+// determines whether files are grouped. Adult dispatches to ScanLibraryAdult
+// (Whisparr eliminated, Stage 4), which groups by (box, scene_id) and refines
+// by perceptual similarity.
 func dedupScanHandler(httpClient *http.Client, connStore *connections.Store, settingsStore *settings.Store, propStore *proposals.Store, prober dedup.Prober, hasher dedup.PHasher, libStore *library.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := mode.Mode(r.PathValue("mode"))
@@ -56,9 +55,9 @@ func dedupScanHandler(httpClient *http.Client, connStore *connections.Store, set
 				return
 			}
 			if m == mode.Movies {
-				found, err = dedup.ScanLibrary(ctx, sess, libStore, rootPath, prober, hasher, threshold)
+				found, err = dedup.ScanLibraryPHash(ctx, sess, libStore, rootPath, prober, hasher, threshold)
 			} else {
-				found, err = dedup.ScanLibrarySeries(ctx, sess, libStore, rootPath, prober, hasher, threshold)
+				found, err = dedup.ScanLibrarySeriesPHash(ctx, sess, libStore, rootPath, prober, hasher, threshold)
 			}
 		} else {
 			threshold, tErr := resolvePHashThreshold(ctx, settingsStore, m)

@@ -27,8 +27,8 @@ func TestGetPHashThresholdHandler_DefaultsToDefault(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if got.Threshold != phash.DefaultThreshold {
-		t.Errorf("expected default threshold %d, got %d", phash.DefaultThreshold, got.Threshold)
+	if got.Threshold != phash.DefaultMoviesThreshold {
+		t.Errorf("expected movies default threshold %d, got %d", phash.DefaultMoviesThreshold, got.Threshold)
 	}
 }
 

@@ -112,6 +112,11 @@ type Proposal struct {
 	ForeignID        string      `json:"foreignId,omitempty"`
 	ItemType         string      `json:"itemType,omitempty"`
 	Candidates       []Candidate `json:"candidates,omitempty"`
+	// PHashSimilarity is the minimum pairwise phash similarity across the group
+	// [0.0–1.0], populated only by phash-primary scans (ScanLibraryPHash /
+	// ScanLibrarySeriesPHash). Zero means the proposal was produced by the
+	// legacy TMDB-keyed path and no similarity score was computed.
+	PHashSimilarity float64 `json:"pHashSimilarity,omitempty"`
 	// Studio and Date are captured from Adult identification alongside Title,
 	// even on an Unmatched (web-identified-only) proposal — SubmitDraft needs
 	// them to give the scene back to the community databases.

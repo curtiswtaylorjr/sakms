@@ -592,6 +592,11 @@ type Proposal struct {
 	Reason              string      `json:"reason,omitempty"`
 	DraftID             string      `json:"draftId,omitempty"`
 	Candidates          []Candidate `json:"candidates,omitempty"`
+	// PHashSimilarity is the minimum pairwise phash similarity across the
+	// duplicate group [0.0–1.0], populated only by phash-primary scans
+	// (Movies/Series). Zero means the proposal was produced by the legacy
+	// TMDB-keyed path and no similarity score was computed.
+	PHashSimilarity float64 `json:"pHashSimilarity,omitempty"`
 	// Genres/Cast are populated for Movies/Series Rename proposals only —
 	// empty for Dedup/Purge/Adult. Soft-fail: absent when TMDB credits
 	// call failed at Scan time.

@@ -9,12 +9,28 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/curtiswtaylorjr/sakms/internal/library"
 	"github.com/curtiswtaylorjr/sakms/internal/mediainfo"
 	"github.com/curtiswtaylorjr/sakms/internal/proposals"
 )
+
+// perPathPHasher returns path-specific phash values for Dedup tests that need
+// distinct hashes across files (e.g. to prevent a different-episode orphan from
+// being grouped with a same-episode duplicate pair). Paths absent from the map
+// fall through to the zero-hash returned by constantPHasher.
+type perPathPHasher struct {
+	hashes map[string]string
+}
+
+func (p perPathPHasher) Hash(_ context.Context, path string) (string, error) {
+	if h, ok := p.hashes[path]; ok {
+		return h, nil
+	}
+	return "phash64/5f:" + strings.Repeat("0", 80), nil // zero-hash fallback — matches everything
+}
 
 // fakeTMDBTVSearchHandler serves TMDB's /search/tv endpoint with one canned
 // result — Dedup's Series path never calls /tv/{id}/season/{n} (unlike
@@ -167,7 +183,12 @@ func TestDedupWorkflow_Series_SeasonPack_ScanFindsGroupedDuplicate(t *testing.T)
 		packEp1:     {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 		packEp2:     {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil))
+	// packEp2 is a different episode (S01E02); give it a maximally-distant hash so
+	// the phash-primary scan does NOT group it with the S01E01 pair.
+	phasher := perPathPHasher{hashes: map[string]string{
+		packEp2: "phash64/5f:" + strings.Repeat("f", 80),
+	}}
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, phasher, testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil))
 	defer srv.Close()
 
 	scanResp, err := http.Post(srv.URL+"/api/modes/series/dedup/scan", "application/json", nil)

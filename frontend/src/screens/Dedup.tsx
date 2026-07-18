@@ -83,6 +83,18 @@ const winnerIndex = (candidates: Candidate[]): number => {
 const fmtBitrate = (bitRate: number | undefined): string =>
   bitRate ? `${Math.round(bitRate / 1000)} kbps` : "";
 
+// fmtSimilarity renders a phash similarity score [0.0–1.0] as a percentage
+// string, e.g. "95% similar".
+const fmtSimilarity = (s: number): string => `${Math.round(s * 100)}% similar`;
+
+// similarityLabel returns a short confidence descriptor for the given phash
+// similarity score. Matches the thresholds from the phash-primary spec.
+const similarityLabel = (s: number): string => {
+  if (s >= 0.9) return "high confidence duplicate";
+  if (s >= 0.7) return "likely duplicate";
+  return "possible duplicate — review carefully";
+};
+
 // DedupView is one mode's duplicate-group review queue. Keyed on props.mode so
 // the resource refetches when the shell switches tabs.
 const DedupView: Component<{ mode: Mode }> = (props) => {
@@ -237,6 +249,12 @@ const DedupView: Component<{ mode: Mode }> = (props) => {
                         {p.title || p.sourceName || ""}
                       </strong>
                       <StatusPill status={p.status} />
+                      <Show when={(p.pHashSimilarity ?? 0) > 0}>
+                        <span class="text-xs text-muted">
+                          {fmtSimilarity(p.pHashSimilarity!)} ·{" "}
+                          {similarityLabel(p.pHashSimilarity!)}
+                        </span>
+                      </Show>
                     </div>
                     <div class="mt-3 overflow-x-auto">
                       <table class="w-full text-left text-sm">

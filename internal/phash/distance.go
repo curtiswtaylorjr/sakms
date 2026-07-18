@@ -16,6 +16,12 @@ import (
 // arbitrary movie frames (see calibrate_test.go's doc comment).
 const DefaultThreshold = 10
 
+// DefaultMoviesThreshold is the factory default for Movies mode's phash-primary
+// Dedup scan. More permissive than DefaultThreshold (25 vs 10) because there
+// is no within-show shared-intro false-positive risk for Movies. Corresponds
+// to approximately 60% similarity over 5 × 64-bit frames.
+const DefaultMoviesThreshold = 25
+
 // encode returns the DB/candidate-JSON storage form of a composite hash:
 // "<scheme>:<hex>", e.g. "phash64/5f:1a2b...". The scheme tag makes a hash
 // self-describing, so a value cached under an OLD algorithm or frame count is
@@ -37,6 +43,31 @@ func decode(s string) (scheme string, composite []byte, err error) {
 		return "", nil, fmt.Errorf("phash: decoding hash payload of %q: %w", s, err)
 	}
 	return s[:i], composite, nil
+}
+
+// SimilarityScore returns the normalised similarity of a and b as a value in
+// [0.0, 1.0]: 1.0 means bit-for-bit identical, 0.0 means maximally dissimilar.
+// It returns (0, nil) — NOT an error — for scheme/length mismatches (same
+// stale-entry safety as SimilarityWithin). frames is the expected frame count
+// and is used only to bound the denominator; the composite byte length from the
+// decoded hash is the authoritative bit count.
+func SimilarityScore(a, b string, frames int) (float64, error) {
+	schemeA, compositeA, err := decode(a)
+	if err != nil {
+		return 0, err
+	}
+	schemeB, compositeB, err := decode(b)
+	if err != nil {
+		return 0, err
+	}
+	if schemeA != schemeB || len(compositeA) != len(compositeB) {
+		return 0, nil
+	}
+	totalBits := frames * 64
+	if totalBits <= 0 {
+		return 0, nil
+	}
+	return 1.0 - float64(hammingBits(compositeA, compositeB))/float64(totalBits), nil
 }
 
 // SimilarityWithin reports whether a and b are within perFrameThreshold average
