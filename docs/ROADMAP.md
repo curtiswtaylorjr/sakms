@@ -150,13 +150,21 @@ player/identification source (phash-first Rename reads a phash Stash
 already computed; player-rescan-notify still fires to it) — never as an
 organizational authority.
 
+**Shipped (2026-07-18): phash-PRIMARY grouping (TMDB-less).** All-pairs O(n²)
+phash comparison across ALL files (tracked + orphans), union-find connected-
+components grouping, TMDB used for display labels only. Catches three cases
+the old scan missed: (1) orphan-vs-orphan — no shared identifier at all,
+(2) cross-ID mis-assignment — both tracked but one resolved to the wrong TMDB
+ID, (3) named-vs-unnamed — one file tracked, the other's filename too generic
+for TMDB. `dedup_phash_primary.go` — `ScanLibraryPHash` (Movies) and
+`ScanLibrarySeriesPHash` (Series); `orphan_phashes` scratch table (migration
+`0034`) caches phash values for untracked orphan files. `DefaultMoviesThreshold`
+= 25 (more permissive than the Series default of 10 — no shared-intro
+false-positive risk for Movies). `PHashSimilarity float64` on
+`proposals.Proposal` surfaces minimum pairwise similarity in the group card
+header. Commit `50dd970`.
+
 **Still open (next slices):**
-- **phash-PRIMARY grouping (TMDB-less).** The larger ambition from the original
-  entry: making phash the *primary* duplicate signal that groups files with no
-  shared identifier at all — replacing identifier-based grouping rather than
-  refining it. This needs a full-library comparison strategy (the current slice
-  is scoped to same-identifier groups, which comes for free; primary grouping
-  is not). Not started.
 - **GPU frame decoding.** CPU baseline shipped; GPU (QuickSync/NVENC) as an
   opt-in speedup for frame decoding is still just a decided-in-principle idea.
 - **PDQ is still pending an imghash tagged release.** The algorithm is isolated
