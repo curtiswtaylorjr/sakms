@@ -728,21 +728,37 @@ becomes `*torrent.Torrent` handle). The SSE fan-out shape stays identical.
 **2. Usenet/NZB native support**
 
 The NZB path still returns 400. A real Usenet implementation needs: NNTP
-connection pooling (multi-server, TLS), yEnc segment decoding, par2 repair
-(optional but expected). This is a meaningfully bigger lift than the torrent
-side — par2 repair alone is non-trivial.
+connection pooling (multi-server, TLS), yEnc segment decoding, NZB parsing,
+and par2 repair (optional but expected by users). Bigger lift than torrent —
+par2 repair is the real cost.
 
-Candidate evaluated and rejected: **gonzbee** (github.com/DanielMorsing/gonzbee)
-— has the right building blocks (NNTP, NZB parser, yEnc, par2) but is a CLI
-tool, not a library. No programmatic API surface. 21 stars, 2 forks,
-essentially unmaintained. Forking and rewiring its internals would be more work
-than writing clean packages against spec. Not the right path.
+Evaluated and rejected: **gonzbee** (github.com/DanielMorsing/gonzbee) — has
+the right building blocks but is a CLI tool, not a library. No programmatic
+API surface. 21 stars, 2 forks, essentially unmaintained.
 
-Actual path: either find a maintained Go NNTP/yEnc/par2 library combination, or
-build the pieces natively (NNTP client + yEnc decoder are small; par2 repair is
-the real cost). Decide whether to build against a third-party par2 binary (same
-pattern as the current aria2c embed) or implement repair natively. No design
-started yet.
+Viable library candidates identified:
+
+- **`strider-/go-usenet`** — the most complete lower-level stack: NNTP dial
+  (with TLS), authentication, yEnc binary decode, NZB parsing → download
+  queue, par2 stats/verification. Best single-package candidate for a native
+  implementation.
+- **`gjrtimmer/nzb`** — robust NZB XML parsing with automatic Article ID
+  escaped-character fixing (a real source of `430 Article not found` errors),
+  JSON save/load for state, par2 file-set handling. Recent activity.
+  Complementary to `strider-/go-usenet` or usable standalone if the NNTP
+  layer is built separately.
+- **`matthiassb/go-usenet`** — fork of gonzbee, full download workflow
+  reference (NZB parse → article fetch → par2). Less frequently updated but
+  useful as a reference implementation to read, not necessarily to depend on.
+- **`andrewstuart/yenc`** — dedicated yEnc encode/decode, if a standalone
+  layer is preferred over the yEnc bundled in `strider-/go-usenet`.
+- **`mrobinsn/go-newznab`** — Newznab indexer API client. Not needed for
+  downloads (Prowlarr already handles indexer search) but relevant if SAK
+  ever wants to talk to Newznab indexers directly without Prowlarr.
+
+Likely stack: `gjrtimmer/nzb` for parsing + `strider-/go-usenet` for
+NNTP/yEnc/par2, wired into a `internal/nzbdownloader` package mirroring the
+`internal/aria2` + `internal/downloader` pattern. No design started yet.
 
 ### Cheap, independent wins
 - **Clearer mount-disconnect error messaging** — shipped 2026-07-11, see
