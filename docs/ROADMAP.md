@@ -177,6 +177,14 @@ header. Commit `50dd970`.
 
 ## Recently shipped (outside this backlog)
 
+### Tagging UI grid view — shipped 2026-07-19
+Two-panel layout for the `/tag` screen (Movies/Series). Left: responsive
+poster-card grid (2–4 cols, client-side title search, localStorage-persisted
+grid/table toggle). Right: detail panel with read-only genres/cast chips and
+the existing immediate-commit tag editor. Adult keeps the unchanged table
+view. `frontend/src/screens/Tag.tsx` (609 lines); 6 new tests in
+`Tag.test.tsx`. Commit `b470ca2`.
+
 ### Unified downloader — fully shipped (torrent engine + Usenet native support)
 
 **Shipped 2026-07-18 (torrent only, commits `c3a3526`+`5eeae1f`):** SAK now
@@ -698,18 +706,10 @@ CHANGELOG.md's "transactional multi-episode upserts" entry.
 
 ## Backlog (not yet started, roughly in discussion order)
 
-### Frontend redesign — content surfaces still needed
-The sidebar/SPA *shell* already shipped 2026-07-13 (see "Recently shipped"
-above) — this entry previously described the whole redesign, shell
-included, as not-yet-started, which was stale; corrected 2026-07-16 (same
-audit as the Whisparr-elimination fix above). Bulk apply's multi-select
-tables shipped 2026-07-17 (see "Recently shipped" below). The system
-dashboard shipped 2026-07-17 (see "Recently shipped" below). What's
-genuinely still backlog is: Collections/structured tagging UI — see "UI
-mockup reference" below for the visual direction, and its own backlog entry
-further down for scope detail. Scope decision (2026-07-10, still holds):
-build each wrapping SAK's *existing* data and workflows — do not treat the
-mockups as a literal feature spec.
+### Frontend redesign — fully shipped 2026-07-19
+Shell shipped 2026-07-13; bulk-apply tables + system dashboard shipped
+2026-07-17; Collections/structured tagging UI (the last open content
+surface) shipped 2026-07-19 — see "Recently shipped" below.
 
 ### Cheap, independent wins
 - **Clearer mount-disconnect error messaging** — shipped 2026-07-11, see
