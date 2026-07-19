@@ -24,7 +24,7 @@ COPY frontend/ ./
 # relative to this frontend/ workdir), mirroring the local-dev layout.
 RUN pnpm build
 
-FROM golang:1.25-trixie AS build
+FROM golang:1.26-trixie AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
