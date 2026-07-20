@@ -54,4 +54,4 @@ jobs:
       - name: Submit to COPR
         run: |
           SRPM=$(ls sakms-node-*.src.rpm | head -1)
-          copr-cli build labbersanon/sakms "$SRPM"
+          copr-cli build labbersanon/SAK_Media_Server_Node "$SRPM"
