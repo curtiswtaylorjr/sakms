@@ -70,8 +70,11 @@ install -dm700 %{buildroot}%{_sysconfdir}/sakms-node
 %post
 %systemd_post sakms-node.service
 # Run the interactive config writer + service enabler only on fresh installs.
+# No `|| true`: post-install.sh's own exit code must propagate so a genuine
+# failure (e.g. no SAKMS_SERVER_URL in a non-interactive install) surfaces as
+# a real %post/dnf failure, not a silently-swallowed success.
 if [ $1 -eq 1 ]; then
-    %{_datadir}/sakms-node/post-install.sh || true
+    %{_datadir}/sakms-node/post-install.sh
 fi
 
 %preun
