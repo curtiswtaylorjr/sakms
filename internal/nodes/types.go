@@ -101,6 +101,13 @@ type ConnectAck struct {
 type BrowseRequest struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
+	// IncludeFiles requests files as well as directories in the response.
+	// Default false preserves the operator-facing folder picker's existing
+	// dirs-only UX; the security-hardening addendum's mapping-verification
+	// safeguard is the only caller that sets this true, since a flat
+	// (file-only, no-subdirectories) library must not silently compare as
+	// empty on every save.
+	IncludeFiles bool `json:"includeFiles,omitempty"`
 }
 
 // BrowseResult is a node's POSTed answer for one BrowseRequest. Exactly one
@@ -112,7 +119,8 @@ type BrowseResult struct {
 	Error     string        `json:"error,omitempty"`
 }
 
-// BrowseEntry is one subdirectory a node reports back for a BrowseRequest.
+// BrowseEntry is one directory or file a node reports back for a
+// BrowseRequest — a file only appears when the request set IncludeFiles.
 type BrowseEntry struct {
 	Name string `json:"name"`
 	Path string `json:"path"`

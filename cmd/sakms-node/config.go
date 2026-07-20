@@ -23,6 +23,30 @@ type NodeConfig struct {
 	PathMap    []PathMapEntry `json:"pathMap"`    // applied longest-prefix-first
 	StatusPort int            `json:"statusPort"` // port for GET /status; 0 → defaultStatusPort
 	MaxJobs    int            `json:"maxJobs"`    // 0 = unlimited
+
+	// MediaRoots is the security-hardening addendum's node-side allowlist
+	// (Safeguard 2): the top-level directory tree(s) on this machine that
+	// legitimately contain media. Every browse request and every hash job's
+	// remapped local path must resolve within one of these, independent of
+	// whatever the server asks for — this is what makes the check
+	// adversarially meaningful (a compromised server credential cannot
+	// expand it) rather than the server checking itself.
+	//
+	// Explicitly operator-set only, NEVER auto-derived from PathMap (an
+	// auto-derive-from-common-ancestor approach was considered and rejected
+	// as unsound — it can collapse toward "/" for media on separate mounts,
+	// silently producing no real protection). Strictly local-only: this
+	// field has no counterpart on the wire NodeSettings type and must never
+	// be settable via any SSE/EventSettings push — it is set only by
+	// editing this config file directly.
+	//
+	// Empty (the default, and the state of every node that predates this
+	// addendum) means "not yet configured" — a grace period during which
+	// every check below is a no-op and the node behaves exactly as it did
+	// before this addendum, so upgrading an already-working node never
+	// silently breaks it. A prominent warning is logged repeatedly while
+	// this is empty. Enforcement begins the moment an operator sets this.
+	MediaRoots []string `json:"mediaRoots,omitempty"`
 }
 
 // statusPort returns the effective status listener port.

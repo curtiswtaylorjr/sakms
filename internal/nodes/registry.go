@@ -147,7 +147,7 @@ func (r *Registry) SendSettings(nodeID string, s NodeSettings) bool {
 // sensible "local" equivalent of listing a specific node's filesystem, so a
 // timeout or missing node is reported as an honest error to the caller
 // instead of silently substituting something else.
-func (r *Registry) RequestBrowse(nodeID, path string) (BrowseResult, error) {
+func (r *Registry) RequestBrowse(nodeID, path string, includeFiles bool) (BrowseResult, error) {
 	r.mu.Lock()
 	n, ok := r.nodes[nodeID]
 	if !ok {
@@ -160,7 +160,7 @@ func (r *Registry) RequestBrowse(nodeID, path string) (BrowseResult, error) {
 	r.pendingBrowse[reqID] = res
 
 	select {
-	case n.browse <- BrowseRequest{ID: reqID, Path: path}:
+	case n.browse <- BrowseRequest{ID: reqID, Path: path, IncludeFiles: includeFiles}:
 		r.mu.Unlock()
 	default:
 		delete(r.pendingBrowse, reqID)

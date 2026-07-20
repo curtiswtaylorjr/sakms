@@ -14,11 +14,35 @@ import (
 	"time"
 )
 
+// VerificationStatus records how a PathMappingEntry's NodePath was
+// confirmed to correspond to its LibraryPathKey's server-side value, per
+// the security-hardening addendum's mapping-verification safeguard.
+type VerificationStatus string
+
+const (
+	// VerificationVerified means a live directory-listing comparison ran
+	// between the server's ServerPath and the node's NodePath and passed
+	// the containment threshold.
+	VerificationVerified VerificationStatus = "verified"
+	// VerificationUnverifiedBootstrap means a live comparison ran but one
+	// or both listings were empty — nothing to compare, so the row is
+	// accepted but not confirmed correct.
+	VerificationUnverifiedBootstrap VerificationStatus = "unverified_bootstrap"
+	// VerificationUnverifiedApproval means the row was persisted at
+	// approval time, before the node has an authenticated channel a live
+	// comparison could use at all (see the Reachability constraint in the
+	// security-hardening addendum) — structurally distinct from the
+	// bootstrap case, which did attempt a comparison.
+	VerificationUnverifiedApproval VerificationStatus = "unverified_approval"
+)
+
 // PathMappingEntry is one persisted (library path key → node-local path)
 // mapping row.
 type PathMappingEntry struct {
-	LibraryPathKey string
-	NodePath       string
+	LibraryPathKey     string
+	NodePath           string
+	VerificationStatus VerificationStatus
+	VerifiedAt         *time.Time
 }
 
 // Settings is everything persisted for one node: its path mappings and its
@@ -46,15 +70,25 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 // case; ok=false means "nothing to push," not "push zero values."
 func (s *Store) Get(ctx context.Context, nodeID string) (settings Settings, ok bool, err error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT library_path_key, node_path FROM node_path_mappings WHERE node_id = ?`, nodeID)
+		`SELECT library_path_key, node_path, verification_status, verified_at FROM node_path_mappings WHERE node_id = ?`, nodeID)
 	if err != nil {
 		return Settings{}, false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var e PathMappingEntry
-		if err := rows.Scan(&e.LibraryPathKey, &e.NodePath); err != nil {
+		var status string
+		var verifiedAt sql.NullString
+		if err := rows.Scan(&e.LibraryPathKey, &e.NodePath, &status, &verifiedAt); err != nil {
 			return Settings{}, false, err
+		}
+		e.VerificationStatus = VerificationStatus(status)
+		if verifiedAt.Valid {
+			t, err := time.Parse(time.RFC3339, verifiedAt.String)
+			if err != nil {
+				return Settings{}, false, err
+			}
+			e.VerifiedAt = &t
 		}
 		settings.PathMappings = append(settings.PathMappings, e)
 	}
@@ -91,11 +125,19 @@ func (s *Store) Set(ctx context.Context, nodeID string, settings Settings) error
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, e := range settings.PathMappings {
+		var verifiedAt sql.NullString
+		if e.VerifiedAt != nil {
+			verifiedAt = sql.NullString{String: e.VerifiedAt.UTC().Format(time.RFC3339), Valid: true}
+		}
+		status := e.VerificationStatus
+		if status == "" {
+			status = VerificationUnverifiedBootstrap
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO node_path_mappings (node_id, library_path_key, node_path, updated_at)
-			 VALUES (?, ?, ?, ?)
-			 ON CONFLICT (node_id, library_path_key) DO UPDATE SET node_path = excluded.node_path, updated_at = excluded.updated_at`,
-			nodeID, e.LibraryPathKey, e.NodePath, now,
+			`INSERT INTO node_path_mappings (node_id, library_path_key, node_path, verification_status, verified_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT (node_id, library_path_key) DO UPDATE SET node_path = excluded.node_path, verification_status = excluded.verification_status, verified_at = excluded.verified_at, updated_at = excluded.updated_at`,
+			nodeID, e.LibraryPathKey, e.NodePath, string(status), verifiedAt, now,
 		); err != nil {
 			return err
 		}

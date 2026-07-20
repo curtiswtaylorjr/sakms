@@ -16,6 +16,7 @@ BuildRequires:  golang >= 1.22
 # minimal mock buildroot doesn't pull this in unless explicitly required.
 BuildRequires:  systemd-rpm-macros
 
+Requires(pre): shadow-utils
 Requires(post): systemd
 Requires(preun): systemd
 Requires(postun): systemd
@@ -67,8 +68,30 @@ install -Dm755 packaging/rpm/post-install.sh \
 
 install -dm700 %{buildroot}%{_sysconfdir}/sakms-node
 
+%pre
+# Security-hardening addendum: sakms-node runs as a dedicated, non-root
+# system user (not User=root — see sakms-node.service) so a compromised or
+# buggy daemon has only this user's own permissions, not full filesystem
+# access. getent-guarded for idempotency on upgrade/reinstall, since a bare
+# useradd fails (and this spec deliberately never swallows scriptlet
+# failures) if the user already exists from a prior install.
+getent passwd sakms-node >/dev/null || useradd -r -s /sbin/nologin sakms-node
+
 %post
 %systemd_post sakms-node.service
+# Re-own the config directory on EVERY install/upgrade ($1 == 1 or 2), not
+# just fresh installs -- this is what actually migrates an existing
+# root-owned install (from before the security-hardening addendum, when
+# the daemon ran as User=root) to the new non-root sakms-node user. Without
+# this running unconditionally, an upgrading node's root-owned config.json
+# becomes unreadable to the new non-root service user and the daemon fails
+# to start (the exact config-ownership failure class this addendum's
+# execution-model change was reviewed against). post-install.sh's own
+# chown is fresh-install-only (it only runs there at all, per the $1 -eq 1
+# guard below) and cannot cover this case by itself.
+if [ -d %{_sysconfdir}/sakms-node ]; then
+    chown -R sakms-node:sakms-node %{_sysconfdir}/sakms-node
+fi
 # Run the interactive config writer + service enabler only on fresh installs.
 # No `|| true`: post-install.sh's own exit code must propagate so a genuine
 # failure (e.g. no SAKMS_SERVER_URL in a non-interactive install) surfaces as
@@ -89,7 +112,7 @@ fi
 %{_bindir}/sakms-node
 %{_unitdir}/sakms-node.service
 %{_datadir}/sakms-node/post-install.sh
-%dir %attr(700,root,root) %{_sysconfdir}/sakms-node
+%dir %attr(700,sakms-node,sakms-node) %{_sysconfdir}/sakms-node
 
 %files tray
 %{_bindir}/sakms-node-tray

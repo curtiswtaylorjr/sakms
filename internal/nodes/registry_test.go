@@ -250,7 +250,7 @@ func TestRequestBrowse_HappyPath(t *testing.T) {
 		}
 	}()
 
-	result, err := r.RequestBrowse("node-a-id", "/mnt/media")
+	result, err := r.RequestBrowse("node-a-id", "/mnt/media", false)
 	if err != nil {
 		t.Fatalf("RequestBrowse returned error: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestRequestBrowse_HappyPath(t *testing.T) {
 // node ID that isn't connected — not a hang, not a panic.
 func TestRequestBrowse_UnknownNodeID(t *testing.T) {
 	r := New()
-	_, err := r.RequestBrowse("nonexistent-id", "/mnt/media")
+	_, err := r.RequestBrowse("nonexistent-id", "/mnt/media", false)
 	if err == nil {
 		t.Fatal("expected an error for an unconnected node ID")
 	}
@@ -284,7 +284,7 @@ func TestRequestBrowse_TimeoutNoFallback(t *testing.T) {
 
 	go func() { <-browse }() // node reads the request but never answers
 
-	_, err := r.RequestBrowse("node-a-id", "/mnt/media")
+	_, err := r.RequestBrowse("node-a-id", "/mnt/media", false)
 	if err == nil {
 		t.Fatal("expected a timeout error, got nil (RequestBrowse must not silently fall back to anything)")
 	}
@@ -302,7 +302,7 @@ func TestRequestBrowse_DoesNotShareStateWithJobDispatch(t *testing.T) {
 		req := <-browse
 		r.ReportBrowseResult(BrowseResult{RequestID: req.ID, Entries: []BrowseEntry{{Name: "x", Path: "/x"}}})
 	}()
-	if _, err := r.RequestBrowse("node-a-id", "/mnt/media"); err != nil {
+	if _, err := r.RequestBrowse("node-a-id", "/mnt/media", false); err != nil {
 		t.Fatalf("RequestBrowse: %v", err)
 	}
 

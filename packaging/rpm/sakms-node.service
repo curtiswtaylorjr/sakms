@@ -6,7 +6,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+# Security-hardening addendum: runs as a dedicated, non-root system user
+# (created by the RPM's %pre scriptlet) instead of root -- a compromised or
+# buggy daemon then has only this user's own filesystem permissions, not
+# unbounded root access. Read access to actual media is granted separately
+# (e.g. supplementary group membership matching the operator's own media
+# ownership scheme -- see the plan's own execution-model discussion), which
+# is a per-host operator step, not something this unit file can generalize.
+User=sakms-node
+Group=sakms-node
 ExecStart=/usr/bin/sakms-node -config /etc/sakms-node/config.json
 Restart=on-failure
 RestartSec=10

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/labbersanon/sakms/internal/db"
 	"github.com/labbersanon/sakms/internal/nodesettings"
@@ -159,5 +160,67 @@ func TestSetThenGet_DifferentNodesAreIsolated(t *testing.T) {
 	}
 	if b.PathMappings[0].NodePath != "/b/movies" || b.MaxJobs != 2 {
 		t.Errorf("node-b: got %+v", b)
+	}
+}
+
+func TestSetThenGet_VerificationStatusRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := store.Set(ctx, "node-a", nodesettings.Settings{
+		PathMappings: []nodesettings.PathMappingEntry{
+			{
+				LibraryPathKey:     "movies_library_root_folder",
+				NodePath:           "/mnt/movies",
+				VerificationStatus: nodesettings.VerificationVerified,
+				VerifiedAt:         &now,
+			},
+			{
+				LibraryPathKey:     "series_library_root_folder",
+				NodePath:           "/mnt/series",
+				VerificationStatus: nodesettings.VerificationUnverifiedBootstrap,
+			},
+			{
+				LibraryPathKey:     "adult_library_root_folder",
+				NodePath:           "/mnt/adult",
+				VerificationStatus: nodesettings.VerificationUnverifiedApproval,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	got, ok, err := store.Get(ctx, "node-a")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	byKey := make(map[string]nodesettings.PathMappingEntry, len(got.PathMappings))
+	for _, e := range got.PathMappings {
+		byKey[e.LibraryPathKey] = e
+	}
+
+	movies := byKey["movies_library_root_folder"]
+	if movies.VerificationStatus != nodesettings.VerificationVerified {
+		t.Errorf("movies status: got %q, want verified", movies.VerificationStatus)
+	}
+	if movies.VerifiedAt == nil || !movies.VerifiedAt.Equal(now) {
+		t.Errorf("movies verifiedAt: got %v, want %v", movies.VerifiedAt, now)
+	}
+
+	series := byKey["series_library_root_folder"]
+	if series.VerificationStatus != nodesettings.VerificationUnverifiedBootstrap {
+		t.Errorf("series status: got %q, want unverified_bootstrap", series.VerificationStatus)
+	}
+	if series.VerifiedAt != nil {
+		t.Errorf("series verifiedAt: got %v, want nil", series.VerifiedAt)
+	}
+
+	adult := byKey["adult_library_root_folder"]
+	if adult.VerificationStatus != nodesettings.VerificationUnverifiedApproval {
+		t.Errorf("adult status: got %q, want unverified_approval", adult.VerificationStatus)
 	}
 }

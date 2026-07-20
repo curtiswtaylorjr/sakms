@@ -64,20 +64,95 @@ func resolvePathMap(ctx context.Context, settingsStore *settings.Store, in []api
 	return out
 }
 
-// toPersistedSettings converts the operator-submitted input into the shape
-// nodesettings.Store persists — every submitted row, keyed by LibraryPathKey,
-// regardless of whether that library path currently resolves to a value (it
-// may be configured later, and the persisted NodePath should still be there
-// for the reconnect re-push and the settings form's prefill when it is).
-func toPersistedSettings(in []apidto.NodePathMappingInput, maxJobs int) nodesettings.Settings {
+// toApprovalPersistedSettings converts approve-time input into persisted
+// settings. Every row gets VerificationStatus=unverified_approval — a
+// pending node has no live, authenticated channel yet, so Safeguard 1's
+// live comparison structurally cannot run at this point (see the
+// Reachability constraint in the security-hardening addendum: RequestBrowse
+// only reaches an already-authenticated connectedNode, and a pending node
+// is never in that map).
+func toApprovalPersistedSettings(in []apidto.NodePathMappingInput, maxJobs int) nodesettings.Settings {
 	entries := make([]nodesettings.PathMappingEntry, 0, len(in))
 	for _, pm := range in {
 		entries = append(entries, nodesettings.PathMappingEntry{
-			LibraryPathKey: string(pm.Key),
-			NodePath:       pm.NodePath,
+			LibraryPathKey:     string(pm.Key),
+			NodePath:           pm.NodePath,
+			VerificationStatus: nodesettings.VerificationUnverifiedApproval,
 		})
 	}
 	return nodesettings.Settings{PathMappings: entries, MaxJobs: maxJobs}
+}
+
+// verifyAndBuildPersistedSettings is Safeguard 1's save-time hard gate: for
+// every non-blank row in in, it runs verifyNodePathMapping (a live
+// directory-listing comparison between the server's own ServerPath and the
+// node's live NodePath listing) and only returns a Settings value once
+// EVERY row has reached an accept outcome. A blank NodePath, or a row whose
+// library path isn't configured yet, is left unverified (nothing meaningful
+// to compare) rather than rejected — matching resolvePathMap's own existing
+// skip logic for those cases.
+//
+// Ordering contract (pinned per the security-hardening addendum, after a
+// Critic-review finding that this was previously unstated): the caller MUST
+// NOT call nodeSettingsStore.Set until this function returns successfully.
+// A row that fails verification is never persisted, not merely never
+// pushed — on any mismatch, this returns an error and an empty Settings,
+// never a partial result.
+func verifyAndBuildPersistedSettings(ctx context.Context, reg *nodes.Registry, settingsStore *settings.Store, nodeID string, in []apidto.NodePathMappingInput, maxJobs int) (nodesettings.Settings, error) {
+	entries := make([]nodesettings.PathMappingEntry, 0, len(in))
+	var mismatches []string
+	now := time.Now().UTC()
+
+	for _, pm := range in {
+		entry := nodesettings.PathMappingEntry{LibraryPathKey: string(pm.Key), NodePath: pm.NodePath}
+
+		if pm.NodePath == "" {
+			entries = append(entries, entry)
+			continue
+		}
+
+		serverPath, err := settingsStore.Get(ctx, string(pm.Key))
+		if err != nil && !errors.Is(err, settings.ErrNotFound) {
+			return nodesettings.Settings{}, fmt.Errorf("resolving library path %q: %w", pm.Key, err)
+		}
+		if serverPath == "" {
+			// Library path isn't configured yet -- nothing to compare
+			// against, same case resolvePathMap already skips for the wire
+			// push. Not confirmed correct, so bootstrap status, not verified.
+			entry.VerificationStatus = nodesettings.VerificationUnverifiedBootstrap
+			entries = append(entries, entry)
+			continue
+		}
+
+		status, err := verifyNodePathMapping(ctx, reg, nodeID, serverPath, pm.NodePath)
+		if err != nil {
+			// Distinguish a genuine content mismatch (errMappingMismatch —
+			// collected below, reported as a 422 the operator can fix by
+			// picking a different path) from an operational failure (the
+			// server couldn't read its own ServerPath, or the node is
+			// offline/timed out) — an operational failure must not be
+			// reported as "your mapping looks wrong," per the plan's own
+			// observability requirement (distinguishing "safeguard blocked
+			// this" from "node unreachable").
+			var mismatch *errMappingMismatch
+			if errors.As(err, &mismatch) {
+				mismatches = append(mismatches, err.Error())
+				continue
+			}
+			return nodesettings.Settings{}, fmt.Errorf("verifying mapping for %q: %w", pm.Key, err)
+		}
+		entry.VerificationStatus = status
+		if status == nodesettings.VerificationVerified {
+			verifiedAt := now
+			entry.VerifiedAt = &verifiedAt
+		}
+		entries = append(entries, entry)
+	}
+
+	if len(mismatches) > 0 {
+		return nodesettings.Settings{}, &errMappingMismatch{msg: strings.Join(mismatches, "; ")}
+	}
+	return nodesettings.Settings{PathMappings: entries, MaxJobs: maxJobs}, nil
 }
 
 // pushPersistedNodeSettings looks up id's persisted settings and, if anything
@@ -332,7 +407,7 @@ func nodeBrowseHandler(reg *nodes.Registry) http.HandlerFunc {
 		nodeID := r.PathValue("id")
 		path := r.URL.Query().Get("path")
 
-		result, err := reg.RequestBrowse(nodeID, path)
+		result, err := reg.RequestBrowse(nodeID, path, false)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -414,7 +489,7 @@ func approveNodeHandler(pairingReg *nodes.PairingRegistry, nodeKeyStore *nodekey
 		// Persist by the durable key id (keyID) — the same id nodekeys.Validate
 		// resolves and Registry.Connect keys its live entry by, so a later
 		// reconnect's pushPersistedNodeSettings lookup finds this record.
-		if err := nodeSettingsStore.Set(r.Context(), keyID, toPersistedSettings(body.PathMap, body.MaxJobs)); err != nil {
+		if err := nodeSettingsStore.Set(r.Context(), keyID, toApprovalPersistedSettings(body.PathMap, body.MaxJobs)); err != nil {
 			log.Printf("nodes/approve: persist settings for %s: %v", keyID, err)
 			if err := nodeKeyStore.Revoke(r.Context(), keyID); err != nil {
 				log.Printf("nodes/approve: revoke key %s after persist failure: %v", keyID, err)
@@ -471,7 +546,28 @@ func updateNodeSettingsHandler(reg *nodes.Registry, settingsStore *settings.Stor
 			return
 		}
 
-		if err := nodeSettingsStore.Set(r.Context(), nodeID, toPersistedSettings(body.PathMap, body.MaxJobs)); err != nil {
+		// Safeguard 1 (hard gate, per explicit user directive): every
+		// non-blank row must pass live mapping verification BEFORE anything
+		// is persisted. On any mismatch, nothing from this save is
+		// persisted or pushed — the store is left exactly as it was.
+		toPersist, err := verifyAndBuildPersistedSettings(r.Context(), reg, settingsStore, nodeID, body.PathMap, body.MaxJobs)
+		if err != nil {
+			var mismatch *errMappingMismatch
+			var unreachable *errNodeUnreachable
+			switch {
+			case errors.As(err, &mismatch):
+				http.Error(w, mismatch.Error(), http.StatusUnprocessableEntity)
+			case errors.As(err, &unreachable):
+				log.Printf("nodes/settings: node unreachable during verification for %s: %v", nodeID, err)
+				http.Error(w, unreachable.Error(), http.StatusBadGateway)
+			default:
+				log.Printf("nodes/settings: verifying mapping for %s: %v", nodeID, err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if err := nodeSettingsStore.Set(r.Context(), nodeID, toPersist); err != nil {
 			log.Printf("nodes/settings: persist settings for %s: %v", nodeID, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return

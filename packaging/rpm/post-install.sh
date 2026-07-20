@@ -48,6 +48,11 @@ if [ ! -f "$CONFIG_FILE" ]; then
 }
 JSON
     chmod 600 "$CONFIG_FILE"
+    # Security-hardening addendum: the daemon runs as the dedicated
+    # sakms-node system user (see sakms-node.service), not root — the
+    # config directory/file must be owned by that user or the daemon can't
+    # read/rewrite its own config on the very first start.
+    chown -R sakms-node:sakms-node "$CONFIG_DIR"
 fi
 
 systemctl enable --now sakms-node.service

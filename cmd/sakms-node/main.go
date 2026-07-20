@@ -247,6 +247,18 @@ func connect(
 			if !ok {
 				return nil
 			}
+			if len(cfg.MediaRoots) == 0 {
+				warning := "mediaRoots is not configured -- settings pushes are applied unrestricted (grace period). Set mediaRoots in this node's config to enable containment."
+				log.Printf("sakms-node: WARNING %s", warning)
+				statusSrv.setWarning(warning)
+			} else if reason := validateSettingsPush(cfg.MediaRoots, s.PathMap); reason != "" {
+				warning := fmt.Sprintf("rejected settings push (server attempted to map outside this node's declared media roots): %s", reason)
+				log.Printf("sakms-node: %s", warning)
+				statusSrv.setWarning(warning)
+				continue
+			} else {
+				statusSrv.setWarning("")
+			}
 			cfg.PathMap = mergePathMap(cfg.PathMap, s.PathMap)
 			cfg.MaxJobs = s.MaxJobs
 			if saveErr := cfg.save(configPath); saveErr != nil {
@@ -260,7 +272,7 @@ func connect(
 			wg.Add(1)
 			go func(req nodes.BrowseRequest) {
 				defer wg.Done()
-				result := executeBrowse(req)
+				result := executeBrowse(cfg, req)
 				postBrowseResult(postClient, cfg, result)
 			}(br)
 		case job, ok := <-jobCh:
@@ -427,6 +439,11 @@ func postHeartbeat(ctx context.Context, nodeID string, cfg *NodeConfig, client *
 // server can fall back to local execution.
 func executeJob(ctx context.Context, cfg *NodeConfig, job nodes.Job, phashH, videoH hasher) nodes.JobResult {
 	localPath := Remap(cfg.PathMap, job.ServerPath)
+	if len(cfg.MediaRoots) > 0 {
+		if err := withinMediaRoots(cfg.MediaRoots, localPath); err != nil {
+			return nodes.JobResult{JobID: job.ID, Error: err.Error()}
+		}
+	}
 	var hash string
 	var err error
 	switch job.Type {
@@ -475,8 +492,13 @@ func postResult(client *http.Client, cfg *NodeConfig, result nodes.JobResult) {
 // and returns a BrowseResult. On any read error the result carries the error
 // string — mirroring executeJob's Hash/Error convention — so the server can
 // surface a clear message to the operator instead of hanging.
-func executeBrowse(req nodes.BrowseRequest) nodes.BrowseResult {
-	entries, err := browseDirectory(req.Path)
+func executeBrowse(cfg *NodeConfig, req nodes.BrowseRequest) nodes.BrowseResult {
+	if len(cfg.MediaRoots) > 0 {
+		if err := withinMediaRoots(cfg.MediaRoots, req.Path); err != nil {
+			return nodes.BrowseResult{RequestID: req.ID, Error: err.Error()}
+		}
+	}
+	entries, err := browseDirectory(req.Path, req.IncludeFiles)
 	if err != nil {
 		return nodes.BrowseResult{RequestID: req.ID, Error: err.Error()}
 	}
