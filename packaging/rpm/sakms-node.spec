@@ -44,7 +44,7 @@ It displays the 6-character pairing code and supports one-click copy.
 
 %build
 export CGO_ENABLED=0
-export GOFLAGS="-mod=mod"
+export GOFLAGS="-mod=vendor"
 
 go build -trimpath -ldflags "-s -w" -o sakms-node     ./cmd/sakms-node/
 go build -trimpath -ldflags "-s -w" -o sakms-node-tray ./cmd/sakms-node-tray/

@@ -12,17 +12,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Determine version
         id: ver
         # Use the short commit SHA as the version pre-release segment so every
         # main-branch build produces a unique, monotonically-sortable package.
         run: echo "version=0.0.1~git$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Vendor Go modules
+        # COPR builds run in a network-isolated mock chroot, so the module
+        # cache must ship inside the source tarball rather than being
+        # fetched at build time.
+        run: go mod vendor
+
       - name: Build source archive
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           ARCHIVE="sakms-${VERSION}.tar.gz"
-          git archive --prefix="sakms-${VERSION}/" HEAD | gzip > "$ARCHIVE"
+          PREFIX="sakms-${VERSION}"
+          mkdir "$PREFIX"
+          git archive HEAD | tar -x -C "$PREFIX"
+          cp -r vendor "$PREFIX/vendor"
+          tar czf "$ARCHIVE" "$PREFIX"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
