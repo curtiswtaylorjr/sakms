@@ -33,11 +33,11 @@ jobs:
           pip3 install copr-cli
 
       - name: Write copr-cli config
-        # COPR_TOKEN secret must be set in the repo: Settings → Secrets.
+        # COPR_RPM secret must be set in the repo: Settings → Secrets.
         # Format: the full ~/.config/copr content (token + login + copr_url).
         run: |
           mkdir -p ~/.config
-          echo "${{ secrets.COPR_TOKEN }}" > ~/.config/copr
+          echo "${{ secrets.COPR_RPM }}" > ~/.config/copr
 
       - name: Generate spec with version substituted
         run: |
