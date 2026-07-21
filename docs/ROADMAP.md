@@ -165,11 +165,27 @@ false-positive risk for Movies). `PHashSimilarity float64` on
 header. Commit `50dd970`.
 
 **Still open (next slices):**
-- **PDQ is still pending an imghash tagged release.** The algorithm is isolated
-  behind `internal/phash/algo.go` as a one-file swap point, but imghash's
-  latest tag (v1.1.0) has no PDQ — it lives only on the unreleased `main`
-  branch, and pinning a deletion-gating signal to untagged upstream was
-  rejected. Swap PHash→PDQ once imghash tags a release containing it.
+- **PDQ's upstream blocker is resolved — now a real migration, not a wait.**
+  Corrected 2026-07-21: this entry previously said `imghash`'s latest tag
+  (v1.1.0, what sakms currently depends on) had no PDQ, only on the
+  unreleased `main` branch, and pinning to untagged upstream was rejected.
+  That's now stale — `imghash` shipped PDQ in a proper tagged release,
+  **v2.2.0** (2026-02-21), current latest tag v2.5.2 (MIT, same license
+  sakms already consumes it under). But adopting it is a major-version
+  upgrade (`github.com/ajdnik/imghash` → `github.com/ajdnik/imghash/v2`),
+  not a flag flip: the changelog documents two explicit breaking-change
+  releases getting there (v2.0.0 "Improved Library Interface," v2.1.0
+  "Refactor Library For Maintainability"). Before swapping PHash→PDQ behind
+  `internal/phash/algo.go`'s existing one-file seam, first verify the v2
+  rewrite hasn't shifted PHash's own hash output — `DefaultMoviesThreshold`
+  (25) and the Series default (10) were calibrated against the current
+  library's actual values, and a "refactored for maintainability" major
+  version is exactly the kind of change that could move them silently. (One
+  dependency-weight concern did resolve cleanly on its own: DINOHash, a
+  separate algorithm in the same library, originally bundled an 85MB
+  model-weight download into the main module require, but v2.5.2 split
+  that out specifically so PDQ-only consumers don't inherit it — no CGo or
+  non-Go dependencies anywhere in the PDQ/core path.)
 
 **Shipped 2026-07-19: Vendor-agnostic worker node (`cmd/sakms-node`).** Optional
 installable binary that offloads phash/videophash computation to any machine with
