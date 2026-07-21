@@ -20,6 +20,8 @@ Requires(pre): shadow-utils
 Requires(post): systemd
 Requires(preun): systemd
 Requires(postun): systemd
+Requires:       python3
+Requires:       curl
 
 %description
 sakms-node is the worker node daemon for the sakms self-hosted media
@@ -66,6 +68,15 @@ install -Dm644 packaging/rpm/sakms-node-tray.desktop \
 install -Dm755 packaging/rpm/post-install.sh \
     %{buildroot}%{_datadir}/sakms-node/post-install.sh
 
+# Phase 2 (OS-level namespace containment) activator. Root-run ONLY (0700
+# root:root) — tighter than post-install.sh's 0755 because this helper reads
+# mediaRoots (writable by the non-root daemon it contains) and writes a
+# root-loaded systemd drop-in, so it must not be world-readable/executable.
+# Deliberately NOT invoked from any scriptlet below (see %post) — Phase 2
+# activation is a separate, explicit, manual operator action.
+install -Dm700 packaging/rpm/apply-mediaroots.sh \
+    %{buildroot}%{_libexecdir}/sakms-node/apply-mediaroots
+
 install -dm700 %{buildroot}%{_sysconfdir}/sakms-node
 
 %pre
@@ -78,6 +89,13 @@ install -dm700 %{buildroot}%{_sysconfdir}/sakms-node
 getent passwd sakms-node >/dev/null || useradd -r -s /sbin/nologin sakms-node
 
 %post
+# NOTE: apply-mediaroots (Phase 2 OS-level namespace containment) is
+# deliberately NOT invoked here or in %pre/%postun. Per Decision Driver 3 /
+# Principle 3, auto-generating a mount-namespace drop-in and restarting the
+# daemon inside a package transaction would silently change (and could break)
+# an existing Phase-1-only install's sandbox on upgrade. Activation stays a
+# separate, explicit, manual operator action: run
+# %{_libexecdir}/sakms-node/apply-mediaroots after editing mediaRoots.
 %systemd_post sakms-node.service
 # Re-own the config directory on EVERY install/upgrade ($1 == 1 or 2), not
 # just fresh installs -- this is what actually migrates an existing
@@ -112,6 +130,7 @@ fi
 %{_bindir}/sakms-node
 %{_unitdir}/sakms-node.service
 %{_datadir}/sakms-node/post-install.sh
+%attr(0700,root,root) %{_libexecdir}/sakms-node/apply-mediaroots
 %dir %attr(700,sakms-node,sakms-node) %{_sysconfdir}/sakms-node
 
 %files tray
@@ -121,3 +140,5 @@ fi
 %changelog
 * %(date "+%a %b %d %Y") packager <packager@example.com> - %{version}-1
 - Initial packaging
+- Add apply-mediaroots (Phase 2 OS-level namespace containment activator) as a
+  root-only helper under %{_libexecdir}/sakms-node; not auto-invoked on install

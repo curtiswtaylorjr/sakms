@@ -35,6 +35,15 @@ type statusSnapshot struct {
 	// GPU box) — that gap is closed by the fuller correlation-ID ack, a
 	// deferred Follow-up, not this field.
 	Warning string `json:"warning,omitempty"`
+
+	// MediaRootScopes reports, per configured mediaRoots entry, its Phase 2
+	// (OS-level namespace containment) state: app_level_only,
+	// namespace_scoped, or namespace_scoped_but_unbound (see mediaRootScope).
+	// Computed fresh on each GET /status (mediaroots_scope.go) — it depends on
+	// the apply marker and the daemon's live /proc/self/mountinfo view, both of
+	// which change independently of the daemon's connection lifecycle. Empty
+	// when mediaRoots is unset (the grace period).
+	MediaRootScopes []mediaRootStatus `json:"mediaRootScopes,omitempty"`
 }
 
 // statusServer exposes GET /status on localhost:port so the tray app can poll
@@ -89,6 +98,12 @@ func (s *statusServer) ListenAndServe(ctx context.Context) {
 		s.mu.RLock()
 		snap := s.snap
 		s.mu.RUnlock()
+		// Computed at read time: the marker and /proc/self/mountinfo change
+		// independently of the daemon's connection lifecycle, so this must not
+		// be baked in at update()/setWarning() time. cfg is set once at
+		// construction and never mutated, so reading MediaRoots is lock-free.
+		// NON-AUTHORITATIVE observability only: this field and the apply marker it reflects are never a security-decision input — the marker is forgeable (unprivileged sakms-node owns /etc/sakms-node and can unlink/recreate the root-owned 0640 file), so real enforcement lives solely in mediaroots.go's withinMediaRoots/validateSettingsPush, which reads live config, never the marker.
+		snap.MediaRootScopes = mediaRootScopes(s.cfg.MediaRoots)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(snap) //nolint:errcheck
 	})
