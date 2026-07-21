@@ -35,6 +35,10 @@ tray icon that displays the node's current state and pairing code.
 Summary:        System tray companion for sakms-node
 Requires:       sakms-node = %{version}-%{release}
 Requires:       dbus
+# Provides the base hicolor theme directory structure our brand icon installs
+# into, and gtk-update-icon-cache's target dir; not pulled in transitively by
+# dbus/sakms-node, so declare it explicitly.
+Requires:       hicolor-icon-theme
 # wl-copy (wayland) or xclip/xsel (X11) for clipboard support — optional
 Recommends:     wl-clipboard
 Recommends:     libnotify
@@ -64,6 +68,13 @@ install -Dm644 packaging/rpm/sakms-node.service \
 
 install -Dm644 packaging/rpm/sakms-node-tray.desktop \
     %{buildroot}%{_sysconfdir}/xdg/autostart/sakms-node-tray.desktop
+
+# Brand icon for the tray launcher entry (Icon=sakms-node in the .desktop
+# above resolves this by name via freedesktop icon-theme lookup). Copied
+# straight from the frontend's single source of truth — no second checked-in
+# copy — into the hicolor scalable/apps theme dir.
+install -Dm644 frontend/public/favicon.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/sakms-node.svg
 
 install -Dm755 packaging/rpm/post-install.sh \
     %{buildroot}%{_datadir}/sakms-node/post-install.sh
@@ -133,9 +144,17 @@ fi
 %attr(0700,root,root) %{_libexecdir}/sakms-node/apply-mediaroots
 %dir %attr(700,sakms-node,sakms-node) %{_sysconfdir}/sakms-node
 
+%posttrans tray
+# Refresh the icon-theme cache once per transaction so the freshly installed
+# sakms-node.svg is picked up. Guarded with `|| :` so a missing
+# gtk-update-icon-cache binary (plausible on a minimal/headless host, which
+# this daemon's is commonly) doesn't fail the transaction.
+gtk-update-icon-cache -q %{_datadir}/icons/hicolor &>/dev/null || :
+
 %files tray
 %{_bindir}/sakms-node-tray
 %{_sysconfdir}/xdg/autostart/sakms-node-tray.desktop
+%{_datadir}/icons/hicolor/scalable/apps/sakms-node.svg
 
 %changelog
 * %(date "+%a %b %d %Y") packager <packager@example.com> - %{version}-1
