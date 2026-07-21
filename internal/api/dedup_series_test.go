@@ -29,7 +29,7 @@ func (p perPathPHasher) Hash(_ context.Context, path string) (string, error) {
 	if h, ok := p.hashes[path]; ok {
 		return h, nil
 	}
-	return "phash64/5f:" + strings.Repeat("0", 80), nil // zero-hash fallback — matches everything
+	return "phash64v2/5f:" + strings.Repeat("0", 80), nil // zero-hash fallback — matches everything
 }
 
 // fakeTMDBTVSearchHandler serves TMDB's /search/tv endpoint with one canned
@@ -186,7 +186,7 @@ func TestDedupWorkflow_Series_SeasonPack_ScanFindsGroupedDuplicate(t *testing.T)
 	// packEp2 is a different episode (S01E02); give it a maximally-distant hash so
 	// the phash-primary scan does NOT group it with the S01E01 pair.
 	phasher := perPathPHasher{hashes: map[string]string{
-		packEp2: "phash64/5f:" + strings.Repeat("f", 80),
+		packEp2: "phash64v2/5f:" + strings.Repeat("f", 80),
 	}}
 	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, phasher, testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil))
 	defer srv.Close()

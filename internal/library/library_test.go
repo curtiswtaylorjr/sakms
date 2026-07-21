@@ -72,7 +72,7 @@ func TestUpsert_RoundTripsPHashIdentity(t *testing.T) {
 	created, err := s.Upsert(ctx, Item{
 		Mode: mode.Movies, TMDBID: 700, Title: "Cached Movie", RootFolderPath: "/movies",
 		FilePath: "/movies/Cached Movie/movie.mkv",
-		PHash:    "phash64/5f:deadbeef", PHashFileSize: 12345, PHashFileMTime: "2026-07-10T00:00:00Z",
+		PHash:    "phash64v2/5f:deadbeef", PHashFileSize: 12345, PHashFileMTime: "2026-07-10T00:00:00Z",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -82,7 +82,7 @@ func TestUpsert_RoundTripsPHashIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.PHash != "phash64/5f:deadbeef" || got.PHashFileSize != 12345 || got.PHashFileMTime != "2026-07-10T00:00:00Z" {
+	if got.PHash != "phash64v2/5f:deadbeef" || got.PHashFileSize != 12345 || got.PHashFileMTime != "2026-07-10T00:00:00Z" {
 		t.Errorf("expected phash identity to round-trip, got %+v", got)
 	}
 }
@@ -102,14 +102,14 @@ func TestUpdatePHash_UpdatesInPlaceAndNoOpOnMissing(t *testing.T) {
 		t.Fatalf("expected an uncached item to start with an empty phash, got %q", item.PHash)
 	}
 
-	if err := s.UpdatePHash(ctx, item.ID, "phash64/5f:cafe", 999, "2026-07-10T12:00:00Z"); err != nil {
+	if err := s.UpdatePHash(ctx, item.ID, "phash64v2/5f:cafe", 999, "2026-07-10T12:00:00Z"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got, err := s.Get(ctx, item.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.PHash != "phash64/5f:cafe" || got.PHashFileSize != 999 || got.PHashFileMTime != "2026-07-10T12:00:00Z" {
+	if got.PHash != "phash64v2/5f:cafe" || got.PHashFileSize != 999 || got.PHashFileMTime != "2026-07-10T12:00:00Z" {
 		t.Errorf("expected UpdatePHash to persist the new hash + identity, got %+v", got)
 	}
 	// The targeted write must leave the rest of the row intact.

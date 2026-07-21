@@ -145,7 +145,7 @@ func TestScanLibraryAdult_PHashCacheHitAvoidsRehashingTrackedFile(t *testing.T) 
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	cachedHash := "phash64/5f:" + strings.Repeat("0", 80)
+	cachedHash := "phash64v2/5f:" + strings.Repeat("0", 80)
 
 	libStore := newTestLibraryStore(t)
 	if _, err := libStore.UpsertScene(context.Background(), library.Scene{

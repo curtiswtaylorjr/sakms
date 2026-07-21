@@ -141,8 +141,8 @@ func TestReplacePending_PersistsCandidatePHash(t *testing.T) {
 		{
 			Status: Pending, SourceName: "Movie A", Title: "Movie A", TMDBID: 1,
 			Candidates: []Candidate{
-				{Label: "tracked", Path: "/media/Movies/Movie A/a.mkv", TrackedID: 9, PHash: "phash64/5f:aa11"},
-				{Label: "Movie.A.1080p", Path: "/media/Movies/Movie.A.1080p/b.mkv", PHash: "phash64/5f:aa12", Winner: true},
+				{Label: "tracked", Path: "/media/Movies/Movie A/a.mkv", TrackedID: 9, PHash: "phash64v2/5f:aa11"},
+				{Label: "Movie.A.1080p", Path: "/media/Movies/Movie.A.1080p/b.mkv", PHash: "phash64v2/5f:aa12", Winner: true},
 			},
 		},
 	})
@@ -154,7 +154,7 @@ func TestReplacePending_PersistsCandidatePHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got.Candidates) != 2 || got.Candidates[0].PHash != "phash64/5f:aa11" || got.Candidates[1].PHash != "phash64/5f:aa12" {
+	if len(got.Candidates) != 2 || got.Candidates[0].PHash != "phash64v2/5f:aa11" || got.Candidates[1].PHash != "phash64v2/5f:aa12" {
 		t.Fatalf("expected candidate phashes to round-trip from candidates_json, got %+v", got.Candidates)
 	}
 }

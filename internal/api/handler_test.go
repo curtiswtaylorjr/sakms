@@ -40,7 +40,7 @@ func testProber(t *testing.T) *mediainfo.Prober {
 type constantPHasher struct{}
 
 func (constantPHasher) Hash(ctx context.Context, path string) (string, error) {
-	return "phash64/5f:" + strings.Repeat("0", 80), nil // 40 zero bytes = 5 frames × 8
+	return "phash64v2/5f:" + strings.Repeat("0", 80), nil // 40 zero bytes = 5 frames × 8
 }
 
 // testPHasher returns a fake perceptual hasher for NewMux — mirrors testProber,

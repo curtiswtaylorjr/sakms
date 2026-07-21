@@ -22,7 +22,16 @@ import (
 // Scheme constant — nothing downstream, which is algorithm-agnostic (hashes
 // are compared as scheme-tagged byte composites by Hamming distance regardless
 // of which algorithm produced them).
-const Scheme = "phash64/5f"
+//
+// The tag is "phash64v2/5f", not the pre-v2 "phash64/5f": the imghash v1->v2.5.2
+// bump (Stage 0) changed PHash's byte output for some inputs — a proven 1-bit
+// drift on 3 of 8 fixed golden frames, same algorithm, from v2's internal
+// "Refactor for Maintainability" (see golden_test.go). Per this package's
+// no-silent-mis-compare rule the tag MUST change on ANY output change, so old
+// "phash64/5f" cached values self-invalidate and recompute. The scale is still
+// 64 bits/frame, so per-mode stored thresholds (keyed on scale, not scheme)
+// stay valid.
+const Scheme = "phash64v2/5f"
 
 // Frames is the fixed number of evenly-spaced interior frames sampled per
 // video to form one composite hash. Exported so the dedup layer can express

@@ -418,7 +418,7 @@ func TestUpsertEpisode_RoundTripsPHashIdentity(t *testing.T) {
 
 	if _, err := s.UpsertEpisode(ctx, Episode{
 		SeriesID: series.ID, SeasonNumber: 1, EpisodeNumber: 1, FilePath: "/tv/Cached Show/S01E01.mkv",
-		PHash: "phash64/5f:deadbeef", PHashFileSize: 12345, PHashFileMTime: "2026-07-10T00:00:00Z",
+		PHash: "phash64v2/5f:deadbeef", PHashFileSize: 12345, PHashFileMTime: "2026-07-10T00:00:00Z",
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestUpsertEpisode_RoundTripsPHashIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.PHash != "phash64/5f:deadbeef" || got.PHashFileSize != 12345 || got.PHashFileMTime != "2026-07-10T00:00:00Z" {
+	if got.PHash != "phash64v2/5f:deadbeef" || got.PHashFileSize != 12345 || got.PHashFileMTime != "2026-07-10T00:00:00Z" {
 		t.Errorf("expected phash identity to round-trip, got %+v", got)
 	}
 }
@@ -450,14 +450,14 @@ func TestUpdateEpisodePHash_UpdatesInPlaceAndNoOpOnMissing(t *testing.T) {
 		t.Fatalf("expected an uncached episode to start with an empty phash, got %q", ep.PHash)
 	}
 
-	if err := s.UpdateEpisodePHash(ctx, ep.ID, "phash64/5f:cafe", 999, "2026-07-10T12:00:00Z"); err != nil {
+	if err := s.UpdateEpisodePHash(ctx, ep.ID, "phash64v2/5f:cafe", 999, "2026-07-10T12:00:00Z"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got, err := s.GetEpisode(ctx, series.ID, 1, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.PHash != "phash64/5f:cafe" || got.PHashFileSize != 999 || got.PHashFileMTime != "2026-07-10T12:00:00Z" {
+	if got.PHash != "phash64v2/5f:cafe" || got.PHashFileSize != 999 || got.PHashFileMTime != "2026-07-10T12:00:00Z" {
 		t.Errorf("expected UpdateEpisodePHash to persist the new hash + identity, got %+v", got)
 	}
 	// The targeted write must leave the rest of the row intact.

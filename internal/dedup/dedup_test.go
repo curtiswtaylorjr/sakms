@@ -56,7 +56,7 @@ func (f *fakePHasher) Hash(ctx context.Context, path string) (string, error) {
 // same value, so ScanLibrary's phash refinement keeps the whole group
 // (identical hashes are within any threshold).
 func matchingPHasher(paths ...string) *fakePHasher {
-	sameHash := "phash64/5f:" + strings.Repeat("0", 80) // 40 zero bytes = 5 frames × 8
+	sameHash := "phash64v2/5f:" + strings.Repeat("0", 80) // 40 zero bytes = 5 frames × 8
 	byPath := map[string]string{}
 	for _, p := range paths {
 		byPath[p] = sameHash

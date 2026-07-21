@@ -16,7 +16,7 @@ import (
 // bytes are hexPrefix, zero-padded — so a test controls the exact Hamming
 // distance between two candidates. "" is the all-zero reference.
 func seededHash(hexPrefix string) string {
-	return "phash64/5f:" + hexPrefix + strings.Repeat("0", 80-len(hexPrefix))
+	return "phash64v2/5f:" + hexPrefix + strings.Repeat("0", 80-len(hexPrefix))
 }
 
 // tmdbTo42 maps each name's TMDB search term to the same movie id, so a set of
