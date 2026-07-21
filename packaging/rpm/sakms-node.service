@@ -21,5 +21,26 @@ RestartSec=10
 ProtectSystem=full
 ReadWritePaths=/etc/sakms-node
 
+# mediaRoots local control socket (sakms-node-tray UI, see the ralplan
+# mediaRoots-UI plan's socket-perms/Option-A section): the daemon listens on
+# a unix socket at /run/sakms-node/control.sock. RuntimeDirectory gives it a
+# tmpfs dir that systemd creates before start and removes on graceful stop;
+# RuntimeDirectoryMode=0750 (owner sakms-node) is deliberately NOT group-
+# traversable by sakms-media-config yet on its own -- the daemon chgrp's the
+# dir (and chmod/chgrp's the socket file to 0660 sakms-media-config) itself
+# at startup via os.Chown/os.Chmod (Option A), immediately after net.Listen
+# succeeds, which is the fail-closed startup window the plan documents.
+# SupplementaryGroups=sakms-media-config makes the daemon a member of that
+# shared group (the daemon's *primary* group stays sakms-node -- config.json
+# stays 0600 sakms-node:sakms-node, untouched by this), which POSIX chown(2)
+# requires for the daemon's own unprivileged chgrp-to-group calls above to
+# succeed. Group membership in sakms-media-config is the sole authorization
+# boundary for the control socket (see sakms-node.spec's %post and
+# sakms-node.sysusers.conf for how the shared group is created and how the
+# console/desktop user is added to it).
+RuntimeDirectory=sakms-node
+RuntimeDirectoryMode=0750
+SupplementaryGroups=sakms-media-config
+
 [Install]
 WantedBy=multi-user.target

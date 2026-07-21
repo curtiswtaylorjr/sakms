@@ -75,13 +75,11 @@ func pair(ctx context.Context, cfg *NodeConfig, configPath string, status *statu
 				if err := json.Unmarshal([]byte(cur.data), &pairCfg); err != nil {
 					return fmt.Errorf("parsing config event: %w", err)
 				}
-				cfg.APIKey = pairCfg.APIKey
-				cfg.MaxJobs = pairCfg.Settings.MaxJobs
-				cfg.PathMap = make([]PathMapEntry, len(pairCfg.Settings.PathMap))
+				pathMap := make([]PathMapEntry, len(pairCfg.Settings.PathMap))
 				for i, pm := range pairCfg.Settings.PathMap {
-					cfg.PathMap[i] = PathMapEntry{Server: pm.Server, Local: pm.Local}
+					pathMap[i] = PathMapEntry{Server: pm.Server, Local: pm.Local}
 				}
-				if err := cfg.save(configPath); err != nil {
+				if err := cfg.applyPairConfig(configPath, pairCfg.APIKey, pairCfg.Settings.MaxJobs, pathMap); err != nil {
 					return fmt.Errorf("saving config after pairing: %w", err)
 				}
 				log.Printf("sakms-node: paired successfully — reconnecting authenticated")

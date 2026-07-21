@@ -100,10 +100,12 @@ func (s *statusServer) ListenAndServe(ctx context.Context) {
 		s.mu.RUnlock()
 		// Computed at read time: the marker and /proc/self/mountinfo change
 		// independently of the daemon's connection lifecycle, so this must not
-		// be baked in at update()/setWarning() time. cfg is set once at
-		// construction and never mutated, so reading MediaRoots is lock-free.
+		// be baked in at update()/setWarning() time. MediaRoots is mutated at
+		// runtime (401 re-pair, pairing, and the control socket), so it is read
+		// through cfg.snapshot() under the config lock, not directly.
 		// NON-AUTHORITATIVE observability only: this field and the apply marker it reflects are never a security-decision input — the marker is forgeable (unprivileged sakms-node owns /etc/sakms-node and can unlink/recreate the root-owned 0640 file), so real enforcement lives solely in mediaroots.go's withinMediaRoots/validateSettingsPush, which reads live config, never the marker.
-		snap.MediaRootScopes = mediaRootScopes(s.cfg.MediaRoots)
+		_, mediaRoots := s.cfg.snapshot()
+		snap.MediaRootScopes = mediaRootScopes(mediaRoots)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(snap) //nolint:errcheck
 	})

@@ -126,6 +126,13 @@ install -dm700 %{buildroot}%{_sysconfdir}/sakms-node
 # resolves rpm's automatic user()/group() file-ownership dependency against
 # the package's own sysusers.d entry instead of an unsatisfiable external
 # Requires (see the %install comment for the exact failure this replaces).
+#
+# This same invocation also creates the "sakms-media-config" shared group
+# (the second, "g sakms-media-config -" line in Source1) -- the mediaRoots
+# control-socket authorization boundary for sakms-node-tray (see
+# sakms-node.service and the ralplan mediaRoots-UI plan's socket-perms
+# section). One sysusers.d fragment, one macro call, both entries created
+# idempotently; no separate group-creation step is needed here.
 %sysusers_create_package %{name} %SOURCE1
 
 %post
@@ -156,6 +163,42 @@ fi
 # a real %post/dnf failure, not a silently-swallowed success.
 if [ $1 -eq 1 ]; then
     %{_datadir}/sakms-node/post-install.sh
+fi
+
+# Add the console/desktop user to the sakms-media-config shared group (see
+# sakms-node.service, sakms-node.sysusers.conf) so sakms-node-tray, running
+# as that user, can reach the mediaRoots control socket
+# (/run/sakms-node/control.sock). Runs on EVERY install/upgrade ($1 == 1 or
+# 2), same reasoning as the config-dir re-own above -- an upgrade from a
+# pre-mediaRoots-UI package also needs this membership added, not just a
+# fresh install. Best-effort console-user detection (a logind seat0 session,
+# falling back to the first human-range UID) -- "which exact user is the
+# console user" is inherently host-specific for a package install; if
+# detection fails, the admin is told exactly how to do it by hand rather than
+# the install silently leaving the tray unusable.
+#
+# %%sysusers_create_package (in %pre, above) already created the group
+# itself; this only adds a member to it, which sysusers.d's static fragment
+# cannot do for a username only known at install time.
+CONSOLE_USER="$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4 == "seat0" {print $3; exit}')"
+if [ -z "$CONSOLE_USER" ]; then
+    CONSOLE_USER="$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /nologin|false/ {print $1; exit}')"
+fi
+if [ -n "$CONSOLE_USER" ]; then
+    usermod -aG sakms-media-config "$CONSOLE_USER" || :
+    echo "sakms-node: added '$CONSOLE_USER' to the 'sakms-media-config' group" \
+         "for local mediaRoots control (sakms-node-tray)." \
+         "IMPORTANT: this user must log out and back in (or reboot) before" \
+         "the new group membership takes effect in their desktop session --" \
+         "supplementary group membership is fixed at login/session start, so" \
+         "an already-running session (or the tray started from one) will see" \
+         "connect() permission-denied on the control socket until then." >&2
+else
+    echo "sakms-node: could not auto-detect a console/desktop user to add to" \
+         "the 'sakms-media-config' group. Add the desktop user manually:" \
+         "usermod -aG sakms-media-config <username>; that user must then log" \
+         "out and back in (or reboot) before sakms-node-tray's local" \
+         "mediaRoots control socket becomes reachable." >&2
 fi
 
 %preun
@@ -197,3 +240,19 @@ gtk-update-icon-cache -q %{_datadir}/icons/hicolor &>/dev/null || :
   automatic file-ownership dependency generator added an unsatisfiable
   Requires(postun) on user(sakms-node)/group(sakms-node) that no package
   could ever provide under the old raw-useradd approach
+- Add packaging/systemd support for the sakms-node-tray mediaRoots control
+  socket (/run/sakms-node/control.sock): sakms-node.service gains
+  RuntimeDirectory=sakms-node, RuntimeDirectoryMode=0750, and
+  SupplementaryGroups=sakms-media-config; sakms-node.sysusers.conf gains a
+  "g sakms-media-config -" line creating the shared authorization group
+  (created via the same %%sysusers_create_package call as the sakms-node
+  user, no new macro invocation needed); %post now adds the detected
+  console/desktop user to sakms-media-config on every install/upgrade, since
+  group membership is the sole authorization boundary for the control socket
+  (see the sakms-node-tray mediaRoots UI plan)
+- IMPORTANT: a user added to sakms-media-config (by %post above, or by hand)
+  must log out and back in (or reboot) before that membership takes effect
+  in their desktop session -- supplementary group membership is fixed at
+  Linux login/session start, so an already-running session (including one
+  where the group was just granted) will see connect() permission-denied on
+  the mediaRoots control socket until the next login

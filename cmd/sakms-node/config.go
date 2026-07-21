@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 )
 
 const defaultStatusPort = 7810
@@ -47,6 +48,15 @@ type NodeConfig struct {
 	// silently breaks it. A prominent warning is logged repeatedly while
 	// this is empty. Enforcement begins the moment an operator sets this.
 	MediaRoots []string `json:"mediaRoots,omitempty"`
+
+	// mu guards the fields that are mutated after startup — MediaRoots,
+	// PathMap, MaxJobs, and APIKey — and serializes them against save(). It is
+	// unexported, so encoding/json ignores it. Every writer of those fields
+	// holds the write lock across BOTH the field mutation AND the subsequent
+	// save (via mutateAndSave), because save() marshals the whole struct: a
+	// locked save that raced an unlocked field write would still read a field
+	// mid-write. Concurrent readers take snapshots under the read lock.
+	mu sync.RWMutex
 }
 
 // statusPort returns the effective status listener port.
@@ -81,9 +91,55 @@ func loadConfig(path string) (*NodeConfig, error) {
 	return &cfg, nil
 }
 
-// save atomically writes cfg to path using a write-then-rename pattern so a
-// crash mid-write cannot leave a partial or empty config file.
-func (cfg *NodeConfig) save(path string) error {
+// snapshot returns copies of the concurrently-mutated fields under the read
+// lock, so a reader (executeJob, executeBrowse, the status handler) gets a
+// consistent, non-torn view without holding the lock across its own work.
+func (cfg *NodeConfig) snapshot() (pathMap []PathMapEntry, mediaRoots []string) {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
+	pathMap = append([]PathMapEntry(nil), cfg.PathMap...)
+	mediaRoots = append([]string(nil), cfg.MediaRoots...)
+	return pathMap, mediaRoots
+}
+
+// mutateAndSave runs mutate and then persists the config, both under a single
+// write-lock acquisition, so the field mutations and the save that follows them
+// are one atomic critical section. This is the sole write entry point for the
+// post-startup mutable fields: serializing save() alone would be insufficient,
+// because save() marshals the whole struct and a locked save could still read a
+// field that an unlocked writer is mid-mutation on. The future control-socket
+// handler plugs its writes in here too.
+func (cfg *NodeConfig) mutateAndSave(path string, mutate func()) error {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+	mutate()
+	return cfg.saveLocked(path)
+}
+
+// clearAPIKey clears the API key and persists it in one critical section. Used
+// by the 401 re-pair path; folded under the lock because Step 2's main()-level
+// control-socket save can marshal APIKey concurrently with this write.
+func (cfg *NodeConfig) clearAPIKey(path string) error {
+	return cfg.mutateAndSave(path, func() { cfg.APIKey = "" })
+}
+
+// applyPairConfig persists a freshly received pairing result (API key + pushed
+// settings) atomically: the APIKey/MaxJobs/PathMap writes and the save happen
+// under one lock so a concurrent config writer (e.g. the control socket) can
+// never observe or marshal a half-applied pairing.
+func (cfg *NodeConfig) applyPairConfig(path, apiKey string, maxJobs int, pathMap []PathMapEntry) error {
+	return cfg.mutateAndSave(path, func() {
+		cfg.APIKey = apiKey
+		cfg.MaxJobs = maxJobs
+		cfg.PathMap = pathMap
+	})
+}
+
+// saveLocked atomically writes cfg to path using a write-then-rename pattern so
+// a crash mid-write cannot leave a partial or empty config file. The caller
+// MUST hold cfg.mu (write lock): it marshals the whole struct, so it must be
+// serialized against every field mutation.
+func (cfg *NodeConfig) saveLocked(path string) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("sakms-node: marshalling config: %w", err)

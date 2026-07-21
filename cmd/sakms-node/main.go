@@ -63,6 +63,14 @@ func main() {
 	statusSrv := newStatusServer(cfg)
 	go statusSrv.ListenAndServe(ctx)
 
+	// Local mediaRoots control socket (sakms-node-tray UI). Started ONCE here,
+	// governed by the top-level process context — NOT inside run()/connect(),
+	// which re-enter on every reconnect/re-pair cycle. Because this outlives
+	// individual run() cycles, both APIKey write paths (401 handler + pair())
+	// go through cfg.mutateAndSave so this listener's config save can never race
+	// them. No-op on non-Linux builds (see control_socket_stub.go).
+	go startControlSocket(ctx, cfg, *configPath)
+
 	// Outer state machine: pairing ↔ authenticated.
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
@@ -103,8 +111,7 @@ func main() {
 
 		if errors.Is(err, errUnauthorized) {
 			log.Printf("sakms-node: 401 — clearing API key, entering pairing mode")
-			cfg.APIKey = ""
-			if saveErr := cfg.save(*configPath); saveErr != nil {
+			if saveErr := cfg.clearAPIKey(*configPath); saveErr != nil {
 				log.Printf("sakms-node: saving config after 401: %v", saveErr)
 			}
 			statusSrv.update(stateDisconnected, "", "")
@@ -247,11 +254,12 @@ func connect(
 			if !ok {
 				return nil
 			}
-			if len(cfg.MediaRoots) == 0 {
+			_, mediaRoots := cfg.snapshot()
+			if len(mediaRoots) == 0 {
 				warning := "mediaRoots is not configured -- settings pushes are applied unrestricted (grace period). Set mediaRoots in this node's config to enable containment."
 				log.Printf("sakms-node: WARNING %s", warning)
 				statusSrv.setWarning(warning)
-			} else if reason := validateSettingsPush(cfg.MediaRoots, s.PathMap); reason != "" {
+			} else if reason := validateSettingsPush(mediaRoots, s.PathMap); reason != "" {
 				warning := fmt.Sprintf("rejected settings push (server attempted to map outside this node's declared media roots): %s", reason)
 				log.Printf("sakms-node: %s", warning)
 				statusSrv.setWarning(warning)
@@ -259,12 +267,15 @@ func connect(
 			} else {
 				statusSrv.setWarning("")
 			}
-			cfg.PathMap = mergePathMap(cfg.PathMap, s.PathMap)
-			cfg.MaxJobs = s.MaxJobs
-			if saveErr := cfg.save(configPath); saveErr != nil {
+			mergedTotal := 0
+			if saveErr := cfg.mutateAndSave(configPath, func() {
+				cfg.PathMap = mergePathMap(cfg.PathMap, s.PathMap)
+				cfg.MaxJobs = s.MaxJobs
+				mergedTotal = len(cfg.PathMap)
+			}); saveErr != nil {
 				log.Printf("sakms-node: saving updated settings: %v", saveErr)
 			}
-			log.Printf("sakms-node: settings updated (maxJobs=%d, paths=%d, merged total=%d)", s.MaxJobs, len(s.PathMap), len(cfg.PathMap))
+			log.Printf("sakms-node: settings updated (maxJobs=%d, paths=%d, merged total=%d)", s.MaxJobs, len(s.PathMap), mergedTotal)
 		case br, ok := <-browseCh:
 			if !ok {
 				return nil
@@ -438,9 +449,10 @@ func postHeartbeat(ctx context.Context, nodeID string, cfg *NodeConfig, client *
 // JobResult. On any hash error the result carries the error string so the
 // server can fall back to local execution.
 func executeJob(ctx context.Context, cfg *NodeConfig, job nodes.Job, phashH, videoH hasher) nodes.JobResult {
-	localPath := Remap(cfg.PathMap, job.ServerPath)
-	if len(cfg.MediaRoots) > 0 {
-		if err := withinMediaRoots(cfg.MediaRoots, localPath); err != nil {
+	pathMap, mediaRoots := cfg.snapshot()
+	localPath := Remap(pathMap, job.ServerPath)
+	if len(mediaRoots) > 0 {
+		if err := withinMediaRoots(mediaRoots, localPath); err != nil {
 			return nodes.JobResult{JobID: job.ID, Error: err.Error()}
 		}
 	}
@@ -493,8 +505,9 @@ func postResult(client *http.Client, cfg *NodeConfig, result nodes.JobResult) {
 // string — mirroring executeJob's Hash/Error convention — so the server can
 // surface a clear message to the operator instead of hanging.
 func executeBrowse(cfg *NodeConfig, req nodes.BrowseRequest) nodes.BrowseResult {
-	if len(cfg.MediaRoots) > 0 {
-		if err := withinMediaRoots(cfg.MediaRoots, req.Path); err != nil {
+	_, mediaRoots := cfg.snapshot()
+	if len(mediaRoots) > 0 {
+		if err := withinMediaRoots(mediaRoots, req.Path); err != nil {
 			return nodes.BrowseResult{RequestID: req.ID, Error: err.Error()}
 		}
 	}
