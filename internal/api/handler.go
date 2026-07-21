@@ -265,6 +265,13 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	// See downloads.go.
 	mux.HandleFunc("GET /api/downloads", listDownloadsHandler(dl, nzb))
 	mux.HandleFunc("GET /api/downloads/stream", downloadsStreamHandler(dl, nzb))
+	// Live browser-notification stream. Registered on this same authenticated
+	// mux (never the public setup/login mux). This relies on whStore being the
+	// single shared singleton passed to every handler (see handler.go:62,247,
+	// 334,335) — the same instance Dispatch publishes to. A future refactor that
+	// constructs a per-request/per-handler Store would silently disconnect
+	// subscribers from publishers without breaking anything else.
+	mux.HandleFunc("GET /api/notifications/stream", notificationsStreamHandler(whStore))
 	mux.HandleFunc("DELETE /api/downloads/{gid}", cancelDownloadHandler(dl, nzb))
 	mux.HandleFunc("POST /api/downloads/{gid}/pause", pauseDownloadHandler(dl, nzb))
 	mux.HandleFunc("POST /api/downloads/{gid}/resume", resumeDownloadHandler(dl, nzb))
@@ -301,6 +308,10 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	// until the operator explicitly enables it here.
 	mux.HandleFunc("GET /api/settings/ai-fallback-enabled", getAIFallbackEnabledHandler(settingsStore))
 	mux.HandleFunc("PUT /api/settings/ai-fallback-enabled", putAIFallbackEnabledHandler(settingsStore))
+	// Browser (desktop) notifications opt-in toggle — off by default; the
+	// browser's own Notification permission is tracked separately client-side.
+	mux.HandleFunc("GET /api/settings/browser-notifications-enabled", getBrowserNotificationsEnabledHandler(settingsStore))
+	mux.HandleFunc("PUT /api/settings/browser-notifications-enabled", putBrowserNotificationsEnabledHandler(settingsStore))
 	// Entity cache admin — counts, per-source sync state, on-demand sync triggers
 	mux.HandleFunc("GET /api/admin/entity-sync", entitySyncStatusHandler(entityStore))
 	mux.HandleFunc("POST /api/admin/entity-sync/{source}", triggerEntitySyncHandler(entityStore, connStore, settingsStore, httpClient))
@@ -407,34 +418,12 @@ func listConnectionsHandler(store *connections.Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		list = withFixedURLs(list)
+		for i := range list {
+			list[i].FixedURL = fixedURLValues[list[i].Service]
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(list)
 	}
-}
-
-// withFixedURLs sets FixedURL on every fixed-URL-service entry already in
-// list, and appends a synthetic (URL-only) entry for any fixed-URL service
-// store.List didn't return at all — i.e. one the operator has never saved a
-// connection row for. Without this, a fixed-URL service's real URL would only
-// ever be visible once it already has a DB row, silently failing to show for
-// exactly the pre-configuration case an operator most wants to see it. A
-// synthetic entry has HasAPIKey false and no UpdatedAt, matching the zero
-// value store.List would produce for a never-configured service.
-func withFixedURLs(list []connections.Summary) []connections.Summary {
-	seen := make(map[string]bool, len(list))
-	for i := range list {
-		if url, ok := fixedURLValues[list[i].Service]; ok {
-			list[i].FixedURL = url
-		}
-		seen[list[i].Service] = true
-	}
-	for service, url := range fixedURLValues {
-		if !seen[service] {
-			list = append(list, connections.Summary{Service: service, FixedURL: url})
-		}
-	}
-	return list
 }
 
 type upsertConnectionRequest struct {

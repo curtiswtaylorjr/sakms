@@ -18,9 +18,12 @@ import {
 import {
   ALL_WEBHOOK_EVENTS,
   WEBHOOK_EVENT_LABELS,
+  browserNotificationsEnabled,
   createWebhook,
   deleteWebhook,
   fetchWebhooks,
+  putBrowserNotificationsEnabled,
+  setBrowserNotificationsEnabled,
   testWebhook,
   updateWebhook,
   type WebhookSummary,
@@ -365,12 +368,100 @@ const AddWebhookForm: Component<{ onCreated: () => void }> = (props) => {
   );
 };
 
+// BrowserNotificationsToggle is the opt-in "Enable browser notifications"
+// switch. It reads/writes the SHARED browserNotificationsEnabled signal (from
+// api/webhooks) — the same instance the shell-mounted BrowserNotifications
+// component reacts to — so a flip here opens/closes that component's EventSource
+// without a page reload. The browser's own Notification permission is a SEPARATE
+// state from this preference (plan Principle 4): the preference is persisted
+// regardless of the permission outcome, but a desktop notification only actually
+// appears once permission === "granted".
+const BrowserNotificationsToggle: Component = () => {
+  const save = useSaveStatus();
+  // Local mirror of Notification.permission so the "blocked" message re-renders
+  // after requestPermission() resolves — the native property is not reactive.
+  const [permission, setPermission] = createSignal<NotificationPermission>(
+    typeof Notification !== "undefined" ? Notification.permission : "default",
+  );
+
+  async function handleToggle(checked: boolean) {
+    save.set("saving…");
+    try {
+      if (checked) {
+        // Turning on: resolve permission FIRST, THEN flip the shared signal.
+        // BrowserNotifications' effect tracks the signal but reads
+        // Notification.permission untracked (only when the signal transitions),
+        // so setting the signal before permission resolves would run the effect
+        // with permission still "default" (no stream opens), and re-setting the
+        // same value afterward is a Solid no-op → no stream until a reload.
+        if (
+          typeof Notification !== "undefined" &&
+          Notification.permission === "default"
+        ) {
+          await Notification.requestPermission();
+        }
+        if (typeof Notification !== "undefined") {
+          setPermission(Notification.permission);
+        }
+        // Persist regardless of the permission outcome (preference and
+        // permission are separate states, per plan Principle 4).
+        await putBrowserNotificationsEnabled(true);
+        setBrowserNotificationsEnabled(true);
+      } else {
+        await putBrowserNotificationsEnabled(false);
+        setBrowserNotificationsEnabled(false);
+      }
+      save.saved();
+    } catch (e) {
+      save.failed(e);
+    }
+  }
+
+  const blocked = () =>
+    browserNotificationsEnabled() && permission() === "denied";
+
+  return (
+    <div class="mb-4 border-b border-border pb-4">
+      <label class="flex cursor-pointer items-center gap-2 text-sm text-fg">
+        <input
+          type="checkbox"
+          checked={browserNotificationsEnabled()}
+          onChange={(e) => void handleToggle(e.currentTarget.checked)}
+          class="accent-accent"
+        />
+        Enable browser notifications
+      </label>
+      <p class="mt-1 text-sm text-muted">
+        Pop a desktop notification when SAK finishes a Rename, Purge, or Dedup,
+        or completes a grab — as long as at least one SAK tab is open. Works
+        alongside any webhooks below.
+      </p>
+      <Show when={blocked()}>
+        <p class="mt-1 text-sm text-danger">
+          Blocked — enable notifications for this site in your browser settings.
+        </p>
+      </Show>
+      <Show when={save.status().text}>
+        <span
+          class={`mt-1 block text-sm ${
+            save.status().error ? "text-danger" : "text-muted"
+          }`}
+        >
+          {save.status().text}
+        </span>
+      </Show>
+    </div>
+  );
+};
+
 // WebhooksSection is the top-level Settings → Webhooks tab content.
 export const WebhooksSection: Component = () => {
   const [hooks, { refetch }] = createResource(fetchWebhooks);
 
   return (
     <Card title="Notifications">
+      <BrowserNotificationsToggle />
+
       <p class="mb-3 text-sm text-muted">
         Get pinged in other apps — Discord, Home Assistant, anything that can
         receive a webhook — whenever SAK finishes a Rename, Purge, or Dedup,

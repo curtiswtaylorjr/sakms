@@ -135,6 +135,56 @@ func putAIFallbackEnabledHandler(settingsStore *settings.Store) http.HandlerFunc
 	}
 }
 
+// BrowserNotificationsEnabledKey is the settings key for the opt-in browser
+// (desktop) notifications preference. Off by default.
+const BrowserNotificationsEnabledKey = "browser_notifications_enabled"
+
+type browserNotificationsEnabledResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+type browserNotificationsEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// getBrowserNotificationsEnabledHandler reports whether browser notifications
+// are enabled. Unset defaults to false — no notifications until the operator
+// explicitly turns the toggle on (and grants browser permission, tracked
+// separately client-side).
+func getBrowserNotificationsEnabledHandler(settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		v, err := settingsStore.Get(r.Context(), BrowserNotificationsEnabledKey)
+		if err != nil && !errors.Is(err, settings.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(browserNotificationsEnabledResponse{Enabled: v == "true"})
+	}
+}
+
+// putBrowserNotificationsEnabledHandler toggles browser notifications. This is
+// only the persisted preference; the browser's own Notification permission is a
+// separate state the frontend tracks and cannot be forced from here.
+func putBrowserNotificationsEnabledHandler(settingsStore *settings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req browserNotificationsEnabledRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		v := "false"
+		if req.Enabled {
+			v = "true"
+		}
+		if err := settingsStore.Set(r.Context(), BrowserNotificationsEnabledKey, v); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // putAIProviderHandler stores which AI backend every AI-assisted feature
 // should use.
 func putAIProviderHandler(settingsStore *settings.Store) http.HandlerFunc {

@@ -43,6 +43,7 @@ import { Dedup } from "./Dedup";
 import { Tag } from "./Tag";
 import { Collections } from "./Collections";
 import { Settings } from "./Settings";
+import { BrowserNotifications } from "../components/BrowserNotifications";
 
 // APP_ROUTES is the exhaustive list of client-side route patterns the router
 // serves. Guardrail #2 / requirement #7: the router must NEVER claim any
@@ -322,6 +323,10 @@ export const AppShell: Component<{
     return (
       <ScreenTabsContext.Provider value={setTabReg}>
         <div class="flex h-screen overflow-hidden">
+          {/* No visible UI; lives here (persistent shell root, not a swapped
+              <Route>) so the notifications stream stays open across in-app
+              navigation. */}
+          <BrowserNotifications />
           <Show when={mobileNavOpen()}>
             <div
               class="fixed inset-0 z-30 bg-black/50 md:hidden"

@@ -4,6 +4,7 @@
 // session-expiry fallback. Request/response shapes are the generated DTOs
 // (@dto), never hand-duplicated.
 
+import { createSignal } from "solid-js";
 import { api } from "./client";
 import type {
   WebhookCreateRequest,
@@ -56,4 +57,48 @@ export function deleteWebhook(id: number): Promise<void> {
 
 export function testWebhook(id: number): Promise<void> {
   return api<void>(`/api/webhooks/${id}/test`, { method: "POST" });
+}
+
+// --- Browser (desktop) notifications preference ----------------------------
+// The opt-in "Enable browser notifications" preference (off by default),
+// mirroring the ai_fallback_enabled boolean-preference pattern in settings.ts.
+
+export function fetchBrowserNotificationsEnabled(): Promise<boolean> {
+  return api<{ enabled: boolean }>(
+    "/api/settings/browser-notifications-enabled",
+  ).then((r) => r.enabled);
+}
+
+export function putBrowserNotificationsEnabled(enabled: boolean): Promise<void> {
+  return api<void>("/api/settings/browser-notifications-enabled", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+// browserNotificationsEnabled is genuinely SHARED module-level state, not a
+// per-component signal: the Settings toggle (Webhooks.tsx, mounted inside a
+// swapped <Route>) and BrowserNotifications (mounted in AppShell's persistent
+// ShellRoot) live in disjoint component subtrees and must react to each other
+// without a page reload. Both read/write this one signal — a toggle flip is
+// immediately visible to the shell-mounted component, which opens/closes its
+// EventSource accordingly.
+export const [browserNotificationsEnabled, setBrowserNotificationsEnabled] =
+  createSignal(false);
+
+let prefLoaded = false;
+
+// loadBrowserNotificationsEnabled seeds the shared signal from the server once,
+// on first use. Idempotent (guarded) so multiple readers can call it without
+// racing duplicate fetches or clobbering a later user toggle. A failed fetch
+// leaves the default (false) in place — a settings read error must not break
+// the shell.
+export async function loadBrowserNotificationsEnabled(): Promise<void> {
+  if (prefLoaded) return;
+  prefLoaded = true;
+  try {
+    setBrowserNotificationsEnabled(await fetchBrowserNotificationsEnabled());
+  } catch {
+    /* keep the default (false); the toggle can still be flipped manually */
+  }
 }

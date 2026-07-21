@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -94,15 +95,114 @@ type Summary struct {
 	UpdatedAt string   `json:"updatedAt"`
 }
 
-// Store is the persistence layer for webhook subscriptions.
+// BroadcastEvent is one live event delivered to in-process SSE subscribers.
+// It carries the same (event, data) pair passed to Dispatch — this is the
+// ephemeral, in-memory live-broadcast concern, structurally separate from the
+// persisted, DB-backed outbound-webhook subscriptions the rest of Store owns.
+type BroadcastEvent struct {
+	Event string `json:"event"`
+	Data  any    `json:"data"`
+}
+
+// broadcaster is an unexported, mutex-guarded fan-out hub for live SSE
+// subscribers. Its discipline mirrors internal/downloader/downloader.go's
+// subscriber-map handling exactly: the write lock guards subscribe and the
+// unsubscribe+close, and the read lock is held for the DURATION of the publish
+// fan-out — so a send can never race a concurrent unsubscribe's close (which
+// only ever happens under the write lock). An unguarded map here would be a
+// fatal concurrent-map crash under load.
+type broadcaster struct {
+	mu     sync.RWMutex
+	subs   map[int]chan BroadcastEvent
+	nextID int
+}
+
+// subscribe registers a new subscriber, returning its receive channel and an
+// unsubscribe closure. The channel is buffered so publish's non-blocking send
+// tolerates a briefly-slow consumer; unsubscribe deletes and closes it under
+// the write lock.
+func (b *broadcaster) subscribe() (<-chan BroadcastEvent, func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.subs == nil {
+		b.subs = map[int]chan BroadcastEvent{}
+	}
+	id := b.nextID
+	b.nextID++
+	ch := make(chan BroadcastEvent, 8)
+	b.subs[id] = ch
+	unsubscribe := func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if c, ok := b.subs[id]; ok {
+			delete(b.subs, id)
+			close(c)
+		}
+	}
+	return ch, unsubscribe
+}
+
+// count returns the current number of live subscribers.
+func (b *broadcaster) count() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subs)
+}
+
+// publish delivers ev to every current subscriber with a non-blocking send,
+// holding the read lock for the whole fan-out. A full/stuck subscriber channel
+// is skipped (default case) rather than blocking — a dropped live notification
+// is acceptable; blocking Dispatch (and the user action that triggered it) is
+// not.
+func (b *broadcaster) publish(ev BroadcastEvent) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, ch := range b.subs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+// Store is the persistence layer for webhook subscriptions. It also owns a
+// composed, in-memory broadcaster for live SSE notification subscribers — two
+// structurally separate concerns (persisted outbound webhooks vs. ephemeral
+// live broadcast) deliberately kept in their own field/methods, not merged.
 type Store struct {
-	db      *sql.DB
-	secrets encryptor
+	db          *sql.DB
+	secrets     encryptor
+	broadcaster broadcaster
 }
 
 // New returns a Store using the given db and encryptor.
 func New(db *sql.DB, secretStore encryptor) *Store {
 	return &Store{db: db, secrets: secretStore}
+}
+
+// Subscribe registers a live SSE subscriber for broadcast events and returns
+// its receive channel plus an unsubscribe closure. A nil Store returns a nil
+// channel (which blocks forever in a select, so the SSE handler's read loop
+// simply never fires — matching internal/api/downloads.go's documented
+// nil-channel pattern) and a no-op unsubscribe, mirroring Dispatch's existing
+// nil-safety for handlers wired with nil in tests. A closed channel is
+// deliberately NOT used here: it is always immediately ready in a select and
+// would spin the handler loop at 100% CPU.
+func (s *Store) Subscribe() (<-chan BroadcastEvent, func()) {
+	if s == nil {
+		return nil, func() {}
+	}
+	return s.broadcaster.subscribe()
+}
+
+// SubscriberCount returns the number of live broadcast subscribers. It exists
+// for observability and leak-detection tests (e.g. asserting the SSE handler
+// unsubscribes on client disconnect). Nil-Store safe.
+func (s *Store) SubscriberCount() int {
+	if s == nil {
+		return 0
+	}
+	return s.broadcaster.count()
 }
 
 func (s *Store) toSummary(w Webhook) Summary {
@@ -320,6 +420,14 @@ func (s *Store) Dispatch(event string, data any) {
 	if s == nil {
 		return
 	}
+	// Live-broadcast to in-process SSE subscribers FIRST and unconditionally —
+	// before listEnabled and both of its early returns below. This must not be
+	// gated on any webhook being configured: broadcast fires for every event
+	// even when zero outbound webhooks exist (the default state for most
+	// installs). The outbound-webhook delivery that follows keeps its own
+	// subscription gating, unchanged — these are two separate steps by design.
+	s.broadcaster.publish(BroadcastEvent{Event: event, Data: data})
+
 	// Snapshot enabled subscribers synchronously to avoid a stale-context race
 	// (the request context may cancel before deliveries complete). Use a
 	// background context so the dispatch outlives the HTTP request.
