@@ -196,6 +196,45 @@ unchanged — unit tests are unaffected. Commit `29a56f3`.
 
 ## Recently shipped (outside this backlog)
 
+### Browser (desktop) notifications for webhook events — shipped and deployed 2026-07-21
+A human-directed addition, not a pre-existing backlog item (distinct from
+"Webhooks + real API docs" below, which is the outbound-webhook CRUD
+feature this builds on). Foreground-only (tab-must-be-open) desktop
+notifications for the same four events sakms already tracks for outbound
+webhooks (`rename.applied`, `purge.applied`, `dedup.applied`,
+`grab.completed`). `webhooks.Store` gained a composed, `sync.RWMutex`-
+guarded `broadcaster` that `Dispatch` publishes to unconditionally and
+first — before the existing subscription-gated outbound-webhook delivery
+— so live broadcast can never silently depend on whether any webhook is
+configured (the exact defect the first design draft had, caught by
+Architect+Critic review before implementation; see
+`.omc/plans/browser-notifications.md`, Rev 3). New `GET
+/api/notifications/stream` SSE endpoint; a shell-mounted
+`BrowserNotifications` component subscribes via `EventSource` and calls
+the native `Notification` API with a stable per-event-type `tag`,
+collapsing cross-tab duplicates and same-type bursts (e.g. a bulk Apply)
+into one visible notification instead of stacking. Settings toggle shares
+a reactive signal with the shell component (flips take effect without a
+reload) and distinguishes "off" from "on but blocked by the browser."
+
+Verified: `go build`/`go vet` clean, `go test -race` zero race reports
+(including the two correctness-critical tests the plan called out: a
+zero-configured-webhooks store still broadcasts, and concurrent
+subscribe/unsubscribe against a hot `Dispatch` loop), frontend `tsc`/
+vitest clean (14 new tests). Pushed and auto-deployed same day
+(`deployed_sha` = `d782861`, container `Up`, healthz 200 first attempt).
+
+**Still outstanding**: the plan's own manual verification step was never
+run — open two browser tabs, enable the toggle + grant permission in
+both, trigger a Rename/Purge/Dedup Apply or a Grab, and confirm exactly
+one visible desktop notification appears (not one per tab, not one per
+item in a bulk-apply burst). This needs a human in a real browser: not
+something that can be scripted/asserted automatically. Also unexercised:
+the "blocked" UI state when the browser has denied permission, and the
+toggle-off/on-without-reload `EventSource` open/close behavior — both
+covered by frontend unit tests with mocks, but not against a real
+browser.
+
 ### Node path mapping: library-path-driven + security hardening — shipped and deployed 2026-07-20
 `cmd/sakms-node` worker-node path mappings (introduced 2026-07-19) are now
 keyed off the fixed set of Library-settings paths instead of free text,
