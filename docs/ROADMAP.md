@@ -196,6 +196,30 @@ unchanged — unit tests are unaffected. Commit `29a56f3`.
 
 ## Recently shipped (outside this backlog)
 
+### Node path mapping: library-path-driven + security hardening — shipped and deployed 2026-07-20
+`cmd/sakms-node` worker-node path mappings (introduced 2026-07-19) are now
+keyed off the fixed set of Library-settings paths instead of free text,
+with a live remote-browse picker replacing the old freeform editor
+(commits `037d03f`, `ba91f87`). A follow-on security hardening addendum
+(commit `4212e3d`, its own `ralplan`-consensus design cycle + `ralph`
+execution, 7 stories) adds two independent safeguards the operator
+explicitly requested — a server-side directory-listing containment check
+that hard-rejects a mismatched node-path mapping before it's ever
+persisted, and a node-side `mediaRoots` allowlist that rejects any settings
+push mapping outside it — plus packaging changed so `cmd/sakms-node` runs
+as a dedicated non-root user. See `CHANGELOG.md`'s two 2026-07-20 entries
+for full per-story detail, the 2 real bugs a THOROUGH-tier architect
+review caught (an upgrade-path ownership regression; conflated
+mismatch/unreachable error handling), and this deploy's own verification:
+pushed + auto-deployed (`deployed_sha` = `4212e3d`, container `Up`, health
+checks passed), and a real `sakms-node.service` restart on wade-pc
+confirmed the durable node identity (the entire point of the underlying
+US-0 work) actually survives a reconnect, not just in unit tests.
+**Still outstanding, needs a dedicated pass**: mediaRoots enforcement
+against a real crafted out-of-bounds push, a real wrong-folder mapping's
+rejection evidence, and an RPM build/install proving the daemon starts
+cleanly as the new non-root user.
+
 ### Tagging UI grid view — shipped 2026-07-19
 Two-panel layout for the `/tag` screen (Movies/Series). Left: responsive
 poster-card grid (2–4 cols, client-side title search, localStorage-persisted

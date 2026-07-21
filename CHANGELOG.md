@@ -3093,3 +3093,195 @@ place rather than reverted; this entry exists to restore the commit-history
 traceability the mixed commit message doesn't provide. `deployed_sha`
 confirmed matching `50ba787`, container `Up`, health + auth-boot checks
 passed.
+
+## 2026-07-20 — Library-path-driven node path mapping + real remote browsing (sakms-node)
+
+**Problem:** The worker-node path-mapping UI (shipped 2026-07-19 alongside
+`cmd/sakms-node`) required freeform-typing each mapping's server-side and
+node-side paths with no live picker and no relationship to the library
+paths actually configured in Settings — a wrong entry silently misdirected
+phash/videophash reads on the remote node, with no correction loop.
+
+**Fix (commits `037d03f`, `ba91f87`):** Node path mappings are now keyed
+off the same fixed set of 5 library-path settings rather than free text.
+`GET /api/nodes/{id}/path-mappings` always returns exactly 5 rows —
+`ServerPath` resolved fresh from Library settings by key, `NodePath` from
+a new persisted `internal/nodesettings` store (migration `0038`,
+`node_path_mappings` + `node_max_jobs` tables), `Configured` reflecting
+whether that library path is even set yet. A new isolated "browse" SSE
+lane (3rd per-node channel alongside jobs/settings) lets the operator
+navigate the real remote node's filesystem live (`GET
+/api/nodes/{id}/browse`, `cmd/sakms-node/browse.go`'s `os.ReadDir`-based
+listing) via a new `NodeFolderPicker.tsx`, replacing the old freeform
+`PathMapEditor` (deleted entirely from `Nodes.tsx`).
+
+Write stays consolidated through the existing `PUT /api/nodes/{id}/settings`
+(no new endpoint) — a separate path-mappings-only write was scoped out
+during implementation once it became clear it would silently reset
+`MaxJobs` to unlimited on every path-mapping save (no merge semantics for a
+bare scalar); `MaxJobs` and `PathMap` now persist and travel together
+atomically. `cmd/sakms-node`'s `mergePathMap` (new `remap.go`) merges
+incoming pushes by key — an existing mapping not mentioned in a push is
+left untouched — closing the same "wholesale replace wipes an unrelated
+key" bug class for both the live-save and the reconnect-repush paths
+(`pushPersistedNodeSettings`, fired right after `Connect` on every
+reconnect).
+
+**Bug found and fixed during the session's own pre-completion verification
+pass** (not by design review): `resolvePathMap` (live-save) and
+`pushPersistedNodeSettings` (reconnect) disagreed on what a blank
+operator-submitted `NodePath` on an already-configured row meant —
+live-save pushed it as an explicit `Local: ""` overwrite (wiping the
+node's existing value via `mergePathMap`), while reconnect skipped that
+same row entirely (leaving the just-wiped value alone). Fixed by making
+`resolvePathMap` skip blank `NodePath` rows before the `ServerPath` lookup
+runs, so "blank" means "leave this key untouched" consistently on every
+push path. Locked in by `TestResolvePathMap_BlankNodePathSkipped` plus two
+siblings covering the unconfigured and normally-configured cases.
+
+Post-commit `architect` review (opus, full diff) came back clean on
+durable-id/disconnect-race handling, browse-lane isolation, and the
+wipe-by-omission fix; 4 advisory findings addressed in `ba91f87`
+(unconfigured-row rendering on a transient settings-store error;
+documenting that blank-means-untouched has no corresponding "clear a
+mapping" affordance yet; a `NodeFolderPicker.tsx` out-of-order-response
+race fixed via a monotonic `fetchSeq` token).
+
+Full `go build`/`go vet`/`go test` and frontend `tsc --noEmit`/`vitest`
+clean except the 7 pre-existing `internal/api` `testNodeMux`-wiring
+failures (pre-dating this work, traced to routes moving from `NewMux` to
+`NewNodesMux` at `037d03f` itself — a legacy test helper never updated,
+not a regression) and `internal/sysinfo`'s environment-dependent GPU sysfs
+tests. Pushed and auto-deployed together with the security-hardening
+addendum below — see that entry for combined deploy/E2E verification.
+
+## 2026-07-20 — Security hardening addendum: node path-mapping verification + mediaRoots allowlist + non-root packaging
+
+**Problem:** The browse lane above has no server-side or node-side check
+that an operator-submitted node path actually points at the same content
+as the corresponding library path, and `cmd/sakms-node`'s packaging ran
+the daemon as `root` with no filesystem boundary — a wrong mapping (user
+error) or a compromised server pushing a malicious mapping (poisoned
+data) both had unbounded blast radius on the node. Raised by the operator
+directly after the entry above shipped, explicitly requesting "protection
+on both ends, in case one gets poisoned" and, mid-review, that a
+non-matching mapping be a hard rejection rather than a warning.
+
+**Design process:** `ralplan` cycle — plan reached v5 after 4 rounds of
+Architect/Critic consensus (v1 Architect review → v2 Critic ITERATE → v3
+Architect re-review → v4 Critic re-review ITERATE (light) → v5 Critic
+APPROVE), with an ADR recorded in the plan. Executed via `ralph` (7
+stories, PT2-0 through PT2-6, all passing). Migration
+`0039_node_path_mapping_verification.sql` adds `verification_status`
+(`verified`/`unverified_bootstrap`/`unverified_approval`) and
+`verified_at` to `node_path_mappings`.
+
+**Fix — two independent safeguards, deliberately not relying on each
+other:**
+
+1. **Server-side mapping verification (hard gate,
+   `internal/api/pathmapverify.go`).** Before persisting any node-settings
+   save, SAK requests a real directory listing from both the library path
+   and the claimed node path (`BrowseRequest.IncludeFiles=true`, a new wire
+   field — the operator-facing picker still calls with `false`, unchanged
+   UX) and computes an *asymmetric* containment score (`|intersection| /
+   |smaller listing|`, not symmetric Jaccard) against a uniform 80%
+   threshold with no small-listing exception — an earlier "≥1 match when
+   ≤3 entries" idea was rejected during planning as a real hole (a single
+   coincidental match on a 3-file library scored 33%, would've passed).
+   Justified by this daemon's own invariant: it's a phash worker reading
+   the *same* physical files through a different mount, not a reorganized
+   copy, so near-total containment is the correct bar. A rejected row is
+   never persisted (verified via a real HTTP integration test that a
+   rejected save leaves the store's prior value untouched) — verification
+   runs and every row must reach an accept outcome before
+   `nodeSettingsStore.Set` is ever called. Either listing being empty is
+   treated as `unverified_bootstrap`, not silently "confirmed correct"; a
+   pending (not-yet-approved) node has no live channel to verify against
+   and persists as `unverified_approval` unconditionally.
+
+2. **Node-side `mediaRoots` allowlist (`cmd/sakms-node/mediaroots.go`),
+   independent of Safeguard 1.** A new `NodeConfig.MediaRoots []string`,
+   strictly local-only — a regression test
+   (`TestNodeSettings_WireCannotSetMediaRoots`) confirms the wire
+   `NodeSettings` type has no such field at all, so a settings push can't
+   set it even if crafted maliciously. Every incoming settings push is
+   validated (each `PathMap` entry's local value must resolve, symlinks
+   and `..` included, within `mediaRoots`) *before* `mergePathMap` runs;
+   any single out-of-scope entry rejects the **whole** push, not a
+   partial-apply, so a compromised server can't smuggle one bad entry
+   alongside legitimate ones. Starts empty (every pre-addendum node) as a
+   no-op grace period — enforcement begins only once the operator
+   explicitly sets it (never auto-derived from existing `PathMap.Local`
+   values, an idea rejected during planning as unsound and prone to
+   collapsing toward `/`). A prominent warning logs on every push while
+   ungraced, and now surfaces on the node's own status page
+   (`cmd/sakms-node/status.go`'s new `Warning` field) — reaches only an
+   operator with local access to that node, not the server web UI for a
+   headless node; the fuller correlation-ID ack that would close that gap
+   was scoped out as deserving its own design pass.
+
+**Packaging (`packaging/rpm/sakms-node.spec`):** the service now runs as a
+fixed, dedicated `sakms-node` user (not root, not PUID/PGID — rejected as
+a Docker-only convention that doesn't map onto this systemd/RPM target)
+via a new idempotent `%pre useradd` scriptlet.
+
+**2 real bugs found by the final THOROUGH-tier `architect` review (opus,
+~20 files, security-adjacent) that the design review couldn't have
+caught** — both fixed before this entry:
+1. The ownership change from `root:root` to `sakms-node:sakms-node` only
+   applied to *fresh* installs — an **existing** root-owned install
+   upgrading to this build would keep a root-owned `config.json`,
+   unreadable by the new non-root service user, failing to start on
+   upgrade (the exact failure class this packaging change was meant to
+   prevent). Fixed with an unconditional `chown -R` in `%post` covering
+   both fresh-install and upgrade cases.
+2. `verifyAndBuildPersistedSettings` originally funneled a genuine content
+   mismatch, an offline/timed-out node, and a server-side read failure
+   into the same "mapping looks wrong" (422) response — violating the
+   plan's own observability requirement. Fixed with a distinct
+   `errNodeUnreachable` type returned separately from `errMappingMismatch`,
+   giving the operator three genuinely distinct outcomes (422 mismatch /
+   502 unreachable / 500 internal), locked in by
+   `TestVerifyNodePathMapping_NodeUnreachable_DistinctFromMismatch`.
+
+**Deferred, deliberately, to a Phase 2 follow-up:** OS-level
+namespace-scoped containment (systemd `BindReadOnlyPaths=<mediaRoots>`) —
+an earlier plan draft's delivery mechanism (`ExecStartPre` regenerating
+these directives) was found technically impossible, since `ExecStartPre`
+runs *inside* the mount namespace systemd already built from the unit's
+static directives; the correct mechanism (a privileged install step
+writing a systemd drop-in, then `daemon-reload` + restart) is real but
+deserves its own focused build/validation pass. Documented explicitly in
+the plan's ADR: this addendum's app-level `mediaRoots` check fully covers
+a poisoned-data/compromised-server-credential attacker (the realistic
+homelab threat) but only coarsely covers a compromised node *process*
+itself.
+
+Deslop pass (scoped to this session's ~20 changed files) found and
+consolidated one real duplication (two near-identical fake-browse-node
+test helpers). Full `go build`/`go test` clean except the same 2
+pre-existing failure classes noted in the entry above.
+
+**Push + deploy (this session, 2026-07-20):** both entries above
+(`037d03f`, `ba91f87`, `4212e3d`) pushed to `origin/main` together and
+deployed via `sakms-auto-update.service` — `deployed_sha` confirmed
+matching `4212e3d`, container `Up`, `/healthz` + auth-boot checks passed.
+**The one E2E check both entries' own sessions had explicitly deferred —
+"does a node reconnect keep the same durable id" (the entire point of
+US-0's durable-identity work) — was run for real against wade-pc's live
+`sakms-node` instance as part of this deploy's verification**: the
+service's first reconnect (forced by the deploy itself recreating the
+`sakms` container) landed on a fresh id (`JMYTQB32PY2NUGP7Y4WQYI7UT6`,
+expected — this node never had a durable identity under the old
+ephemeral-id scheme this feature replaces), and a second, independent
+full service restart (`systemctl restart sakms-node.service`) reconnected
+under the *same* id — confirming the durable-identity property actually
+holds across a real restart, not just in unit tests against a fake
+registry. No node-related errors in either the server (`docker logs
+sakms`) or node (`journalctl -u sakms-node.service`) logs across both
+reconnects. The remaining manual E2E items noted in both sessions' own
+progress notes (mediaRoots enforcement/rejection against a real crafted
+push, a real wrong-folder mapping rejection with evidence, RPM
+build/install under the new non-root user) are still outstanding and
+need a dedicated pass — not exercised by this deploy verification.
