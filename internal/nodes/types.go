@@ -30,6 +30,15 @@ type PathMapping struct {
 type NodeSettings struct {
 	PathMap []PathMapping `json:"pathMap"`
 	MaxJobs int           `json:"maxJobs"` // 0 = unlimited
+	// PauseDispatch is the server-owned dispatch-exclusion bit echoed to the
+	// node for tray display only (the authoritative dispatch decision is the
+	// server-side connectedNode.paused, never this frame). Every sender of a
+	// NodeSettings frame MUST populate this from the node's STORED pause value,
+	// not a zero value — an omitted field marshals false and would silently
+	// clear the node's cached pause display (P7). The lone exception is the
+	// approval/pairing push, where a freshly-approved node has no persisted
+	// pause yet and the zero value false is correct.
+	PauseDispatch bool `json:"pauseDispatch"`
 }
 
 // PairConfig is the payload carried in the SSE "config" event that closes the

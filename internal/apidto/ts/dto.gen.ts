@@ -1375,6 +1375,15 @@ export interface NodeInfo {
   capabilities: string[]; // hwaccels, e.g. ["cuda"]
   lastHeartbeat: string; // RFC3339
   maxJobs: number /* int */; // stored operator-owned concurrency cap, 0 = unlimited/unset
+  /**
+   * PauseDispatch is the node's stored, server-owned dispatch-pause bit (from
+   * nodesettings.Store — false if nothing was ever saved). Included so the
+   * frontend can preload the real current value into EditSettingsModal's
+   * pause toggle and render a "Paused" badge in the node list, exactly as
+   * MaxJobs is preloaded — never defaulting a toggle to false and flipping an
+   * existing pause.
+   */
+  pauseDispatch: boolean;
 }
 /**
  * PendingNodeInfo is a node waiting for operator approval in GET /api/nodes.
@@ -1426,6 +1435,20 @@ export interface NodeSettingsRequest {
 export interface ApproveNodeRequest {
   pathMap: NodePathMappingInput[];
   maxJobs: number /* int */;
+}
+/**
+ * NodePauseRequest is the body for PUT /api/nodes/{id}/pause — the dedicated,
+ * dual-authed dispatch-pause toggle. It carries ONLY the pause bit: a value
+ * bool (not the three-state *bool of ConnectionUpsertRequest.APIKey) is safe
+ * here precisely because there is no sibling field on this wire to reset —
+ * pause is written by its own column-scoped storage method and its own
+ * endpoint, so it can never carry or clobber MaxJobs/PathMap (the
+ * parallel-write footgun, eliminated structurally at both the HTTP and storage
+ * layers). Served by BOTH operator auth (keyed by the URL {id}) and node
+ * bearer auth (keyed by the bearer identity, never the URL {id}).
+ */
+export interface NodePauseRequest {
+  paused: boolean;
 }
 /**
  * NodesResponse is GET /api/nodes's response.

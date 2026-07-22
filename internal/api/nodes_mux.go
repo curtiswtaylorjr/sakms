@@ -69,5 +69,12 @@ func NewNodesMux(
 	}
 	mux.Handle("PUT /api/nodes/{id}/settings", dualAuth(updateNodeSettingsHandler(reg, settingsStore, nodeSettingsStore)))
 
+	// Dedicated dual-auth pause toggle (P1): a genuinely separate route from
+	// PUT /settings, reusing the same dualAuth wrapper. Node bearer keys by
+	// bearer identity (ignoring the URL {id}, D2); operator keys by the URL {id}.
+	// Kept off the settings handler so pause never entangles with the
+	// path-mapping verification gate.
+	mux.Handle("PUT /api/nodes/{id}/pause", dualAuth(updateNodePauseHandler(reg, settingsStore, nodeSettingsStore)))
+
 	return mux
 }

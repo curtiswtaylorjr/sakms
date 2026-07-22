@@ -3,6 +3,7 @@ package nodes
 import (
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -52,6 +53,13 @@ type connectedNode struct {
 	lastHeartbeat       time.Time
 	consecutiveTimeouts int
 	dispatchIneligible  bool
+	// paused is the operator-controlled dispatch-exclusion bit (server-owned
+	// pause), seeded from the persisted node_max_jobs.pause_dispatch on
+	// (re)connect and flipped live by SetNodePaused. Distinct from
+	// dispatchIneligible (the automatic circuit breaker): a paused node is
+	// healthy and heartbeating, just deliberately taken out of new-job
+	// rotation. Both exclude the node from Dispatch selection.
+	paused bool
 }
 
 // Registry is the in-memory, mutex-guarded set of connected nodes plus the
@@ -223,8 +231,18 @@ func (r *Registry) Dispatch(job Job) (nodeID string, result <-chan JobResult, ok
 	defer r.mu.Unlock()
 
 	var target *connectedNode
+	pauseExcluded := false
 	for id, n := range r.nodes {
 		if n.dispatchIneligible {
+			continue
+		}
+		if n.paused {
+			// A paused node is otherwise dispatch-eligible (healthy,
+			// heartbeating) — it is skipped solely because the operator paused
+			// it, so its exclusion is what may force local fallback below.
+			pauseExcluded = true
+			slog.Info("nodes: skipping paused node during dispatch selection",
+				"node", id, "jobType", job.Type)
 			continue
 		}
 		nodeID = id
@@ -232,6 +250,15 @@ func (r *Registry) Dispatch(job Job) (nodeID string, result <-chan JobResult, ok
 		break
 	}
 	if target == nil {
+		if pauseExcluded {
+			// Distinct from the circuit-breaker fallback: a candidate that was
+			// eligible except for the operator's pause left no other node, so
+			// this job falls back to the local hasher (reduced throughput, not
+			// a failure). Observability for "why isn't my paused node's work
+			// going anywhere" (Principle 5).
+			slog.Info("nodes: pause excluded a candidate, no eligible node remained — falling back to local",
+				"jobType", job.Type)
+		}
 		return "", nil, false
 	}
 
@@ -275,6 +302,19 @@ func (r *Registry) noteSuccess(nodeID string) {
 	if n, ok := r.nodes[nodeID]; ok {
 		n.consecutiveTimeouts = 0
 		n.dispatchIneligible = false
+	}
+}
+
+// SetNodePaused flips the live dispatch-pause bit on the connected node
+// identified by nodeID, so the running dispatcher excludes (or re-includes) it
+// immediately. Lock-guarded, mirroring noteSuccess. No-op for an unknown id —
+// an offline node is not a dispatch candidate anyway, and its pause is re-seeded
+// from the persisted store on reconnect (see the api layer's connect seeding).
+func (r *Registry) SetNodePaused(nodeID string, paused bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n, ok := r.nodes[nodeID]; ok {
+		n.paused = paused
 	}
 }
 

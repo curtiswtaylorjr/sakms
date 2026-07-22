@@ -188,7 +188,32 @@ func pushPersistedNodeSettings(ctx context.Context, reg *nodes.Registry, setting
 		pathMap = append(pathMap, nodes.PathMapping{Server: serverPath, Local: e.NodePath})
 	}
 
-	reg.SendSettings(nodeID, nodes.NodeSettings{PathMap: pathMap, MaxJobs: persisted.MaxJobs})
+	// PauseDispatch MUST come from the STORED value, not a zero value: this is
+	// the main NodeSettings sender (reconnect re-push + the pause endpoint's own
+	// echo), so omitting it would clear the node's cached pause display on every
+	// reconnect (P7).
+	reg.SendSettings(nodeID, nodes.NodeSettings{PathMap: pathMap, MaxJobs: persisted.MaxJobs, PauseDispatch: persisted.PauseDispatch})
+	return nil
+}
+
+// seedNodePause applies nodeID's persisted pause_dispatch bit to the live
+// connectedNode.paused on (re)connect, so a server restart or node reconnect
+// re-establishes the durable operator pause on the fresh connectedNode
+// (P4c). This is a DISTINCT operation from pushPersistedNodeSettings: that
+// sends the node an SSE settings frame for display, whereas this seeds the
+// server-side dispatch-exclusion state — the actual authority for whether the
+// node receives new work. A node with nothing persisted (ok=false) has no
+// pause, so the fresh connectedNode's zero-value paused=false is already
+// correct and no write is needed.
+func seedNodePause(ctx context.Context, reg *nodes.Registry, nodeSettingsStore *nodesettings.Store, nodeID string) error {
+	persisted, ok, err := nodeSettingsStore.Get(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	reg.SetNodePaused(nodeID, persisted.PauseDispatch)
 	return nil
 }
 
@@ -231,6 +256,17 @@ func nodeStreamHandler(reg *nodes.Registry, settingsStore *settings.Store, nodeS
 		defer disconnect()
 
 		log.Printf("nodes: connected %s (id=%s, capabilities=%v)", name, id, capabilities)
+
+		// Seed the live connectedNode.paused from the persisted pause bit first,
+		// before the settings push, so a server restart or node reconnect
+		// re-applies the operator's dispatch exclusion to the fresh connection
+		// (P4c) as early as possible after Connect — tightening the window in
+		// which a concurrent Dispatch could pick a should-be-paused node.
+		// Distinct from the SSE settings push below: this seeds the server-side
+		// dispatch authority, not the node's display cache.
+		if err := seedNodePause(r.Context(), reg, nodeSettingsStore, id); err != nil {
+			log.Printf("nodes: reconnect pause seed for %s (id=%s): %v", name, id, err)
+		}
 
 		if err := pushPersistedNodeSettings(r.Context(), reg, settingsStore, nodeSettingsStore, id); err != nil {
 			log.Printf("nodes: reconnect settings push for %s (id=%s): %v", name, id, err)
@@ -458,6 +494,7 @@ func listNodesHandler(reg *nodes.Registry, pairingReg *nodes.PairingRegistry, no
 				Capabilities:  caps,
 				LastHeartbeat: n.LastHeartbeat.Format(time.RFC3339),
 				MaxJobs:       stored.MaxJobs,
+				PauseDispatch: stored.PauseDispatch,
 			})
 		}
 
@@ -711,7 +748,12 @@ func updateNodeSettingsNodeAuth(w http.ResponseWriter, r *http.Request, reg *nod
 	// reconciliation invariant, D7). Best-effort: if the node isn't connected,
 	// the persisted state is authoritative and re-pushes on reconnect.
 	pathMap := resolvePathMap(ctx, settingsStore, sets)
-	reg.SendSettings(nodeID, nodes.NodeSettings{PathMap: pathMap, MaxJobs: storedMaxJobs})
+	// P7: this hand-built frame must carry the STORED PauseDispatch alongside the
+	// STORED MaxJobs it already carries — otherwise a node-authored path-map
+	// change on a paused node would emit a zero-value pause=false and silently
+	// clear the node's cached pause display. stored is the same row loaded above
+	// for storedMaxJobs, so no extra lookup is needed.
+	reg.SendSettings(nodeID, nodes.NodeSettings{PathMap: pathMap, MaxJobs: storedMaxJobs, PauseDispatch: stored.PauseDispatch})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -742,6 +784,71 @@ func updateNodeSettingsOperatorAuth(w http.ResponseWriter, r *http.Request, reg 
 	// currently offline.
 	if err := pushPersistedNodeSettings(ctx, reg, settingsStore, nodeSettingsStore, nodeID); err != nil {
 		log.Printf("nodes/settings: push settings for %s: %v", nodeID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// updateNodePauseHandler handles PUT /api/nodes/{id}/pause under DUAL auth
+// (P1), a dedicated route reusing the same dualAuth wrapper as PUT /settings
+// (NOT a branch inside the settings handler — pause is a clean,
+// verification-free concern that must not entangle with the path-mapping
+// verification gate). The write is keyed by which credential authenticated it,
+// mirroring updateNodeSettingsHandler:
+//
+//   - node bearer → keyed by the authenticated bearer identity, IGNORING
+//     r.PathValue("id") entirely (D2, the security-critical property: node A
+//     cannot flip node B's pause by putting B's id in the URL).
+//   - operator     → keyed by r.PathValue("id").
+//
+// Both converge on updateNodePause, which persists (SetPauseDispatch), applies
+// the live dispatch effect (SetNodePaused), and echoes the authoritative
+// settings to the node over SSE for tray display.
+func updateNodePauseHandler(reg *nodes.Registry, settingsStore *settings.Store, nodeSettingsStore *nodesettings.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body apidto.NodePauseRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if nodeID, _, ok := auth.NodeIdentityFromContext(r.Context()); ok {
+			// D2 (security-critical): key by the authenticated bearer identity,
+			// IGNORING r.PathValue("id").
+			updateNodePause(w, r, reg, settingsStore, nodeSettingsStore, nodeID, body.Paused)
+			return
+		}
+		updateNodePause(w, r, reg, settingsStore, nodeSettingsStore, r.PathValue("id"), body.Paused)
+	}
+}
+
+// updateNodePause is the shared body of both auth branches of the pause
+// endpoint. The three writes are all required (P4): persist the durable bit,
+// flip the live connectedNode.paused for immediate dispatch effect, then echo
+// the authoritative settings (now including the new pause) to the node for
+// display. The echo goes through pushPersistedNodeSettings so the frame carries
+// the full stored state (pathMap + maxJobs + pause), not a pause-only frame
+// that would zero the node's other cached fields.
+func updateNodePause(w http.ResponseWriter, r *http.Request, reg *nodes.Registry, settingsStore *settings.Store, nodeSettingsStore *nodesettings.Store, nodeID string, paused bool) {
+	ctx := r.Context()
+
+	if err := nodeSettingsStore.SetPauseDispatch(ctx, nodeID, paused); err != nil {
+		log.Printf("nodes/pause: persist pause for %s: %v", nodeID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Live dispatch effect: exclude (or re-include) the node from the running
+	// dispatcher immediately. No-op for an offline node — its pause is re-seeded
+	// from the persisted store on reconnect (seedNodePause).
+	reg.SetNodePaused(nodeID, paused)
+
+	// Echo the authoritative settings to the node over SSE for tray display.
+	// Best-effort, like the settings handlers — the persisted bit is
+	// authoritative and re-pushes on reconnect if the node is offline.
+	if err := pushPersistedNodeSettings(ctx, reg, settingsStore, nodeSettingsStore, nodeID); err != nil {
+		log.Printf("nodes/pause: push settings for %s: %v", nodeID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

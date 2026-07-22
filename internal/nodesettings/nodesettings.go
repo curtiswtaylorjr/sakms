@@ -53,6 +53,12 @@ type PathMappingEntry struct {
 type Settings struct {
 	PathMappings []PathMappingEntry
 	MaxJobs      int
+	// PauseDispatch is the server-owned per-node dispatch-exclusion bit. It is
+	// read here (Get includes it) but written ONLY by the dedicated,
+	// column-scoped SetPauseDispatch — never by Set — so a MaxJobs/PathMap save
+	// can never reset it and vice versa (the parallel-write footgun, resolved
+	// at the storage layer). Shares the node_max_jobs row with MaxJobs.
+	PauseDispatch bool
 }
 
 // Store is a SQLite-backed store for persisted per-node settings.
@@ -97,8 +103,9 @@ func (s *Store) Get(ctx context.Context, nodeID string) (settings Settings, ok b
 	}
 
 	var maxJobs sql.NullInt64
-	row := s.db.QueryRowContext(ctx, `SELECT max_jobs FROM node_max_jobs WHERE node_id = ?`, nodeID)
-	switch err := row.Scan(&maxJobs); {
+	var pauseDispatch sql.NullInt64
+	row := s.db.QueryRowContext(ctx, `SELECT max_jobs, pause_dispatch FROM node_max_jobs WHERE node_id = ?`, nodeID)
+	switch err := row.Scan(&maxJobs, &pauseDispatch); {
 	case err == sql.ErrNoRows:
 		// No max_jobs row yet — fine on its own, doesn't change whether
 		// this Get found anything overall (path mappings may still exist).
@@ -106,6 +113,7 @@ func (s *Store) Get(ctx context.Context, nodeID string) (settings Settings, ok b
 		return Settings{}, false, err
 	default:
 		settings.MaxJobs = int(maxJobs.Int64)
+		settings.PauseDispatch = pauseDispatch.Int64 != 0
 	}
 
 	found := len(settings.PathMappings) > 0 || maxJobs.Valid
@@ -153,6 +161,34 @@ func (s *Store) Set(ctx context.Context, nodeID string, settings Settings) error
 	}
 
 	return tx.Commit()
+}
+
+// SetPauseDispatch persists nodeID's dispatch-pause bit with a column-scoped
+// upsert that touches ONLY pause_dispatch/updated_at — never max_jobs or any
+// path mapping. This is the storage-layer half of the parallel-write footgun
+// elimination: pause is the only field this method writes, and Set (MaxJobs/
+// PathMap) never writes pause, so the two writers cannot interfere.
+//
+// The INSERT names max_jobs explicitly because node_max_jobs.max_jobs is
+// INTEGER NOT NULL with no default — a fresh-row insert omitting it would be a
+// NOT NULL violation. A new row seeds max_jobs = 0 (unlimited/unset, matching
+// the no-row default); the ON CONFLICT clause leaves an existing max_jobs
+// untouched.
+func (s *Store) SetPauseDispatch(ctx context.Context, nodeID string, paused bool) error {
+	pauseInt := 0
+	if paused {
+		pauseInt = 1
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO node_max_jobs (node_id, max_jobs, pause_dispatch, updated_at)
+		 VALUES (?, 0, ?, ?)
+		 ON CONFLICT (node_id) DO UPDATE SET
+		   pause_dispatch = excluded.pause_dispatch,
+		   updated_at     = excluded.updated_at`,
+		nodeID, pauseInt, now,
+	)
+	return err
 }
 
 // Delete removes the single (nodeID, key) path-mapping row. Unlike Set — which
