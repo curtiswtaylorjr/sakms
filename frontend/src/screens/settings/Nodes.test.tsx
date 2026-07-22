@@ -1,10 +1,13 @@
-// Nodes.tsx tests. The two things this feature review process kept surfacing
-// as real bugs (see the plan's own Revision History) are exactly what these
-// assert: (1) EditSettingsModal must load REAL persisted values, not always
-// start blank, and (2) a row whose library path isn't configured yet must
-// render disabled with a note, not a crash or a silently-droppable row. Also
-// covers ApproveModal's "plain text, no live browse" rule and the save
-// payload's keyed (not server/local) shape.
+// Nodes.tsx tests. Path mappings are node-owned now (D3/D1 — the
+// operator-auth settings write ignores any submitted PathMap, only the node
+// itself can author them via its own bearer-authed push). These tests assert
+// the resulting read-only behavior: (1) EditSettingsModal renders the node's
+// self-reported mappings as plain text, never an editable control, (2) a row
+// whose library path isn't configured yet still renders with its
+// configure-first note, (3) a blank NodePath (never set, or explicitly
+// cleared by the node — D7) renders as "not set", (4) saving maxJobs sends an
+// empty pathMap rather than any operator-edited value, and (5) ApproveModal
+// no longer collects or displays any path-mapping state at all.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
@@ -29,6 +32,9 @@ const FIVE_ENTRIES = [
   {
     key: "series_library_root_folder",
     serverPath: "/data/series",
+    // Blank NodePath on a configured row — either never set by the node, or
+    // explicitly cleared (D7). Either way it must render as "not set", not a
+    // stale cached value.
     nodePath: "",
     configured: true,
   },
@@ -63,6 +69,9 @@ const stubFetch = (
             status: "online",
             capabilities: [],
             lastHeartbeat: new Date().toISOString(),
+            // Non-zero on purpose: a known, previously-saved concurrency cap
+            // that EditSettingsModal must preload rather than default to 0.
+            maxJobs: 4,
           },
         ],
         pending: [
@@ -87,19 +96,20 @@ afterEach(() => {
 });
 
 describe("EditSettingsModal", () => {
-  it("prefills real persisted node path values instead of starting blank", async () => {
+  it("renders the node-reported path mappings as read-only text, not an input", async () => {
     stubFetch();
     render(() => <NodesSection />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
 
-    const moviesInput = (
-      await screen.findAllByPlaceholderText("/mnt/media")
-    )[0] as HTMLInputElement;
-    await waitFor(() => expect(moviesInput.value).toBe("/mnt/movies"));
+    await screen.findByText("/mnt/movies");
+    // No editable control for path-mapping fields remains reachable — the
+    // only input left in the modal is the maxJobs number field.
+    expect(screen.queryByPlaceholderText("/mnt/media")).toBeNull();
+    expect(document.querySelectorAll("input")).toHaveLength(1);
   });
 
-  it("renders an unconfigured library path's row disabled with a configure-first note", async () => {
+  it("renders an unconfigured library path's row with a configure-first note", async () => {
     stubFetch();
     render(() => <NodesSection />);
 
@@ -111,60 +121,97 @@ describe("EditSettingsModal", () => {
           .length,
       ).toBe(3);
     });
-    const inputs = (await screen.findAllByPlaceholderText(
-      "/mnt/media",
-    )) as HTMLInputElement[];
-    // 5 fixed rows: movies (configured), series (configured), adult/movies-kids/series-kids (not).
-    expect(inputs).toHaveLength(5);
-    const disabledCount = inputs.filter((i) => i.disabled).length;
-    expect(disabledCount).toBe(3);
   });
 
-  it("saves with the keyed pathMap shape (key/nodePath), not server/local", async () => {
+  it("renders a blank NodePath — never set or node-cleared — as 'not set'", async () => {
+    stubFetch();
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+
+    // series_library_root_folder is configured but its NodePath is blank
+    // (either never set, or cleared by the node) — plus the 3 unconfigured
+    // rows, whose NodePath is also blank. All 4 must read "not set".
+    await waitFor(async () => {
+      expect((await screen.findAllByText("not set")).length).toBe(4);
+    });
+  });
+
+  it("saving maxJobs sends an empty pathMap, never an operator-edited value", async () => {
     const calls = stubFetch();
     render(() => <NodesSection />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    const seriesInput = (await screen.findAllByPlaceholderText(
-      "/mnt/media",
-    ))[1] as HTMLInputElement;
-    fireEvent.input(seriesInput, { target: { value: "/mnt/series-v2" } });
+    await screen.findByText("/mnt/movies");
 
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
     await waitFor(() => {
       const save = calls.find((c) => c.url.endsWith("/api/nodes/node-a/settings"));
       expect(save).toBeDefined();
-      const body = save!.body as { pathMap: { key: string; nodePath: string }[] };
-      const series = body.pathMap.find(
-        (p) => p.key === "series_library_root_folder",
-      );
-      expect(series?.nodePath).toBe("/mnt/series-v2");
-      expect(series).not.toHaveProperty("server");
-      expect(series).not.toHaveProperty("local");
+      const body = save!.body as { pathMap: unknown[]; maxJobs: number };
+      expect(body.pathMap).toEqual([]);
+      expect(typeof body.maxJobs).toBe("number");
+    });
+  });
+
+  // Regression test: node-a's stubbed GET /api/nodes response reports a
+  // known non-zero maxJobs (4, see FIVE_ENTRIES' sibling node stub above).
+  // Before the fix, EditSettingsModal's maxJobs signal always started at a
+  // hardcoded 0, so opening the modal (e.g. only to look at path mappings)
+  // and saving without touching the field would silently reset the node's
+  // stored concurrency cap to 0 — updateNodeSettingsOperatorAuth applies
+  // whatever maxJobs is submitted unconditionally. This asserts the field is
+  // preloaded with the real stored value AND that an untouched save
+  // preserves it rather than sending 0.
+  it("preloads the stored maxJobs value and preserves it on an untouched save", async () => {
+    const calls = stubFetch();
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await screen.findByText("/mnt/movies");
+
+    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    expect(input.value).toBe("4");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => {
+      const save = calls.find((c) => c.url.endsWith("/api/nodes/node-a/settings"));
+      expect(save).toBeDefined();
+      const body = save!.body as { pathMap: unknown[]; maxJobs: number };
+      expect(body.maxJobs).toBe(4);
     });
   });
 });
 
 describe("ApproveModal", () => {
-  it("uses a plain text input, not a live browse picker", async () => {
+  it("collects only maxJobs — no path-mapping section, no read of path-mappings", async () => {
     const calls = stubFetch();
     render(() => <NodesSection />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await screen.findByText(
-      "Live directory browsing is available after approval — type the node-side path for now.",
+      "Once approved, the node configures its own path mappings — nothing to set here.",
     );
 
-    const moviesInput = (await screen.findAllByPlaceholderText(
-      "/mnt/media",
-    ))[0] as HTMLInputElement;
-    fireEvent.focus(moviesInput);
-    fireEvent.input(moviesInput, { target: { value: "/mnt/movies" } });
+    expect(screen.queryByText("Path mappings (library → node)")).toBeNull();
+    expect(screen.queryByPlaceholderText("/mnt/media")).toBeNull();
 
-    // A live picker would fire GET .../browse on focus/input; a plain text
-    // input never does.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls.some((c) => c.url.includes("/browse"))).toBe(false);
+    // Two "Approve" buttons exist once the modal is open: the PendingRow's
+    // trigger (still rendered underneath the overlay) and the modal's own
+    // submit button, which the component tree renders first.
+    const approveButtons = screen.getAllByRole("button", { name: "Approve" });
+    fireEvent.click(approveButtons[0]!);
+
+    await waitFor(() => {
+      const approve = calls.find((c) => c.url.endsWith("/api/nodes/pending-1/approve"));
+      expect(approve).toBeDefined();
+      const body = approve!.body as { pathMap: unknown[]; maxJobs: number };
+      expect(body.pathMap).toEqual([]);
+    });
+
+    // ApproveModal never fetches path-mappings for the pending node anymore.
+    expect(calls.some((c) => c.url.includes("/path-mappings"))).toBe(false);
   });
 });

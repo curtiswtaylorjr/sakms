@@ -639,6 +639,13 @@ export function rejectPending(id: string): Promise<void> {
   });
 }
 
+// updateNodeSettings issues the operator-authed PUT /api/nodes/{id}/settings.
+// This path writes ONLY maxJobs — the backend ignores any PathMap in an
+// operator-auth request (path mappings are node-owned; only the node itself
+// can author them via its own bearer-authed push). Callers must still send
+// `pathMap: []` to satisfy NodeSettingsRequest's shape, but must never
+// populate it from operator-editable state — see Nodes.tsx's
+// EditSettingsModal, the only caller.
 export function updateNodeSettings(id: string, body: NodeSettingsRequest): Promise<void> {
   return api<void>(`/api/nodes/${id}/settings`, {
     method: "PUT",
