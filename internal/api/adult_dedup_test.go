@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/labbersanon/sakms/internal/dedupscan"
 	"github.com/labbersanon/sakms/internal/mediainfo"
 	"github.com/labbersanon/sakms/internal/mode"
 	"github.com/labbersanon/sakms/internal/proposals"
@@ -62,21 +63,28 @@ func TestAdultDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		fileSD: {CodecName: "h264", Width: 1280, Height: 720, BitRate: 3000},
 		fileHD: {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil, dedupscan.New()))
 	defer srv.Close()
 
-	// Scan → one Dedup proposal carrying the scene identifier + 2 candidates.
+	// Async scan: POST returns 202, the work runs in the background. Wait for it
+	// to finish, then fetch the one staged Dedup proposal via the existing GET.
 	scanResp, err := http.Post(srv.URL+"/api/modes/adult/dedup/scan", "application/json", nil)
 	if err != nil {
 		t.Fatalf("scan POST failed: %v", err)
 	}
-	defer scanResp.Body.Close()
-	if scanResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(scanResp.Body)
-		t.Fatalf("expected 200 from scan, got %d: %s", scanResp.StatusCode, body)
+	scanResp.Body.Close()
+	if scanResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 from scan, got %d", scanResp.StatusCode)
 	}
+	waitDedupScanIdle(t, srv.URL, "adult")
+
+	listResp, err := http.Get(srv.URL + "/api/modes/adult/dedup/proposals")
+	if err != nil {
+		t.Fatalf("list proposals failed: %v", err)
+	}
+	defer listResp.Body.Close()
 	var scanned []proposals.Proposal
-	json.NewDecoder(scanResp.Body).Decode(&scanned)
+	json.NewDecoder(listResp.Body).Decode(&scanned)
 	if len(scanned) != 1 {
 		t.Fatalf("expected exactly one dedup proposal, got %+v", scanned)
 	}

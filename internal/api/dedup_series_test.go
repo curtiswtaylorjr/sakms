@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/labbersanon/sakms/internal/dedupscan"
 	"github.com/labbersanon/sakms/internal/library"
 	"github.com/labbersanon/sakms/internal/mediainfo"
 	"github.com/labbersanon/sakms/internal/proposals"
@@ -82,22 +83,19 @@ func TestDedupWorkflow_Series_ScanThenApply_EndToEnd(t *testing.T) {
 		trackedFile: {CodecName: "h264", Width: 1280, Height: 720, BitRate: 3000},
 		orphanFile:  {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil, dedupscan.New()))
 	defer srv.Close()
 
+	// Async scan: 202 + background work, staged list fetched via GET once idle.
 	scanResp, err := http.Post(srv.URL+"/api/modes/series/dedup/scan", "application/json", nil)
 	if err != nil {
 		t.Fatalf("scan POST failed: %v", err)
 	}
-	defer scanResp.Body.Close()
-	if scanResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from scan, got %d", scanResp.StatusCode)
+	scanResp.Body.Close()
+	if scanResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 from scan, got %d", scanResp.StatusCode)
 	}
-	var scanned []proposals.Proposal
-	json.NewDecoder(scanResp.Body).Decode(&scanned)
-	if len(scanned) != 1 || len(scanned[0].Candidates) != 2 || scanned[0].SeasonNumber != 1 || scanned[0].EpisodeNumber != 1 {
-		t.Fatalf("unexpected scan result: %+v", scanned)
-	}
+	waitDedupScanIdle(t, srv.URL, "series")
 
 	listResp, err := http.Get(srv.URL + "/api/modes/series/dedup/proposals")
 	if err != nil {
@@ -106,14 +104,14 @@ func TestDedupWorkflow_Series_ScanThenApply_EndToEnd(t *testing.T) {
 	defer listResp.Body.Close()
 	var listed []proposals.Proposal
 	json.NewDecoder(listResp.Body).Decode(&listed)
-	if len(listed) != 1 || listed[0].ID != scanned[0].ID {
-		t.Fatalf("expected the dedup queue to reflect what scan staged, got %+v", listed)
+	if len(listed) != 1 || len(listed[0].Candidates) != 2 || listed[0].SeasonNumber != 1 || listed[0].EpisodeNumber != 1 {
+		t.Fatalf("unexpected staged dedup result: %+v", listed)
 	}
 
 	// Apply with no body: auto-resolve by quality (the precomputed winner —
 	// the higher-resolution orphan, which isn't tracked yet).
 	applyResp, err := http.Post(
-		srv.URL+"/api/proposals/"+strconv.FormatInt(scanned[0].ID, 10)+"/apply", "application/json", nil)
+		srv.URL+"/api/proposals/"+strconv.FormatInt(listed[0].ID, 10)+"/apply", "application/json", nil)
 	if err != nil {
 		t.Fatalf("apply POST failed: %v", err)
 	}
@@ -188,22 +186,29 @@ func TestDedupWorkflow_Series_SeasonPack_ScanFindsGroupedDuplicate(t *testing.T)
 	phasher := perPathPHasher{hashes: map[string]string{
 		packEp2: "pdq256/5f:" + strings.Repeat("f", 320),
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, phasher, testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, phasher, testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil, dedupscan.New()))
 	defer srv.Close()
 
 	scanResp, err := http.Post(srv.URL+"/api/modes/series/dedup/scan", "application/json", nil)
 	if err != nil {
 		t.Fatalf("scan POST failed: %v", err)
 	}
-	defer scanResp.Body.Close()
-	if scanResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from scan, got %d", scanResp.StatusCode)
+	scanResp.Body.Close()
+	if scanResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 from scan, got %d", scanResp.StatusCode)
 	}
-	var scanned []proposals.Proposal
-	json.NewDecoder(scanResp.Body).Decode(&scanned)
+	waitDedupScanIdle(t, srv.URL, "series")
+
+	listResp, err := http.Get(srv.URL + "/api/modes/series/dedup/proposals")
+	if err != nil {
+		t.Fatalf("list proposals failed: %v", err)
+	}
+	defer listResp.Body.Close()
+	var listed []proposals.Proposal
+	json.NewDecoder(listResp.Body).Decode(&listed)
 	// Episode 1 (in the pack) duplicates the tracked copy; episode 2 (also
 	// in the pack) is a lone new orphan, not reported.
-	if len(scanned) != 1 || scanned[0].EpisodeNumber != 1 || len(scanned[0].Candidates) != 2 {
-		t.Fatalf("unexpected scan result: %+v", scanned)
+	if len(listed) != 1 || listed[0].EpisodeNumber != 1 || len(listed[0].Candidates) != 2 {
+		t.Fatalf("unexpected staged dedup result: %+v", listed)
 	}
 }

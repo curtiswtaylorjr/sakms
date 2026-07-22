@@ -12,6 +12,7 @@ import (
 	"github.com/labbersanon/sakms/internal/bravesearch"
 	"github.com/labbersanon/sakms/internal/connections"
 	"github.com/labbersanon/sakms/internal/dedup"
+	"github.com/labbersanon/sakms/internal/dedupscan"
 	"github.com/labbersanon/sakms/internal/discoversliders"
 	"github.com/labbersanon/sakms/internal/downloader"
 	"github.com/labbersanon/sakms/internal/gemini"
@@ -67,7 +68,7 @@ import (
 // feed URL fetched and parsed server-side, a separate concept from
 // slidersStore (TMDB-backed) and adultNewestRowStore (Prowlarr-scan-cache-
 // backed) even though its CRUD+reorder shape mirrors both.
-func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, videoHasher rename.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store, slidersStore *discoversliders.Store, traktStore *trakt.Store, adultNewestRowStore *adultnewest.Store, adultNewestReleaseStore *adultnewest.ReleaseStore, rssFeedsStore *rssfeeds.Store, entityStore parseentity.EntityStore, whStore *webhooks.Store, dl *downloader.Manager, nzb *usenet.Manager) *http.ServeMux {
+func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *proposals.Store, allowStore *allowlist.Store, prober dedup.Prober, hasher dedup.PHasher, videoHasher rename.PHasher, settingsStore *settings.Store, grabsStore *grabs.Store, libStore *library.Store, slidersStore *discoversliders.Store, traktStore *trakt.Store, adultNewestRowStore *adultnewest.Store, adultNewestReleaseStore *adultnewest.ReleaseStore, rssFeedsStore *rssfeeds.Store, entityStore parseentity.EntityStore, whStore *webhooks.Store, dl *downloader.Manager, nzb *usenet.Manager, hub *dedupscan.Hub) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/connections/test", connectionsTestHandler(httpClient))
 	// test-stored tests an ALREADY-SAVED connection using its stored secret,
@@ -131,8 +132,14 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	mux.HandleFunc("POST /api/modes/{mode}/purge/allowlist", addAllowlistTagHandler(allowStore))
 	mux.HandleFunc("DELETE /api/modes/{mode}/purge/allowlist/{tag}", removeAllowlistTagHandler(allowStore))
 
-	mux.HandleFunc("POST /api/modes/{mode}/dedup/scan", dedupScanHandler(httpClient, connStore, settingsStore, propStore, prober, hasher, libStore))
+	mux.HandleFunc("POST /api/modes/{mode}/dedup/scan", dedupScanHandler(httpClient, connStore, settingsStore, propStore, prober, hasher, libStore, hub))
 	mux.HandleFunc("GET /api/modes/{mode}/dedup/proposals", listProposalsHandler(propStore, proposals.Dedup))
+	// Live per-file progress stream + a status backstop for a running Dedup
+	// scan (POST .../dedup/scan now returns 202 and does the work in the
+	// background — see dedupScanHandler). Registered on this same authenticated
+	// mux, so both are session-gated like the download/notification streams.
+	mux.HandleFunc("GET /api/modes/{mode}/dedup/scan/stream", dedupScanStreamHandler(hub))
+	mux.HandleFunc("GET /api/modes/{mode}/dedup/scan/status", dedupScanStatusHandler(hub))
 
 	// Discover is a read-only proxy against TMDB (trending/popular titles,
 	// poster art) — the browse entry point into Search. Search itself is a

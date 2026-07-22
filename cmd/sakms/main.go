@@ -21,6 +21,7 @@ import (
 	"github.com/labbersanon/sakms/internal/config"
 	"github.com/labbersanon/sakms/internal/connections"
 	"github.com/labbersanon/sakms/internal/db"
+	"github.com/labbersanon/sakms/internal/dedupscan"
 	"github.com/labbersanon/sakms/internal/discoversliders"
 	"github.com/labbersanon/sakms/internal/downloader"
 	"github.com/labbersanon/sakms/internal/grabs"
@@ -151,6 +152,14 @@ func run() error {
 	// is untouched.
 	authStore := auth.New(settingsStore, secretStore, &http.Client{Timeout: outboundTimeout})
 
+	// dedupHub is the process-lifetime live-progress hub for background Dedup
+	// scans (internal/dedupscan) — a broadcaster + per-mode in-flight tracker,
+	// injected into NewMux like webhookStore/dlManager. Its shutdown-aware base
+	// context is handed over post-construction via dedupHub.Start(ctx) below,
+	// AFTER signal.NotifyContext exists (that ctx doesn't exist yet here — the
+	// two-step construction the Hub's Start is designed for).
+	dedupHub := dedupscan.New()
+
 	// Boot-time API key resolution: SAKMS_API_KEY (if set) always wins over
 	// whatever's persisted, and is never itself persisted (see
 	// auth.Store.UseEnvAPIKey). Otherwise reuse a previously generated key,
@@ -187,7 +196,7 @@ func run() error {
 	// internal/api.NewAuthMux's doc comment) — NewMux stays unaware auth
 	// exists either way, so its own large test suite never had to change
 	// for auth specifically.
-	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, phashDispatcher, videoDispatcher, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, entityStore, webhookStore, dlManager, nzbManager)
+	apiMux := api.NewMux(&http.Client{Timeout: outboundTimeout}, connStore, propStore, allowStore, prober, phashDispatcher, videoDispatcher, settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, entityStore, webhookStore, dlManager, nzbManager, dedupHub)
 	protectedAPI := auth.Middleware(secretStore, authStore, apiMux)
 
 	// Node mux: per-handler auth (bearer for node agents, master key/session
@@ -264,6 +273,14 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Hand the Dedup progress hub the signal-driven shutdown context it could
+	// not receive at construction time (it was built and injected into NewMux
+	// before this ctx existed). Background Dedup scans derive their ctx from
+	// dedupHub.BaseContext(), so a SIGTERM mid-scan cancels them cleanly —
+	// matching recheck/adultnewest/parseentity/watchfolders below. There is no
+	// goroutine to start: the Hub is passive until a scan publishes to it.
+	dedupHub.Start(ctx)
 
 	// Unified downloader: wire the completion callback (which needs stores
 	// built above) and start the torrent client + poll loop. Same deliberate

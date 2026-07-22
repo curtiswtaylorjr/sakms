@@ -71,7 +71,17 @@ Adult against Whisparr's native tag resource), and **Dedup** (`POST
 already-tracked item sharing the same identifier — TMDB ID for Movies,
 `(show TMDB id, season, episode)` for Series, the resolved scene's
 foreignID for Adult — ffprobes every candidate directly, and stages a
-proposal per duplicate group with a precomputed quality winner. For
+proposal per duplicate group with a precomputed quality winner. The scan
+is asynchronous: the POST validates synchronously (a bad mode, an
+unconfigured root folder, or Adult identification not being set up all
+fail fast as a `400`; a second scan of a mode already running is a `409`)
+and then returns `202 Accepted`, running the actual scan in the
+background. Live per-file progress and the terminal done/error transition
+are delivered over `GET /api/modes/{mode}/dedup/scan/stream` (server-sent
+events); `GET /api/modes/{mode}/dedup/scan/status` reports `{"inflight":
+bool}` as a liveness backstop. The final duplicate-group list is fetched
+from the existing `GET /api/modes/{mode}/dedup/proposals` after the scan
+completes — the POST no longer returns the list in its body. For
 Movies and Series, sharing an identifier is necessary but no longer
 sufficient: within each such group SAK also computes a CPU perceptual hash
 over several sampled frames of each candidate and only treats two files as

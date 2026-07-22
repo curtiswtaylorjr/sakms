@@ -10,12 +10,41 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/labbersanon/sakms/internal/dedupscan"
 	"github.com/labbersanon/sakms/internal/library"
 	"github.com/labbersanon/sakms/internal/mediainfo"
 	"github.com/labbersanon/sakms/internal/mode"
 	"github.com/labbersanon/sakms/internal/proposals"
 )
+
+// waitDedupScanIdle blocks until the {mode} Dedup scan kicked off by a prior
+// 202 POST has finished (its in-flight flag cleared). The 202 is written only
+// after hub.TryStart marks the mode in-flight, and the background goroutine
+// commits proposals (ReplacePending) BEFORE PublishTerminal BEFORE its deferred
+// Finish — so once status reports inflight=false the staged proposals are
+// guaranteed committed and safe to GET. Race-free; no SSE parsing needed (the
+// stream endpoint gets its own dedicated end-to-end test).
+func waitDedupScanIdle(t *testing.T, baseURL, mode string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(baseURL + "/api/modes/" + mode + "/dedup/scan/status")
+		if err == nil {
+			var st struct {
+				Inflight bool `json:"inflight"`
+			}
+			json.NewDecoder(resp.Body).Decode(&st)
+			resp.Body.Close()
+			if !st.Inflight {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s dedup scan to finish", mode)
+}
 
 func writeTestVideoFile(t *testing.T, dir, name string, size int) string {
 	t.Helper()
@@ -78,22 +107,21 @@ func TestDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 		trackedFile: {CodecName: "h264", Width: 1280, Height: 720, BitRate: 3000},
 		orphanFile:  {CodecName: "h265", Width: 1920, Height: 1080, BitRate: 8000},
 	}}
-	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil))
+	srv := httptest.NewServer(NewMux(testHTTPClient(), connStore, propStore, allowStore, prober, testPHasher(t), testVideoHasher(t), settingsStore, grabsStore, libStore, slidersStore, traktStore, adultNewestRowStore, adultNewestReleaseStore, rssFeedsStore, nil, nil, nil, nil, dedupscan.New()))
 	defer srv.Close()
 
+	// The scan is now async: POST returns 202 and does the work in the
+	// background, publishing progress + the final list over the SSE stream. Wait
+	// for it to finish, then fetch the staged proposals via the existing GET.
 	scanResp, err := http.Post(srv.URL+"/api/modes/movies/dedup/scan", "application/json", nil)
 	if err != nil {
 		t.Fatalf("scan POST failed: %v", err)
 	}
-	defer scanResp.Body.Close()
-	if scanResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from scan, got %d", scanResp.StatusCode)
+	scanResp.Body.Close()
+	if scanResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 from scan, got %d", scanResp.StatusCode)
 	}
-	var scanned []proposals.Proposal
-	json.NewDecoder(scanResp.Body).Decode(&scanned)
-	if len(scanned) != 1 || len(scanned[0].Candidates) != 2 {
-		t.Fatalf("unexpected scan result: %+v", scanned)
-	}
+	waitDedupScanIdle(t, srv.URL, "movies")
 
 	listResp, err := http.Get(srv.URL + "/api/modes/movies/dedup/proposals")
 	if err != nil {
@@ -102,14 +130,14 @@ func TestDedupWorkflow_ScanThenApply_EndToEnd(t *testing.T) {
 	defer listResp.Body.Close()
 	var listed []proposals.Proposal
 	json.NewDecoder(listResp.Body).Decode(&listed)
-	if len(listed) != 1 || listed[0].ID != scanned[0].ID {
-		t.Fatalf("expected the dedup queue to reflect what scan staged, got %+v", listed)
+	if len(listed) != 1 || len(listed[0].Candidates) != 2 {
+		t.Fatalf("unexpected staged dedup result: %+v", listed)
 	}
 
 	// Apply with no body: auto-resolve by quality (the precomputed winner —
 	// the higher-resolution orphan, which isn't tracked yet).
 	applyResp, err := http.Post(
-		srv.URL+"/api/proposals/"+strconv.FormatInt(scanned[0].ID, 10)+"/apply", "application/json", nil)
+		srv.URL+"/api/proposals/"+strconv.FormatInt(listed[0].ID, 10)+"/apply", "application/json", nil)
 	if err != nil {
 		t.Fatalf("apply POST failed: %v", err)
 	}
