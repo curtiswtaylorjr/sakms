@@ -100,6 +100,14 @@ type trayUI struct {
 	mQuit    *systray.MenuItem
 	roots    []*rootSlot
 
+	// Dispatch-pause section (node-pause-dispatch Stage 3). mDispatchStatus is a
+	// disabled display item ("Dispatch: Running"/"Dispatch: Paused"); the toggle
+	// is its action SUB-item (a disabled parent + action sub-item, mirroring the
+	// rootSlot/keySlot grain — an enabled parent-with-submenu does not reliably
+	// emit ClickedCh on Linux DBusMenu).
+	mDispatchStatus *systray.MenuItem
+	mDispatchToggle *systray.MenuItem
+
 	// Path-mapping section (Stage 3). mPathHeader is a disabled label;
 	// mAddRootFirst appears only while the mediaRoot gate is closed and routes to
 	// the mediaRoots picker; mPathWarning is the persistent last-push-failed line.
@@ -120,6 +128,12 @@ type trayUI struct {
 	pmCatalog       []string
 	pmAuthored      []authoredMapping
 	pmLastPushError string
+
+	// Dispatch-pause state (guarded by mu). dispatchFetched gates rendering and
+	// the toggle until the first GET /dispatch/pause lands; dispatchPaused holds
+	// the daemon's authoritative display value.
+	dispatchFetched bool
+	dispatchPaused  bool
 }
 
 // rootSlot is one reusable media-root menu row: a display-only parent item
@@ -174,6 +188,13 @@ func (t *trayUI) run() {
 	t.mPathWarning.Hide()
 
 	systray.AddSeparator()
+	t.mDispatchStatus = systray.AddMenuItem("Dispatch: …", "Whether this node accepts new dispatched jobs")
+	t.mDispatchStatus.Disable() // display-only; the toggle sub-item is the action
+	t.mDispatchStatus.Hide()
+	t.mDispatchToggle = t.mDispatchStatus.AddSubMenuItem("Pause dispatch",
+		"Pause or resume this node's eligibility for new dispatched jobs")
+
+	systray.AddSeparator()
 	t.mWarning = systray.AddMenuItem("", "sakms-node warning")
 	t.mWarning.Disable()
 	t.mWarning.Hide()
@@ -222,6 +243,14 @@ func (t *trayUI) run() {
 		}()
 	}
 
+	// Dispatch-pause toggle handler. Its own goroutine so a stalled control-socket
+	// relay never holds up the poll ticker (the deadlock discipline).
+	go func() {
+		for range t.mDispatchToggle.ClickedCh {
+			t.handleDispatchToggle()
+		}
+	}()
+
 	// Surface the group-membership relogin diagnostic early: if this desktop
 	// session can't reach the control socket because it predates the RPM adding
 	// the user to the shared group, connecting fails with EACCES.
@@ -232,6 +261,7 @@ func (t *trayUI) run() {
 	// and must return promptly (it already blocks up to httpTimeout on t.poll());
 	// a synchronous control-socket fetch could stack another controlTimeout on top.
 	go t.pollPathMap()
+	go t.pollDispatchPause()
 
 	go t.loop()
 }
@@ -251,8 +281,11 @@ func (t *trayUI) loop() {
 			t.poll()
 			// In its own goroutine: the control-socket fetch can stall up to
 			// controlTimeout, and this loop goroutine also services the quit/copy
-			// clicks — it must not block on the pathmap refresh.
+			// clicks — it must not block on the pathmap refresh. The dispatch-pause
+			// refresh runs alongside so a web-side pause (echoed to the daemon over
+			// SSE) surfaces in the tray on the next tick.
 			go t.pollPathMap()
+			go t.pollDispatchPause()
 		case <-t.mCopy.ClickedCh:
 			t.mu.Lock()
 			code := t.lastCode
