@@ -16,6 +16,30 @@ type PathMapEntry struct {
 	Local  string `json:"local"`
 }
 
+// AuthoredPathMapping records ONE library-path-key → node-local path the
+// operator authored on THIS node (Stage 2 of the node-path-config-ui plan).
+//
+// Why this is a separate field from PathMap rather than being folded into it
+// (a deliberate deviation from the plan's literal "persist to NodeConfig.
+// PathMap" wording, kept on the record so a reviewer reads it as intentional):
+// PathMap is the server-authoritative Remap table, keyed by SERVER prefix and
+// populated exclusively by the SSE settings echo through mergePathMap
+// (add/replace-only, keyed by Server — remap.go). The node authors by
+// library-path KEY, and the server derives the server prefix; the node never
+// learns that prefix until the echo comes back. Folding the two into one slice
+// would force mergePathMap to correlate echoed Server/Local pairs back to a key
+// — exactly the "make merge delete-on-absence / key-aware" change D7 forbids,
+// because it is what protects the add/replace reconnect-merge invariant. So the
+// node keeps its own authored record here (the proposal / source of truth for
+// what it asked for and for re-pushes) and leaves PathMap + mergePathMap
+// pristine. On a clear, the authored NodePath is used to locate and directly
+// delete the matching PathMap Remap entry (control_pathmap.go), never via
+// mergePathMap.
+type AuthoredPathMapping struct {
+	Key      string `json:"key"`      // apidto.LibraryPathKey value, e.g. movies_library_root_folder
+	NodePath string `json:"nodePath"` // node-local absolute path (canonicalized on set)
+}
+
 // NodeConfig is loaded from and saved to the JSON config file.
 type NodeConfig struct {
 	ServerURL  string         `json:"serverUrl"`  // e.g. https://media-admin.zaena.us
@@ -49,8 +73,18 @@ type NodeConfig struct {
 	// this is empty. Enforcement begins the moment an operator sets this.
 	MediaRoots []string `json:"mediaRoots,omitempty"`
 
+	// AuthoredPaths is the node's own record of the library-path-key → node
+	// path mappings the operator authored on THIS node (Stage 2). It is the
+	// proposal source of truth (drives the debounced push and the tray's
+	// "configured vs unconfigured keys" view); the server-authoritative Remap
+	// table lives separately in PathMap. See AuthoredPathMapping's doc comment
+	// for why the two are kept apart. Mutated at runtime by the control socket,
+	// so it is guarded by mu exactly like PathMap/MediaRoots.
+	AuthoredPaths []AuthoredPathMapping `json:"authoredPaths,omitempty"`
+
 	// mu guards the fields that are mutated after startup — MediaRoots,
-	// PathMap, MaxJobs, and APIKey — and serializes them against save(). It is
+	// PathMap, MaxJobs, APIKey, and AuthoredPaths — and serializes them against
+	// save(). It is
 	// unexported, so encoding/json ignores it. Every writer of those fields
 	// holds the write lock across BOTH the field mutation AND the subsequent
 	// save (via mutateAndSave), because save() marshals the whole struct: a
@@ -100,6 +134,35 @@ func (cfg *NodeConfig) snapshot() (pathMap []PathMapEntry, mediaRoots []string) 
 	pathMap = append([]PathMapEntry(nil), cfg.PathMap...)
 	mediaRoots = append([]string(nil), cfg.MediaRoots...)
 	return pathMap, mediaRoots
+}
+
+// authoredSnapshot returns a copy of the node-authored path mappings under the
+// read lock, mirroring snapshot()'s non-torn-view contract for the Stage 2
+// control-socket read path (GET /pathmap) and the tray.
+func (cfg *NodeConfig) authoredSnapshot() []AuthoredPathMapping {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
+	return append([]AuthoredPathMapping(nil), cfg.AuthoredPaths...)
+}
+
+// pushInputs reads, under a single read-lock acquisition, everything the
+// debounced pusher needs to build one node-auth settings push for key: the
+// authored NodePath for that key (nodePath/ok), the node's current MediaRoots
+// self-report (D9 — read fresh at push time, never a stale cached copy), and
+// the transport identity (serverURL/apiKey). Taking them together avoids a torn
+// read across a concurrent config mutation.
+func (cfg *NodeConfig) pushInputs(key string) (nodePath string, ok bool, mediaRoots []string, serverURL, apiKey string) {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
+	for _, a := range cfg.AuthoredPaths {
+		if a.Key == key {
+			nodePath = a.NodePath
+			ok = true
+			break
+		}
+	}
+	mediaRoots = append([]string(nil), cfg.MediaRoots...)
+	return nodePath, ok, mediaRoots, cfg.ServerURL, cfg.APIKey
 }
 
 // mutateAndSave runs mutate and then persists the config, both under a single

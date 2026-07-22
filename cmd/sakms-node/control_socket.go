@@ -43,8 +43,8 @@ type peerCredKey struct{}
 // the listener drains in-flight writes. The socket file itself is left to /run
 // tmpfs teardown on graceful stop and unlink()ed before the next Listen to
 // cover unclean exits.
-func startControlSocket(ctx context.Context, cfg *NodeConfig, configPath string) {
-	serveControlSocket(ctx, cfg, configPath, controlRuntimeDir, controlSocketPath, controlSocketGroup)
+func startControlSocket(ctx context.Context, cfg *NodeConfig, configPath string, pusher *pathmapPusher, sess *nodeSession) {
+	serveControlSocket(ctx, cfg, configPath, controlRuntimeDir, controlSocketPath, controlSocketGroup, pusher, sess)
 }
 
 // serveControlSocket is the testable core: it provisions the socket at
@@ -54,7 +54,7 @@ func startControlSocket(ctx context.Context, cfg *NodeConfig, configPath string)
 // failure is logged and the function returns, leaving the node's core hashing
 // path unaffected. All failure modes here are fail-closed: the socket only ever
 // becomes reachable to shared-group members AFTER the chown/chmod lands.
-func serveControlSocket(ctx context.Context, cfg *NodeConfig, configPath, runtimeDir, socketPath, groupName string) {
+func serveControlSocket(ctx context.Context, cfg *NodeConfig, configPath, runtimeDir, socketPath, groupName string, pusher *pathmapPusher, sess *nodeSession) {
 	grp, err := user.LookupGroup(groupName)
 	if err != nil {
 		log.Printf("sakms-node: control socket disabled: group %q not found (%v) — set mediaRoots by editing the config file", groupName, err)
@@ -113,7 +113,7 @@ func serveControlSocket(ctx context.Context, cfg *NodeConfig, configPath, runtim
 	}
 
 	srv := &http.Server{
-		Handler: controlMux(cfg, configPath),
+		Handler: controlMux(cfg, configPath, pusher, sess),
 		ConnContext: func(connCtx context.Context, c net.Conn) context.Context {
 			if pc, ok := c.(*peerCredConn); ok && pc.ucred != nil {
 				return context.WithValue(connCtx, peerCredKey{}, pc.ucred)
@@ -201,7 +201,7 @@ type mediaRootsPayload struct {
 // NOT live here — it stays on the existing TCP status server; only the
 // security-sensitive write path (and its companion get) moves to this
 // group-gated, browser-unreachable socket.
-func controlMux(cfg *NodeConfig, configPath string) http.Handler {
+func controlMux(cfg *NodeConfig, configPath string, pusher *pathmapPusher, sess *nodeSession) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /mediaroots", func(w http.ResponseWriter, r *http.Request) {
 		_, roots := cfg.snapshot()
@@ -216,6 +216,8 @@ func controlMux(cfg *NodeConfig, configPath string) http.Handler {
 	mux.HandleFunc("PUT /mediaroots", func(w http.ResponseWriter, r *http.Request) {
 		handleMediaRootsSet(w, r, cfg, configPath)
 	})
+	// Stage 2 node-authored path-mapping routes (control_pathmap.go).
+	registerPathMapRoutes(mux, cfg, configPath, pusher, sess)
 	return mux
 }
 

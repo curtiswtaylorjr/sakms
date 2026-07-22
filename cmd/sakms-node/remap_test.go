@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/labbersanon/sakms/internal/nodes"
@@ -95,6 +98,58 @@ func TestRemap(t *testing.T) {
 				t.Errorf("Remap(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRemapLogsWarningOnNoMatch confirms the "no mapping matched" case (the
+// Stage 0 silent-failure fix) always logs a WARN naming the unmapped
+// serverPath and the configured prefixes that were checked, instead of
+// silently returning serverPath unchanged.
+func TestRemapLogsWarningOnNoMatch(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	}()
+
+	entries := []PathMapEntry{
+		{Server: "/mnt/Adult-NAS", Local: "/data/Adult"},
+		{Server: "/mnt/Movies-NAS", Local: "/data/Movies"},
+	}
+	got := Remap(entries, "/mnt/Series-NAS/foo.mkv")
+	if got != "/mnt/Series-NAS/foo.mkv" {
+		t.Fatalf("Remap returned %q, want unchanged serverPath", got)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "WARNING") {
+		t.Fatalf("expected a WARNING log on no-match, got: %q", logged)
+	}
+	if !strings.Contains(logged, "/mnt/Series-NAS/foo.mkv") {
+		t.Fatalf("expected the log to name the unmapped serverPath, got: %q", logged)
+	}
+	if !strings.Contains(logged, "/mnt/Adult-NAS") || !strings.Contains(logged, "/mnt/Movies-NAS") {
+		t.Fatalf("expected the log to name the configured prefixes, got: %q", logged)
+	}
+}
+
+// TestRemapNoWarningOnMatch confirms a successful match does NOT log a
+// no-mapping warning — the log is specific to the silent-failure branch.
+func TestRemapNoWarningOnMatch(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prevOut)
+
+	entries := []PathMapEntry{{Server: "/mnt/Adult-NAS", Local: "/data/Adult"}}
+	Remap(entries, "/mnt/Adult-NAS/foo.mkv")
+
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output on a successful match, got: %q", buf.String())
 	}
 }
 

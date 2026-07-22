@@ -63,13 +63,23 @@ func main() {
 	statusSrv := newStatusServer(cfg)
 	go statusSrv.ListenAndServe(ctx)
 
-	// Local mediaRoots control socket (sakms-node-tray UI). Started ONCE here,
-	// governed by the top-level process context — NOT inside run()/connect(),
-	// which re-enter on every reconnect/re-pair cycle. Because this outlives
-	// individual run() cycles, both APIKey write paths (401 handler + pair())
-	// go through cfg.mutateAndSave so this listener's config save can never race
-	// them. No-op on non-Linux builds (see control_socket_stub.go).
-	go startControlSocket(ctx, cfg, *configPath)
+	// Shared per-connection facts (nodeID + library-path-key catalog) the SSE
+	// ack populates and both the control socket and the debounced pusher read.
+	sess := &nodeSession{}
+	// Debounced/coalesced path-mapping pusher (Stage 2). Created once here so it
+	// outlives reconnects, exactly like the control socket; used only by the
+	// control-socket edit path (the SSE settings handler never schedules a push
+	// — D5). No-op until the control socket schedules something.
+	pusher := newPathmapPusher(cfg, sess, postClient, pathmapPushDebounce)
+
+	// Local control socket (sakms-node-tray UI): mediaRoots (Stage 1) + node
+	// path mappings (Stage 2). Started ONCE here, governed by the top-level
+	// process context — NOT inside run()/connect(), which re-enter on every
+	// reconnect/re-pair cycle. Because this outlives individual run() cycles,
+	// both APIKey write paths (401 handler + pair()) go through cfg.mutateAndSave
+	// so this listener's config save can never race them. No-op on non-Linux
+	// builds (see control_socket_stub.go).
+	go startControlSocket(ctx, cfg, *configPath, pusher, sess)
 
 	// Outer state machine: pairing ↔ authenticated.
 	backoff := time.Second
@@ -104,7 +114,7 @@ func main() {
 
 		// Authenticated mode: reconnect loop.
 		statusSrv.update(stateConnected, "", "")
-		err := run(ctx, cfg, *configPath, hw, phashHasher, videoHasher, postClient, statusSrv)
+		err := run(ctx, cfg, *configPath, hw, phashHasher, videoHasher, postClient, statusSrv, sess)
 		if ctx.Err() != nil {
 			return
 		}
@@ -149,6 +159,7 @@ func run(
 	phashHasher, videoHasher hasher,
 	postClient *http.Client,
 	statusSrv *statusServer,
+	sess *nodeSession,
 ) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -161,7 +172,7 @@ func run(
 			return nil
 		}
 
-		err := connect(ctx, cfg, configPath, hw, phashHasher, videoHasher, postClient, statusSrv, &wg)
+		err := connect(ctx, cfg, configPath, hw, phashHasher, videoHasher, postClient, statusSrv, sess, &wg)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -197,6 +208,7 @@ func connect(
 	phashHasher, videoHasher hasher,
 	postClient *http.Client,
 	statusSrv *statusServer,
+	sess *nodeSession,
 	wg *sync.WaitGroup,
 ) error {
 	streamURL, err := url.Parse(cfg.ServerURL + "/api/nodes/stream")
@@ -236,10 +248,15 @@ func connect(
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()
 
-	nodeID, jobCh, settingsCh, browseCh, err := readSSE(connCtx, resp)
+	ack, jobCh, settingsCh, browseCh, err := readSSE(connCtx, resp)
 	if err != nil {
 		return err
 	}
+	nodeID := ack.NodeID
+
+	// Record the durable id + library-path-key catalog (D4) for the control
+	// socket's GET /pathmap and the pusher's PUT URL id.
+	sess.setAck(nodeID, ack.LibraryPathKeys)
 
 	log.Printf("sakms-node: connected as %s (id=%s)", cfg.NodeName, nodeID)
 	statusSrv.update(stateConnected, "", nodeID)
@@ -254,28 +271,7 @@ func connect(
 			if !ok {
 				return nil
 			}
-			_, mediaRoots := cfg.snapshot()
-			if len(mediaRoots) == 0 {
-				warning := "mediaRoots is not configured -- settings pushes are applied unrestricted (grace period). Set mediaRoots in this node's config to enable containment."
-				log.Printf("sakms-node: WARNING %s", warning)
-				statusSrv.setWarning(warning)
-			} else if reason := validateSettingsPush(mediaRoots, s.PathMap); reason != "" {
-				warning := fmt.Sprintf("rejected settings push (server attempted to map outside this node's declared media roots): %s", reason)
-				log.Printf("sakms-node: %s", warning)
-				statusSrv.setWarning(warning)
-				continue
-			} else {
-				statusSrv.setWarning("")
-			}
-			mergedTotal := 0
-			if saveErr := cfg.mutateAndSave(configPath, func() {
-				cfg.PathMap = mergePathMap(cfg.PathMap, s.PathMap)
-				cfg.MaxJobs = s.MaxJobs
-				mergedTotal = len(cfg.PathMap)
-			}); saveErr != nil {
-				log.Printf("sakms-node: saving updated settings: %v", saveErr)
-			}
-			log.Printf("sakms-node: settings updated (maxJobs=%d, paths=%d, merged total=%d)", s.MaxJobs, len(s.PathMap), mergedTotal)
+			applyServerSettings(cfg, configPath, statusSrv, s)
 		case br, ok := <-browseCh:
 			if !ok {
 				return nil
@@ -300,17 +296,52 @@ func connect(
 	}
 }
 
+// applyServerSettings applies one server-pushed authoritative settings frame to
+// local config: it validates the pushed pathMap against the node's mediaRoots
+// (grace period when unset), then merges it into the Remap table (mergePathMap,
+// add/replace-only) and updates MaxJobs, all under the single config lock.
+//
+// D5 (break the push-echo loop): this is the ONLY caller of the settings-apply
+// path, and it deliberately takes NO pathmapPusher — a server push is applied,
+// never re-pushed. Only the control-socket edit path schedules an outbound push,
+// so a server echo can never ping-pong back into another push.
+func applyServerSettings(cfg *NodeConfig, configPath string, statusSrv *statusServer, s nodes.NodeSettings) {
+	_, mediaRoots := cfg.snapshot()
+	if len(mediaRoots) == 0 {
+		warning := "mediaRoots is not configured -- settings pushes are applied unrestricted (grace period). Set mediaRoots in this node's config to enable containment."
+		log.Printf("sakms-node: WARNING %s", warning)
+		statusSrv.setWarning(warning)
+	} else if reason := validateSettingsPush(mediaRoots, s.PathMap); reason != "" {
+		warning := fmt.Sprintf("rejected settings push (server attempted to map outside this node's declared media roots): %s", reason)
+		log.Printf("sakms-node: %s", warning)
+		statusSrv.setWarning(warning)
+		return
+	} else {
+		statusSrv.setWarning("")
+	}
+	mergedTotal := 0
+	if saveErr := cfg.mutateAndSave(configPath, func() {
+		cfg.PathMap = mergePathMap(cfg.PathMap, s.PathMap)
+		cfg.MaxJobs = s.MaxJobs
+		mergedTotal = len(cfg.PathMap)
+	}); saveErr != nil {
+		log.Printf("sakms-node: saving updated settings: %v", saveErr)
+	}
+	log.Printf("sakms-node: settings updated (maxJobs=%d, paths=%d, merged total=%d)", s.MaxJobs, len(s.PathMap), mergedTotal)
+}
+
 // sseFrame holds the parsed fields of one SSE event.
 type sseFrame struct {
 	event string
 	data  string
 }
 
-// readSSE reads from resp until it finds the "ack" frame, extracts the nodeID
-// from it, then returns the nodeID plus channels for subsequent Job,
-// NodeSettings, and BrowseRequest frames. All three channels are closed when
-// the stream ends or ctx is cancelled.
-func readSSE(ctx context.Context, resp *http.Response) (nodeID string, jobs <-chan nodes.Job, settings <-chan nodes.NodeSettings, browse <-chan nodes.BrowseRequest, err error) {
+// readSSE reads from resp until it finds the "ack" frame, parses the
+// ConnectAck from it (durable nodeID + library-path-key catalog, D4), then
+// returns that ack plus channels for subsequent Job, NodeSettings, and
+// BrowseRequest frames. All three channels are closed when the stream ends or
+// ctx is cancelled.
+func readSSE(ctx context.Context, resp *http.Response) (ack nodes.ConnectAck, jobs <-chan nodes.Job, settings <-chan nodes.NodeSettings, browse <-chan nodes.BrowseRequest, err error) {
 	scanner := bufio.NewScanner(resp.Body)
 	jobCh := make(chan nodes.Job, 16)
 	settingsCh := make(chan nodes.NodeSettings, 4)
@@ -322,9 +353,9 @@ func readSSE(ctx context.Context, resp *http.Response) (nodeID string, jobs <-ch
 		line := scanner.Text()
 		if line == "" {
 			if cur.event == "ack" && cur.data != "" {
-				var ack nodes.ConnectAck
-				if e := json.Unmarshal([]byte(cur.data), &ack); e == nil && ack.NodeID != "" {
-					nodeID = ack.NodeID
+				var parsed nodes.ConnectAck
+				if e := json.Unmarshal([]byte(cur.data), &parsed); e == nil && parsed.NodeID != "" {
+					ack = parsed
 					break
 				}
 			}
@@ -338,11 +369,11 @@ func readSSE(ctx context.Context, resp *http.Response) (nodeID string, jobs <-ch
 		}
 	}
 
-	if nodeID == "" {
+	if ack.NodeID == "" {
 		close(jobCh)
 		close(settingsCh)
 		close(browseCh)
-		return "", nil, nil, nil, fmt.Errorf("stream ended before ack")
+		return nodes.ConnectAck{}, nil, nil, nil, fmt.Errorf("stream ended before ack")
 	}
 
 	go func() {
@@ -403,7 +434,7 @@ func readSSE(ctx context.Context, resp *http.Response) (nodeID string, jobs <-ch
 		}
 	}()
 
-	return nodeID, jobCh, settingsCh, browseCh, nil
+	return ack, jobCh, settingsCh, browseCh, nil
 }
 
 // heartbeat POSTs to /api/nodes/heartbeat every 30 seconds until ctx is

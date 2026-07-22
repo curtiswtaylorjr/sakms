@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strings"
 
 	"github.com/labbersanon/sakms/internal/nodes"
@@ -36,6 +37,11 @@ func Remap(entries []PathMapEntry, serverPath string) string {
 		}
 	}
 	if best < 0 {
+		prefixes := make([]string, len(entries))
+		for i, e := range entries {
+			prefixes[i] = e.Server
+		}
+		log.Printf("sakms-node: WARNING no path mapping matched serverPath=%q; configured prefixes=%v", serverPath, prefixes)
 		return serverPath
 	}
 

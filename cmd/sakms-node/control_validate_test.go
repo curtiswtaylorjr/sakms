@@ -70,6 +70,94 @@ func TestValidateMediaRootPath_ResolvesSymlinkToRealDir(t *testing.T) {
 	}
 }
 
+// TestValidatePathMapLocal_Stage4 exercises the node-side half of Stage 4's
+// nodePath guardrails: validatePathMapLocal must reject an empty path, a
+// filesystem-root/too-shallow path (via the shared nodepath.Trivial rule), and
+// a path that resolves OUTSIDE every configured mediaRoot (withinMediaRoots),
+// while accepting a real directory contained within a configured mediaRoot and
+// returning its canonical form. This is where the node's local rejection happens
+// BEFORE any push is scheduled.
+func TestValidatePathMapLocal_Stage4(t *testing.T) {
+	mediaRoot := t.TempDir()
+	within := filepath.Join(mediaRoot, "movies")
+	if err := os.MkdirAll(within, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir() // a real dir, but not under mediaRoot
+
+	t.Run("empty is rejected", func(t *testing.T) {
+		if _, err := validatePathMapLocal("", []string{mediaRoot}); err == nil {
+			t.Error("expected an empty nodePath to be rejected")
+		}
+	})
+	t.Run("filesystem root is rejected (trivial)", func(t *testing.T) {
+		// "/" exists and is a directory, so it clears validateMediaRootPath and is
+		// rejected specifically by the shared triviality rule.
+		if _, err := validatePathMapLocal("/", []string{mediaRoot}); err == nil {
+			t.Error("expected \"/\" to be rejected as too shallow")
+		}
+	})
+	t.Run("outside all mediaRoots is rejected", func(t *testing.T) {
+		if _, err := validatePathMapLocal(outside, []string{mediaRoot}); err == nil {
+			t.Errorf("expected a path outside every mediaRoot (%q not under %q) to be rejected", outside, mediaRoot)
+		}
+	})
+	t.Run("within a mediaRoot is accepted", func(t *testing.T) {
+		got, err := validatePathMapLocal(within, []string{mediaRoot})
+		if err != nil {
+			t.Fatalf("expected a contained real dir to be accepted, got: %v", err)
+		}
+		wantResolved, _ := filepath.EvalSymlinks(within)
+		if got != wantResolved {
+			t.Errorf("expected canonical %q, got %q", wantResolved, got)
+		}
+	})
+}
+
+// sharedTrivialCases mirrors the canonical table in internal/nodepath (which
+// owns the single implementation). Running it against BOTH node validators here
+// proves they agree with that shared rule rather than re-deriving depth
+// independently — the structural single-source-of-truth Stage 4 consolidates to.
+var sharedTrivialCases = []struct {
+	path    string
+	trivial bool
+}{
+	{"", true},
+	{"/", true},
+	{"//", true},
+	{"/mnt", true},
+	{"/mnt/", true},
+	{"/mnt/media", false},
+	{"/srv/tank/movies", false},
+}
+
+// TestMediaRootsUsable_SharedRule proves mediaRootsUsable rejects exactly the
+// self-reported mediaRoot entries the shared nodepath.Trivial rule calls trivial
+// (empty/root/too-shallow) and accepts the rest — the node-side presence gate
+// (D9) built on the same consolidated rule the server uses.
+func TestMediaRootsUsable_SharedRule(t *testing.T) {
+	// Empty list is always rejected.
+	if err := mediaRootsUsable(nil); err == nil {
+		t.Error("expected an empty mediaRoots list to be rejected")
+	}
+	for _, tc := range sharedTrivialCases {
+		if tc.path == "" {
+			continue // "" as a lone entry is covered by the empty-list case above
+		}
+		err := mediaRootsUsable([]string{tc.path})
+		if tc.trivial && err == nil {
+			t.Errorf("mediaRootsUsable([%q]) = nil, want a rejection (trivial per shared rule)", tc.path)
+		}
+		if !tc.trivial && err != nil {
+			t.Errorf("mediaRootsUsable([%q]) = %v, want nil (non-trivial per shared rule)", tc.path, err)
+		}
+	}
+	// A trivial entry mixed in with valid ones still rejects the whole list.
+	if err := mediaRootsUsable([]string{"/mnt/media", "/mnt"}); err == nil {
+		t.Error("expected a list containing a trivial entry to be rejected")
+	}
+}
+
 // TestNodeSettings_HasNoMediaRootsField is the Step 3 wire-invariant regression
 // test, driven against the REAL wire DTO type (nodes.NodeSettings) via
 // reflection rather than a hand-copied replica of connect()'s settings-push

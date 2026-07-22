@@ -46,13 +46,24 @@ func testGroup(t *testing.T) (name string, gid int) {
 // returned context cancel (t.Cleanup).
 func startTestSocket(t *testing.T, cfg *NodeConfig, configPath string) (*http.Client, string, string) {
 	t.Helper()
+	// A never-firing pusher + empty session satisfy the wiring for tests that
+	// exercise only the mediaRoots routes; the pathmap tests build their own.
+	pusher := newPathmapPusher(cfg, &nodeSession{}, http.DefaultClient, time.Hour)
+	return startTestSocketWith(t, cfg, configPath, pusher, &nodeSession{})
+}
+
+// startTestSocketWith is startTestSocket with caller-supplied pusher + session,
+// so the pathmap tests can inject a pusher pointed at a test server (short
+// debounce, observable pushHook) and a session carrying a catalog.
+func startTestSocketWith(t *testing.T, cfg *NodeConfig, configPath string, pusher *pathmapPusher, sess *nodeSession) (*http.Client, string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "control.sock")
 	groupName, _ := testGroup(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go serveControlSocket(ctx, cfg, configPath, dir, sockPath, groupName)
+	go serveControlSocket(ctx, cfg, configPath, dir, sockPath, groupName, pusher, sess)
 
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -281,7 +292,7 @@ func TestControlSocket_UnlinkStaleSocketOnRestart(t *testing.T) {
 	cfg := &NodeConfig{ServerURL: "https://example.test", NodeName: "n"}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go serveControlSocket(ctx, cfg, configPath, dir, sockPath, groupName)
+	go serveControlSocket(ctx, cfg, configPath, dir, sockPath, groupName, newPathmapPusher(cfg, &nodeSession{}, http.DefaultClient, time.Hour), &nodeSession{})
 
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

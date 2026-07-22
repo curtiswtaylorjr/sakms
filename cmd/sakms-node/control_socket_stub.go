@@ -13,6 +13,6 @@ import (
 // daemon builds simply omit it — they still build cleanly (this stub satisfies
 // the same signature main() calls) and set mediaRoots by editing the config
 // file. See control_socket.go for the real implementation.
-func startControlSocket(_ context.Context, _ *NodeConfig, _ string) {
+func startControlSocket(_ context.Context, _ *NodeConfig, _ string, _ *pathmapPusher, _ *nodeSession) {
 	log.Printf("sakms-node: local control socket unsupported on this platform; set mediaRoots by editing the config file")
 }
