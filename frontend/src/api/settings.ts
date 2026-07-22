@@ -49,6 +49,7 @@ import type {
   NetscanProwlarrKeyResponse,
   NodeBrowseResponse,
   NodePathMappingsResponse,
+  NodePauseRequest,
   NodeSettingsRequest,
   NodesResponse,
   OIDCConfigRequest,
@@ -648,6 +649,19 @@ export function rejectPending(id: string): Promise<void> {
 // EditSettingsModal, the only caller.
 export function updateNodeSettings(id: string, body: NodeSettingsRequest): Promise<void> {
   return api<void>(`/api/nodes/${id}/settings`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+// updateNodePause issues the dual-authed PUT /api/nodes/{id}/pause. This is a
+// SEPARATE call from updateNodeSettings on purpose (P2, node-pause-dispatch
+// plan Stage 4): the request body carries ONLY {paused}, never maxJobs or
+// pathMap, so the pause toggle can never travel in the same request as a
+// MaxJobs save. Do not fold this into updateNodeSettings.
+export function updateNodePause(id: string, paused: boolean): Promise<void> {
+  const body: NodePauseRequest = { paused };
+  return api<void>(`/api/nodes/${id}/pause`, {
     method: "PUT",
     body: JSON.stringify(body),
   });

@@ -16,6 +16,7 @@ import {
   fetchNodePathMappings,
   fetchNodes,
   rejectPending,
+  updateNodePause,
   updateNodeSettings,
 } from "../../api/settings";
 import { Modal } from "../discover/shared";
@@ -179,6 +180,13 @@ const ApproveModal: Component<{
 // who opens this modal only to look at the path mappings and clicks "Save
 // settings" without touching the field must not silently reset an existing
 // non-zero concurrency cap to 0.
+//
+// The pause toggle (node-pause-dispatch plan, Stage 4) is a second,
+// independent control in this same modal: it preloads from
+// props.node.pauseDispatch and calls the dedicated updateNodePause as its own
+// immediate action, never as part of the maxJobs "Save settings" body. See
+// togglePause's own comment below for why the resulting immediate-apply vs.
+// Save-gated mismatch within one modal is deliberate.
 const EditSettingsModal: Component<{
   node: NodeInfo;
   onClose: () => void;
@@ -188,6 +196,39 @@ const EditSettingsModal: Component<{
   const [maxJobs, setMaxJobs] = createSignal(props.node.maxJobs);
   const [saving, setSaving] = createSignal(false);
   const [err, setErr] = createSignal("");
+
+  // paused mirrors props.node.pauseDispatch (the stored value GET /api/nodes
+  // already returns) — same preload discipline as maxJobs above, so opening
+  // this modal never shows a toggle that disagrees with the real server state.
+  const [paused, setPaused] = createSignal(props.node.pauseDispatch);
+  const [pauseSaving, setPauseSaving] = createSignal(false);
+  const [pauseErr, setPauseErr] = createSignal("");
+
+  // togglePause fires updateNodePause IMMEDIATELY on toggle — it is
+  // deliberately NOT gated behind "Save settings" below. This is intentional
+  // mixed UX within one modal, not an oversight: routing pause through its
+  // own call, separate from the maxJobs Save body, is what keeps pause off
+  // the NodeSettingsRequest entirely and makes the P2 footgun (pause and
+  // maxJobs sharing one write) structurally impossible on the client, the
+  // same way the server enforces it with a dedicated endpoint. Do not "fix"
+  // this into a single Save-gated control.
+  const togglePause = async (next: boolean) => {
+    setPaused(next);
+    setPauseSaving(true);
+    setPauseErr("");
+    try {
+      await updateNodePause(props.node.id, next);
+      props.onDone();
+    } catch (e) {
+      // Roll back the optimistic flip on failure so the toggle never claims
+      // a state the server never accepted (mirrors the node daemon's own
+      // failed-push rollback behavior in this plan).
+      setPaused(!next);
+      setPauseErr(String(e));
+    } finally {
+      setPauseSaving(false);
+    }
+  };
 
   const submit = async () => {
     setSaving(true);
@@ -224,6 +265,25 @@ const EditSettingsModal: Component<{
           <For each={rows()?.entries}>
             {(entry) => <NodePathMappingRow entry={entry} />}
           </For>
+        </div>
+        <div>
+          <label class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              aria-label={`${props.node.name} dispatch paused`}
+              checked={paused()}
+              disabled={pauseSaving()}
+              onChange={(e) => void togglePause(e.currentTarget.checked)}
+            />
+            <span class="text-sm text-fg">Pause dispatch</span>
+          </label>
+          <Muted class="mt-1">
+            Applies immediately — takes this node out of job rotation without
+            unpairing it or touching its path mappings or max jobs.
+          </Muted>
+          <Show when={pauseErr()}>
+            <ErrorText>{pauseErr()}</ErrorText>
+          </Show>
         </div>
         <div>
           <label class={labelClass}>
@@ -283,7 +343,9 @@ const PendingRow: Component<{
   </div>
 );
 
-// NodeRow shows an approved node with online/offline status and a settings button.
+// NodeRow shows an approved node with online/offline status, a "Paused"
+// badge when props.node.pauseDispatch is true (reusing the same pill shape
+// as the online/offline status badge), and a settings button.
 const NodeRow: Component<{ node: NodeInfo; onEdit: () => void }> = (props) => {
   const online = () => props.node.status === "online";
   const caps = () =>
@@ -305,6 +367,11 @@ const NodeRow: Component<{ node: NodeInfo; onEdit: () => void }> = (props) => {
         </div>
         <div class="flex shrink-0 items-center gap-2">
           <Button onClick={props.onEdit}>Settings</Button>
+          <Show when={props.node.pauseDispatch}>
+            <span class="rounded-full bg-warn/20 px-2 py-0.5 text-xs font-medium text-warn">
+              Paused
+            </span>
+          </Show>
           <span
             class="rounded-full px-2 py-0.5 text-xs font-medium"
             classList={{

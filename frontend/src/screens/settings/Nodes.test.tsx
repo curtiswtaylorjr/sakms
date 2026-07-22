@@ -8,6 +8,13 @@
 // cleared by the node — D7) renders as "not set", (4) saving maxJobs sends an
 // empty pathMap rather than any operator-edited value, and (5) ApproveModal
 // no longer collects or displays any path-mapping state at all.
+//
+// Also covers the node-pause-dispatch plan's Stage 4: the pause toggle in
+// EditSettingsModal fires updateNodePause immediately (not gated by "Save
+// settings"), the node list's "Paused" badge, and — most importantly — the
+// bidirectional separation between the pause toggle and the maxJobs save:
+// a MaxJobs save never calls the pause endpoint or sends `paused`, and a
+// pause toggle never calls the settings endpoint or sends `maxJobs`.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
@@ -72,6 +79,7 @@ const stubFetch = (
             // Non-zero on purpose: a known, previously-saved concurrency cap
             // that EditSettingsModal must preload rather than default to 0.
             maxJobs: 4,
+            pauseDispatch: false,
           },
         ],
         pending: [
@@ -104,9 +112,10 @@ describe("EditSettingsModal", () => {
 
     await screen.findByText("/mnt/movies");
     // No editable control for path-mapping fields remains reachable — the
-    // only input left in the modal is the maxJobs number field.
+    // only inputs left in the modal are the pause checkbox and the maxJobs
+    // number field.
     expect(screen.queryByPlaceholderText("/mnt/media")).toBeNull();
-    expect(document.querySelectorAll("input")).toHaveLength(1);
+    expect(document.querySelectorAll("input")).toHaveLength(2);
   });
 
   it("renders an unconfigured library path's row with a configure-first note", async () => {
@@ -182,6 +191,174 @@ describe("EditSettingsModal", () => {
       const body = save!.body as { pathMap: unknown[]; maxJobs: number };
       expect(body.maxJobs).toBe(4);
     });
+  });
+});
+
+describe("EditSettingsModal — pause dispatch toggle", () => {
+  it("preloads the pause checkbox from props.node.pauseDispatch", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/nodes") && !url.includes("/path-mappings")) {
+        return jsonResponse({
+          nodes: [
+            {
+              id: "node-a",
+              name: "render-box",
+              status: "online",
+              capabilities: [],
+              lastHeartbeat: new Date().toISOString(),
+              maxJobs: 4,
+              pauseDispatch: true,
+            },
+          ],
+          pending: [],
+        });
+      }
+      return undefined;
+    });
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    const toggle = (await screen.findByLabelText(
+      "render-box dispatch paused",
+    )) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+  });
+
+  it("toggling pause calls updateNodePause immediately, not gated by Save settings", async () => {
+    const calls = stubFetch();
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    const toggle = (await screen.findByLabelText(
+      "render-box dispatch paused",
+    )) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      const pause = calls.find((c) => c.url.endsWith("/api/nodes/node-a/pause"));
+      expect(pause).toBeDefined();
+      expect(pause!.method).toBe("PUT");
+    });
+    // Never fired via "Save settings" — no click on that button happened here.
+    expect(
+      calls.some((c) => c.url.endsWith("/api/nodes/node-a/settings")),
+    ).toBe(false);
+  });
+
+  it("rolls back the checkbox when the pause PUT fails", async () => {
+    const calls = stubFetch((url, init) => {
+      if (
+        url.endsWith("/api/nodes/node-a/pause") &&
+        (init?.method ?? "GET").toUpperCase() === "PUT"
+      ) {
+        return new Response("boom", { status: 500 });
+      }
+      return undefined;
+    });
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    const toggle = (await screen.findByLabelText(
+      "render-box dispatch paused",
+    )) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(
+        calls.some((c) => c.url.endsWith("/api/nodes/node-a/pause")),
+      ).toBe(true);
+    });
+    await waitFor(() => expect(toggle.checked).toBe(false));
+  });
+});
+
+// Bidirectional separation between the pause toggle and the MaxJobs save —
+// this is the most important test in this stage (mirrors the sibling
+// node-path-config-ui feature's PathMap/MaxJobs separation tests, and proves
+// the client-side half of P2's structural anti-footgun property).
+describe("Pause/MaxJobs request separation", () => {
+  it("direction 1: saving MaxJobs never calls the pause endpoint and never sends `paused`", async () => {
+    const calls = stubFetch();
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await screen.findByText("/mnt/movies");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => {
+      const save = calls.find((c) => c.url.endsWith("/api/nodes/node-a/settings"));
+      expect(save).toBeDefined();
+      expect(save!.body).not.toHaveProperty("paused");
+    });
+    expect(
+      calls.some((c) => c.url.endsWith("/api/nodes/node-a/pause")),
+    ).toBe(false);
+  });
+
+  it("direction 2: toggling pause never calls the settings endpoint and never sends `maxJobs`", async () => {
+    const calls = stubFetch();
+    render(() => <NodesSection />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    const toggle = (await screen.findByLabelText(
+      "render-box dispatch paused",
+    )) as HTMLInputElement;
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      const pause = calls.find((c) => c.url.endsWith("/api/nodes/node-a/pause"));
+      expect(pause).toBeDefined();
+      expect(pause!.body).toEqual({ paused: true });
+      expect(pause!.body).not.toHaveProperty("maxJobs");
+    });
+    expect(
+      calls.some((c) => c.url.endsWith("/api/nodes/node-a/settings")),
+    ).toBe(false);
+  });
+});
+
+describe("NodeRow — Paused badge", () => {
+  it("shows a Paused badge when pauseDispatch is true, and none when false", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/nodes") && !url.includes("/path-mappings")) {
+        return jsonResponse({
+          nodes: [
+            {
+              id: "node-a",
+              name: "paused-box",
+              status: "online",
+              capabilities: [],
+              lastHeartbeat: new Date().toISOString(),
+              maxJobs: 0,
+              pauseDispatch: true,
+            },
+            {
+              id: "node-b",
+              name: "running-box",
+              status: "online",
+              capabilities: [],
+              lastHeartbeat: new Date().toISOString(),
+              maxJobs: 0,
+              pauseDispatch: false,
+            },
+          ],
+          pending: [],
+        });
+      }
+      return undefined;
+    });
+    render(() => <NodesSection />);
+
+    await screen.findByText("paused-box");
+    await screen.findByText("running-box");
+
+    expect(screen.getAllByText("Paused")).toHaveLength(1);
   });
 });
 
