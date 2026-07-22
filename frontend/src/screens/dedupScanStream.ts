@@ -142,6 +142,11 @@ export function useDedupScanStream(
 
   const handleProgress = (ev: DedupScanEvent, m: Mode): void => {
     setScanning(true);
+    // Clear a stale error from an earlier 409 (e.g. this tab's own initiate()
+    // rejected because another tab already started this mode's scan) — a live
+    // progress frame proves a scan is genuinely running, so the error no
+    // longer applies and must not keep hiding the log box.
+    setScanError(null);
     armQuietTimer(m);
     // The synthetic reconnect-priming seed is uniquely marked by phase; its
     // current/total arrive absent (omitempty), so render the neutral
