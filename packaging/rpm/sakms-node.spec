@@ -10,13 +10,47 @@ URL:            https://github.com/curtiswtaylorjr/sakms
 Source0:        sakms-%{version}.tar.gz
 Source1:        sakms-node.sysusers.conf
 
-# sakms-node and sakms-node-tray are pure Go (CGO_ENABLED=0);
-# no GL or C build requirements needed.
+# sakms-node, sakms-node-tray, and the server binary remain pure Go
+# (CGO_ENABLED=0) — no GL or C build requirements. Only the on-demand
+# sakms-node-config GUI (the config subpackage below) requires CGO+OpenGL;
+# its build-time GL/X11/Wayland toolchain deps are the %package config
+# BuildRequires block further down.
 BuildRequires:  golang >= 1.22
 # Provides %{_unitdir} for the systemd unit file in %files below, and the
 # %%sysusers_create_package macro used in %pre — COPR's minimal mock
 # buildroot doesn't pull either in unless explicitly required.
 BuildRequires:  systemd-rpm-macros
+
+# --- Build-time toolchain for the sakms-node-config GUI subpackage ---
+# CGO GUI toolchain: Fyne's desktop driver is GLFW (go-gl bindings) and
+# needs a C compiler plus the X11/OpenGL/Wayland -devel headers at build
+# time. COPR's minimal mock buildroot does NOT pull any of these in
+# transitively (same gap already documented above for systemd-rpm-macros),
+# so every one must be declared explicitly — a green local `rpmbuild -bb`
+# on a full desktop proves nothing about completeness here (see the spec's
+# packaging notes / plan B8).
+BuildRequires:  gcc
+BuildRequires:  pkgconf-pkg-config
+BuildRequires:  libX11-devel
+BuildRequires:  libXcursor-devel
+BuildRequires:  libXrandr-devel
+BuildRequires:  libXinerama-devel
+BuildRequires:  libXi-devel
+BuildRequires:  libXxf86vm-devel
+BuildRequires:  mesa-libGL-devel
+BuildRequires:  libxkbcommon-devel
+# go-gl/glfw compiles BOTH its X11 and Wayland backends by default, so its
+# cgo build references Wayland headers even though this binary runs via the
+# X11/Xwayland path at runtime. wayland-devel also provides the
+# wayland-scanner binary that %build runs to generate glfw's Wayland
+# protocol headers (see the generation loop in %build).
+BuildRequires:  wayland-devel
+# wayland-scanner needs the protocol XML definitions; the system copies live
+# here. (This repo vendors its own XML under go-gl/glfw's deps/wayland and
+# %build generates from those, but wayland-protocols-devel is the confirmed
+# system-level dependency and was missing from the original toolchain list —
+# a genuine minimal-chroot build gap surfaced during Stage 1.)
+BuildRequires:  wayland-protocols-devel
 
 Requires(post): systemd
 Requires(preun): systemd
@@ -58,6 +92,15 @@ Requires:       hicolor-icon-theme
 # wl-copy (wayland) or xclip/xsel (X11) for clipboard support — optional
 Recommends:     wl-clipboard
 Recommends:     libnotify
+# The windowed configuration UI is a WEAK dependency, not a hard Requires:
+# keeping it Recommends lets an operator remove sakms-node-config (and its
+# GL stack) while keeping the tray, or install the tray without GL via
+# --setopt=install_weak_deps=False. A plain `dnf install sakms-node-tray`
+# still pulls it by default (weak deps install by default) — harmless on a
+# machine that already has a display. The tray's "Open configuration…"
+# handler os.Stat()s the binary first and notifies gracefully if absent,
+# precisely because Recommends makes its presence non-guaranteed.
+Recommends:     sakms-node-config
 
 %description tray
 sakms-node-tray is a CGo-free system tray companion (StatusNotifierItem /
@@ -65,25 +108,81 @@ dbus) that reflects the worker node lifecycle as a coloured icon:
 amber = pending pairing, green = connected, red = not running.
 It displays the 6-character pairing code and supports one-click copy.
 
+%package config
+Summary:        Windowed configuration UI for sakms-node
+Requires:       sakms-node = %{version}-%{release}
+# Runtime GL/X11 stack for Fyne's GLFW desktop driver. These live ONLY on
+# this subpackage so a headless `sakms-node`-only install pulls ZERO GL
+# libraries (the daemon depends on neither tray nor config).
+Requires:       libX11
+Requires:       libXcursor
+Requires:       libXrandr
+Requires:       libXinerama
+Requires:       libXi
+Requires:       libXxf86vm
+Requires:       libxkbcommon
+Requires:       mesa-libGL
+Requires:       mesa-dri-drivers
+# Xwayland lets a Wayland-only session host the X11 GLFW window (the config
+# binary renders through the X11/Xwayland path by design).
+Requires:       xorg-x11-server-Xwayland
+
+%description config
+sakms-node-config is an on-demand windowed configuration UI (Fyne) for
+editing the worker node's media roots, path mappings, and dispatch-pause
+state. Unlike the daemon and the tray — which stay CGo-free — this binary
+alone requires CGO + OpenGL: Fyne's desktop driver is GLFW and creates a GL
+context at startup. It is launched on demand from the tray's "Open
+configuration…" item and from the desktop applications menu, so a GL-context
+failure never affects the always-running daemon or status tray.
+
 %prep
 %autosetup -n sakms-%{version}
 
 %build
-export CGO_ENABLED=0
 export GOFLAGS="-mod=vendor"
 
-go build -trimpath -ldflags "-s -w" -o sakms-node     ./cmd/sakms-node/
-go build -trimpath -ldflags "-s -w" -o sakms-node-tray ./cmd/sakms-node-tray/
+# The daemon and the tray stay pure Go — build them with CGO disabled,
+# exactly as before.
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o sakms-node      ./cmd/sakms-node/
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o sakms-node-tray ./cmd/sakms-node-tray/
+
+# Generate the Wayland protocol headers that go-gl/glfw's Wayland backend
+# #includes (wl_init.c / wl_window.c) but that `go build` does NOT
+# auto-generate. Without these the CGO_ENABLED=1 build below fails with
+# missing <name>-client-protocol.h / -code.h. Generated from the XML that
+# already ships inside the vendored glfw tree, into that tree's src/ dir,
+# BEFORE the cgo build. This MUST run every build: the COPR tarball is
+# produced from a fresh `go mod vendor`, which ships the XML but none of
+# these generated headers.
+GLFW_SRC="vendor/github.com/go-gl/glfw/v3.4/glfw/glfw"
+for proto in wayland xdg-shell xdg-decoration-unstable-v1 viewporter \
+             relative-pointer-unstable-v1 pointer-constraints-unstable-v1 \
+             fractional-scale-v1 xdg-activation-v1 idle-inhibit-unstable-v1; do
+    wayland-scanner client-header "${GLFW_SRC}/deps/wayland/${proto}.xml" \
+        "${GLFW_SRC}/src/${proto}-client-protocol.h"
+    wayland-scanner private-code  "${GLFW_SRC}/deps/wayland/${proto}.xml" \
+        "${GLFW_SRC}/src/${proto}-client-protocol-code.h"
+done
+
+# The configuration GUI alone requires CGO + OpenGL (Fyne/GLFW).
+CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -o sakms-node-config ./cmd/sakms-node-config/
 
 %install
-install -Dm755 sakms-node      %{buildroot}%{_bindir}/sakms-node
-install -Dm755 sakms-node-tray %{buildroot}%{_bindir}/sakms-node-tray
+install -Dm755 sakms-node        %{buildroot}%{_bindir}/sakms-node
+install -Dm755 sakms-node-tray   %{buildroot}%{_bindir}/sakms-node-tray
+install -Dm755 sakms-node-config %{buildroot}%{_bindir}/sakms-node-config
 
 install -Dm644 packaging/rpm/sakms-node.service \
     %{buildroot}%{_unitdir}/sakms-node.service
 
 install -Dm644 packaging/rpm/sakms-node-tray.desktop \
     %{buildroot}%{_sysconfdir}/xdg/autostart/sakms-node-tray.desktop
+
+# Applications-menu launcher for the config UI (NoDisplay=false, so it is
+# visible in the menu — unlike the tray's autostart-only .desktop above).
+install -Dm644 packaging/rpm/sakms-node-config.desktop \
+    %{buildroot}%{_datadir}/applications/sakms-node-config.desktop
 
 # Brand icon for the tray launcher entry (Icon=sakms-node in the .desktop
 # above resolves this by name via freedesktop icon-theme lookup). Copied
@@ -229,9 +328,30 @@ gtk-update-icon-cache -q %{_datadir}/icons/hicolor &>/dev/null || :
 %{_sysconfdir}/xdg/autostart/sakms-node-tray.desktop
 %{_datadir}/icons/hicolor/scalable/apps/sakms-node.svg
 
+# No scriptlets for the config subpackage: it ships no systemd unit (it is
+# an on-demand GUI, not a service), so there is nothing to daemon-reload.
+# Its Icon=sakms-node resolves against the brand icon shipped by the tray
+# subpackage (the realistic install path — the tray Recommends config, so
+# installing either GUI pulls the icon in); a config-only install without
+# the tray falls back to a generic menu icon. The icon is deliberately NOT
+# moved to the base package, which stays GL/GUI-free for headless nodes.
+%files config
+%{_bindir}/sakms-node-config
+%{_datadir}/applications/sakms-node-config.desktop
+
 %changelog
 * %(date "+%a %b %d %Y") packager <packager@example.com> - %{version}-1
 - Initial packaging
+- Add sakms-node-config subpackage: the on-demand windowed configuration UI
+  (Fyne/GLFW). It is the only binary that requires CGO+OpenGL; the daemon and
+  tray stay CGO-free. Carries all GL/X11 runtime Requires plus
+  xorg-x11-server-Xwayland on its own subpackage so a headless sakms-node
+  install pulls zero GL libraries. Ships /usr/bin/sakms-node-config and a
+  visible applications-menu .desktop. The tray Recommends (weak dep) it so it
+  stays optional/removable. %build now generates go-gl/glfw's Wayland protocol
+  headers via wayland-scanner before the CGO_ENABLED=1 build, and the config
+  subpackage's GL/X11/Wayland -devel BuildRequires are declared explicitly
+  (COPR's minimal buildroot does not pull them in transitively)
 - Add apply-mediaroots (Phase 2 OS-level namespace containment activator) as a
   root-only helper under %{_libexecdir}/sakms-node; not auto-invoked on install
 - Switch sakms-node user/group creation from a raw %pre useradd to the

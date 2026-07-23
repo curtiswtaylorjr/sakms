@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=sakms-node configuration
+Comment=Configure sakms-node media roots, path mappings, and dispatch
+Exec=/usr/bin/sakms-node-config
+Icon=sakms-node
+Categories=Network;Settings;
+Terminal=false
+StartupNotify=false
+NoDisplay=false

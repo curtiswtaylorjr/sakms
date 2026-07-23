@@ -6,13 +6,13 @@
 //	green — authenticated and connected to the sakms server
 //	red   — daemon not running or disconnected
 //
-// The tray never talks to the sakms server and holds no credentials. It does,
-// however, talk to the daemon over TWO local channels: it READS lifecycle
-// state + mediaRoots containment status from the loopback TCP status server
-// (GET /status), and — only for the security-sensitive write path — it edits
-// the node's local mediaRoots allowlist over the daemon's unix-domain control
-// socket (see mediaroots.go). Setting mediaRoots is a local-node-only operation
-// by design; it is never reachable from the sakms server / wire.
+// The tray is read-only. It never talks to the sakms server, holds no
+// credentials, and — since the Stage 3 windowed-config split — no longer opens
+// the daemon's unix-domain control socket at all: all interactive node
+// configuration (media roots, path mappings, dispatch pause) now lives in the
+// on-demand sakms-node-config window, launched from the "Open configuration…"
+// item. The tray only READS lifecycle state + mediaRoots containment status from
+// the loopback TCP status server (GET /status).
 package main
 
 import (
@@ -28,22 +28,14 @@ import (
 	"time"
 
 	"fyne.io/systray"
+
+	"github.com/labbersanon/sakms/internal/nodecontrol"
 )
 
 const (
-	defaultStatusPort    = 7810
-	defaultControlSocket = "/run/sakms-node/control.sock"
-	pollInterval         = 3 * time.Second
-	httpTimeout          = 2 * time.Second
-	controlTimeout       = 5 * time.Second
-	// maxRootSlots caps the number of media-root rows the tray renders. Roots
-	// are typically 1–3; the pool is fixed because fyne.io/systray items are
-	// created once (menu order is fixed at creation) and reused via show/hide.
-	maxRootSlots = 12
-	// maxKeySlots caps the library-path-key rows in the path-mapping section.
-	// The catalog is a fixed, bounded set (~5 keys); the pool is oversized and
-	// fixed for the same reason as maxRootSlots (menu order fixed at creation).
-	maxKeySlots = 8
+	defaultStatusPort = 7810
+	pollInterval      = 3 * time.Second
+	httpTimeout       = 2 * time.Second
 )
 
 type statusResponse struct {
@@ -61,92 +53,36 @@ type statusResponse struct {
 	// OS-level containment state (app_level_only / namespace_scoped /
 	// namespace_scoped_but_unbound). omitempty: absent when mediaRoots is unset
 	// (the grace period) or on a daemon that predates the field.
-	MediaRootScopes []mediaRootStatus `json:"mediaRootScopes,omitempty"`
-}
-
-// mediaRootStatus mirrors the daemon's per-root containment record from
-// GET /status. Scope is one of the daemon's mediaRootScope string values.
-type mediaRootStatus struct {
-	Path  string `json:"path"`
-	Scope string `json:"scope"`
+	MediaRootScopes []nodecontrol.MediaRootStatus `json:"mediaRootScopes,omitempty"`
 }
 
 func main() {
 	statusPort := flag.Int("status-port", defaultStatusPort,
 		"port of the sakms-node status server")
-	controlSocket := flag.String("control-socket", defaultControlSocket,
-		"path to the sakms-node local mediaRoots control socket")
 	flag.Parse()
 
 	t := &trayUI{
 		statusURL: fmt.Sprintf("http://127.0.0.1:%d/status", *statusPort),
-		control:   newControlClient(*controlSocket),
 	}
 	systray.Run(t.run, nil)
 }
 
-// trayUI holds the tray's menu items and the state shared between the status
-// poll loop and the click-handler goroutines (add/remove roots). All mutable
-// fields and the rootSlot paths are guarded by mu.
+// trayUI holds the tray's read-only status items and the state shared between
+// the poll loop and the copy handler. All mutable fields are guarded by mu.
 type trayUI struct {
 	statusURL string
-	control   *controlClient
 
-	mStatus  *systray.MenuItem
-	mCopy    *systray.MenuItem
-	mAddRoot *systray.MenuItem
-	mWarning *systray.MenuItem
-	mDrift   *systray.MenuItem
-	mQuit    *systray.MenuItem
-	roots    []*rootSlot
-
-	// Dispatch-pause section (node-pause-dispatch Stage 3). mDispatchStatus is a
-	// disabled display item ("Dispatch: Running"/"Dispatch: Paused"); the toggle
-	// is its action SUB-item (a disabled parent + action sub-item, mirroring the
-	// rootSlot/keySlot grain — an enabled parent-with-submenu does not reliably
-	// emit ClickedCh on Linux DBusMenu).
-	mDispatchStatus *systray.MenuItem
-	mDispatchToggle *systray.MenuItem
-
-	// Path-mapping section (Stage 3). mPathHeader is a disabled label;
-	// mAddRootFirst appears only while the mediaRoot gate is closed and routes to
-	// the mediaRoots picker; mPathWarning is the persistent last-push-failed line.
-	mPathHeader   *systray.MenuItem
-	mAddRootFirst *systray.MenuItem
-	mPathWarning  *systray.MenuItem
-	keySlots      []*keySlot
+	mStatus     *systray.MenuItem
+	mCopy       *systray.MenuItem
+	mOpenConfig *systray.MenuItem
+	mWarning    *systray.MenuItem
+	mDrift      *systray.MenuItem
+	mQuit       *systray.MenuItem
 
 	mu           sync.Mutex
 	lastKey      string
 	lastCode     string
 	notifiedCode string // which pairing code we already notified about
-
-	// Path-mapping state (guarded by mu). mediaRootCount drives the UX gate;
-	// pmFetched/pmCatalog/pmAuthored/pmPathMap/pmLastPushError hold the last
-	// GET /pathmap. pmPathMap is the live server-authoritative Remap table,
-	// consulted (by Key) ahead of pmAuthored so a legacy operator-authored
-	// mapping renders as mapped-with-its-real-path.
-	mediaRootCount  int
-	pmFetched       bool
-	pmCatalog       []string
-	pmAuthored      []authoredMapping
-	pmPathMap       []remapEntry
-	pmLastPushError string
-
-	// Dispatch-pause state (guarded by mu). dispatchFetched gates rendering and
-	// the toggle until the first GET /dispatch/pause lands; dispatchPaused holds
-	// the daemon's authoritative display value.
-	dispatchFetched bool
-	dispatchPaused  bool
-}
-
-// rootSlot is one reusable media-root menu row: a display-only parent item
-// (path + containment scope) with a "Remove" sub-item. path is the root the
-// slot currently represents ("" when the slot is hidden/unused).
-type rootSlot struct {
-	item   *systray.MenuItem
-	remove *systray.MenuItem
-	path   string // guarded by trayUI.mu
 }
 
 func (t *trayUI) run() {
@@ -160,43 +96,8 @@ func (t *trayUI) run() {
 	t.mCopy.Hide()
 
 	systray.AddSeparator()
-	t.mAddRoot = systray.AddMenuItem("Add media root…",
-		"Pick a folder to add to this node's media-root allowlist")
-	for i := 0; i < maxRootSlots; i++ {
-		item := systray.AddMenuItem("", "")
-		item.Disable() // display-only; the Remove sub-item is the action
-		item.Hide()
-		rm := item.AddSubMenuItem("Remove from allowlist", "Remove this media root")
-		t.roots = append(t.roots, &rootSlot{item: item, remove: rm})
-	}
-
-	systray.AddSeparator()
-	t.mPathHeader = systray.AddMenuItem("Configure path mappings",
-		"Map each server library path key to a local folder on this node")
-	t.mPathHeader.Disable()
-	t.mPathHeader.Hide()
-	t.mAddRootFirst = systray.AddMenuItem("Add a media root first…",
-		"A media root must be configured before path mappings can be set")
-	t.mAddRootFirst.Hide()
-	for i := 0; i < maxKeySlots; i++ {
-		item := systray.AddMenuItem("", "")
-		item.Disable() // display-only; the Set/Remove sub-items are the actions
-		item.Hide()
-		set := item.AddSubMenuItem("Set folder…", "Pick a local folder for this library path key")
-		rm := item.AddSubMenuItem("Remove mapping", "Clear this key's local path mapping")
-		rm.Hide()
-		t.keySlots = append(t.keySlots, &keySlot{item: item, setItem: set, removeItem: rm})
-	}
-	t.mPathWarning = systray.AddMenuItem("", "Path-mapping push status")
-	t.mPathWarning.Disable()
-	t.mPathWarning.Hide()
-
-	systray.AddSeparator()
-	t.mDispatchStatus = systray.AddMenuItem("Dispatch: …", "Whether this node accepts new dispatched jobs")
-	t.mDispatchStatus.Disable() // display-only; the toggle sub-item is the action
-	t.mDispatchStatus.Hide()
-	t.mDispatchToggle = t.mDispatchStatus.AddSubMenuItem("Pause dispatch",
-		"Pause or resume this node's eligibility for new dispatched jobs")
+	t.mOpenConfig = systray.AddMenuItem("Open configuration…",
+		"Open the sakms-node configuration window (media roots, path mappings, dispatch pause)")
 
 	systray.AddSeparator()
 	t.mWarning = systray.AddMenuItem("", "sakms-node warning")
@@ -209,64 +110,18 @@ func (t *trayUI) run() {
 	systray.AddSeparator()
 	t.mQuit = systray.AddMenuItem("Quit tray app", "Close this tray icon (does not stop sakms-node)")
 
-	// Click handlers that may block (the native picker can sit open for a long
-	// time; socket I/O can stall) run in their own goroutines so the status
-	// poll ticker is never held up.
+	// The "Open configuration…" click handler runs in its OWN goroutine, never in
+	// loop()'s select: handleOpenConfig blocks on cmd.Run() for the config
+	// window's whole lifetime (see openconfig.go), so servicing it from the poll
+	// loop would freeze status polling until the window closed. Its own goroutine
+	// also gives free single-instance-ish behavior for repeated tray clicks.
 	go func() {
-		for range t.mAddRoot.ClickedCh {
-			t.handleAddRoot()
+		for range t.mOpenConfig.ClickedCh {
+			t.handleOpenConfig()
 		}
 	}()
-	for i := range t.roots {
-		rs := t.roots[i]
-		go func() {
-			for range rs.remove.ClickedCh {
-				t.handleRemoveRoot(rs)
-			}
-		}()
-	}
-
-	// Path-mapping click handlers. Each runs in its own goroutine so a blocking
-	// picker or a stalled control-socket call never holds up the poll ticker.
-	go func() {
-		for range t.mAddRootFirst.ClickedCh {
-			t.handleAddRoot() // route the operator to the existing mediaRoots picker
-		}
-	}()
-	for i := range t.keySlots {
-		ks := t.keySlots[i]
-		go func() {
-			for range ks.setItem.ClickedCh {
-				t.handlePathMapSet(ks)
-			}
-		}()
-		go func() {
-			for range ks.removeItem.ClickedCh {
-				t.handlePathMapClear(ks)
-			}
-		}()
-	}
-
-	// Dispatch-pause toggle handler. Its own goroutine so a stalled control-socket
-	// relay never holds up the poll ticker (the deadlock discipline).
-	go func() {
-		for range t.mDispatchToggle.ClickedCh {
-			t.handleDispatchToggle()
-		}
-	}()
-
-	// Surface the group-membership relogin diagnostic early: if this desktop
-	// session can't reach the control socket because it predates the RPM adding
-	// the user to the shared group, connecting fails with EACCES.
-	go t.probeControlSocket()
 
 	t.poll()
-	// The initial pathmap fetch runs asynchronously: run() is the onReady callback
-	// and must return promptly (it already blocks up to httpTimeout on t.poll());
-	// a synchronous control-socket fetch could stack another controlTimeout on top.
-	go t.pollPathMap()
-	go t.pollDispatchPause()
-
 	go t.loop()
 }
 
@@ -283,13 +138,6 @@ func (t *trayUI) loop() {
 		select {
 		case <-ticker.C:
 			t.poll()
-			// In its own goroutine: the control-socket fetch can stall up to
-			// controlTimeout, and this loop goroutine also services the quit/copy
-			// clicks — it must not block on the pathmap refresh. The dispatch-pause
-			// refresh runs alongside so a web-side pause (echoed to the daemon over
-			// SSE) surfaces in the tray on the next tick.
-			go t.pollPathMap()
-			go t.pollDispatchPause()
 		case <-t.mCopy.ClickedCh:
 			t.mu.Lock()
 			code := t.lastCode
@@ -316,7 +164,7 @@ func (t *trayUI) applyStatus(s *statusResponse, err error) {
 	state := "disconnected"
 	code := ""
 	warning := ""
-	var scopes []mediaRootStatus
+	var scopes []nodecontrol.MediaRootStatus
 	if err == nil {
 		state = s.State
 		code = s.PairingCode
@@ -369,13 +217,7 @@ func (t *trayUI) applyStatus(s *statusResponse, err error) {
 		t.notifiedCode = ""
 	}
 
-	t.renderRoots(scopes)
-
-	// The mediaRoots count (len of the per-root scopes) drives the path-mapping
-	// gate; re-render that section whenever status changes. The catalog/authored
-	// data itself comes from pollPathMap, not here.
-	t.mediaRootCount = len(scopes)
-	t.renderPathMap()
+	t.renderDrift(scopes)
 
 	if warning != "" {
 		t.mWarning.SetTitle("⚠ " + warning)
@@ -385,40 +227,14 @@ func (t *trayUI) applyStatus(s *statusResponse, err error) {
 	}
 }
 
-// renderRoots updates the media-root rows from the latest scopes. Caller must
-// hold t.mu.
-func (t *trayUI) renderRoots(scopes []mediaRootStatus) {
-	overflow := len(scopes) > len(t.roots)
-	for i, rs := range t.roots {
-		last := i == len(t.roots)-1
-		switch {
-		case overflow && last:
-			// Graceful cap: roots are typically 1–3, but if they ever exceed
-			// the fixed pool, use the last slot as a non-removable summary
-			// rather than silently dropping rows.
-			rs.path = ""
-			extra := len(scopes) - len(t.roots) + 1
-			rs.item.SetTitle(fmt.Sprintf("…and %d more (edit config to manage)", extra))
-			rs.item.SetTooltip("More media roots than the tray can list")
-			rs.item.Show()
-		case i < len(scopes):
-			s := scopes[i]
-			rs.path = s.Path
-			rs.item.SetTitle("• " + escapeMenuLabel(s.Path) + "  [" + scopeLabel(s.Scope) + "]")
-			rs.item.SetTooltip(s.Path + " — " + s.Scope)
-			rs.item.Show()
-		default:
-			rs.path = ""
-			rs.item.Hide()
-		}
-	}
-
-	// Signal OS-level containment drift only when containment is actually active
-	// on this node AND a root is app-level-only — see containmentDrift. On a pure
-	// app-level node (the common case, containment never applied) nothing is out
-	// of sync, so the hint stays hidden; each root still shows its own scope
-	// annotation unconditionally above.
-	if containmentDrift(scopes) {
+// renderDrift shows the aggregate OS-level containment-drift warning. The per-
+// root display rows (and their interactive Remove actions) were retired in
+// Stage 3 — media-root management now lives in the config window — but this
+// aggregate drift signal is security-relevant (it means the app-level allowlist
+// has diverged from the applied namespace sandbox) and stays in the tray as
+// read-only status (plan U6). Caller must hold t.mu.
+func (t *trayUI) renderDrift(scopes []nodecontrol.MediaRootStatus) {
+	if nodecontrol.ContainmentDrift(scopes) {
 		t.mDrift.SetTitle("⚠ OS-level containment out of sync — a root operator must re-run apply-mediaroots.sh and restart the daemon")
 		t.mDrift.Show()
 	} else {
@@ -426,45 +242,9 @@ func (t *trayUI) renderRoots(scopes []mediaRootStatus) {
 	}
 }
 
-// containmentDrift reports whether the app-level allowlist has diverged from the
-// last-applied OS-level (Phase 2) sandbox: true only when containment is active
-// on this node (some root is namespace_scoped / namespace_scoped_but_unbound)
-// AND at least one root is app_level_only (added/changed but not yet re-applied).
-// It is deliberately false on a node where containment was never applied (no root
-// is namespace_scoped*), so the drift hint never false-alarms the common
-// app-level-only case.
-func containmentDrift(scopes []mediaRootStatus) bool {
-	active, appOnly := false, false
-	for _, s := range scopes {
-		switch s.Scope {
-		case "namespace_scoped", "namespace_scoped_but_unbound":
-			active = true
-		case "app_level_only":
-			appOnly = true
-		}
-	}
-	return active && appOnly
-}
-
-// scopeLabel renders a mediaRootScope value as a short human-readable tag.
-func scopeLabel(scope string) string {
-	switch scope {
-	case "namespace_scoped":
-		return "OS-contained"
-	case "namespace_scoped_but_unbound":
-		return "OS-contained, mount missing"
-	case "app_level_only":
-		return "app-level only"
-	case "":
-		return "unknown"
-	default:
-		return scope
-	}
-}
-
 // statusKey is the change-detection fingerprint: the poll loop only re-renders
 // the UI when state, pairing code, warning, or the roots/scopes list changes.
-func statusKey(state, code, warning string, scopes []mediaRootStatus) string {
+func statusKey(state, code, warning string, scopes []nodecontrol.MediaRootStatus) string {
 	var b strings.Builder
 	b.WriteString(state)
 	b.WriteByte('|')
