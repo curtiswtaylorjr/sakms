@@ -15,10 +15,11 @@ import {
   waitFor,
   within,
 } from "@solidjs/testing-library";
-import { createSignal, Show } from "solid-js";
-import { buildConnectionUpsertBody } from "../api/settings";
+import { createResource, createSignal, Show } from "solid-js";
+import { buildConnectionUpsertBody, fetchAdultModeEnabled } from "../api/settings";
 import { buildTraktCredentialsBody } from "../api/trakt";
 import {
+  AdultModeContext,
   ScreenTabBar,
   ScreenTabsContext,
   type ScreenTabsRegistration,
@@ -68,6 +69,15 @@ function defaultGet(url: string): Response | undefined {
   if (url.includes("/api/settings/ai-model")) return jsonResponse({ model: "" });
   if (url.includes("/api/settings/recheck-interval"))
     return jsonResponse({ intervalSeconds: 0 });
+  // adult_mode_enabled — only fetched by whichever test wraps renderSettings
+  // in an AdultModeContext.Provider harness that itself calls
+  // fetchAdultModeEnabled (see renderSettingsWithAdultMode below); the plain
+  // renderSettings() calls below never trigger this fetch at all (no
+  // Provider -> AdultModeContext's own default, enabled=true, applies).
+  // Defaults to enabled here too so a harness test that doesn't care about
+  // the initial value doesn't have to override it.
+  if (url.includes("/api/settings/adult-mode-enabled"))
+    return jsonResponse({ enabled: true });
   if (url.includes("/api/settings/entity-sync-interval"))
     return jsonResponse({ intervalSeconds: 0 });
   // WatchFoldersSection (Advanced, global — mounts on every Advanced-tab
@@ -142,6 +152,29 @@ const stubFetch = (override?: Override) => {
 };
 
 const renderSettings = () => render(() => <Settings onReboot={() => {}} />);
+
+// renderSettingsWithAdultMode mirrors AppShell's real ShellRoot wiring exactly
+// (createResource(fetchAdultModeEnabled) + AdultModeContext.Provider), rather
+// than a hand-rolled mock — so these tests exercise the SAME propagation path
+// production uses: AdultModeSection's toggle handler calls the provided
+// refetch after a successful PUT, which re-fetches through whatever
+// stubFetch/override is active, and every consumer (ModeSelector, Connections,
+// Advanced, UI tab) reactively sees the new value. Requires
+// /api/settings/adult-mode-enabled to be answered by defaultGet or an
+// override (defaultGet answers it with enabled:true by default, above).
+const renderSettingsWithAdultMode = () => {
+  const Harness = () => {
+    const [enabled, { refetch }] = createResource(fetchAdultModeEnabled);
+    return (
+      <AdultModeContext.Provider
+        value={{ enabled: () => enabled() ?? false, refetch: () => void refetch() }}
+      >
+        <Settings onReboot={() => {}} />
+      </AdultModeContext.Provider>
+    );
+  };
+  return render(() => <Harness />);
+};
 
 // goToSection clicks a section tab OR (for "AI") the Connections tab's own
 // inline Connections/AI sub-tab — AI is no longer a top-level SECTION_TABS
@@ -1668,6 +1701,301 @@ describe("Global Settings", () => {
     expect(
       await screen.findByText("Entity Database — background sync"),
     ).toBeInTheDocument();
+  });
+});
+
+// --- Adult mode disable switch (ralplan-adult-disable-switch.md) -----------
+//
+// Covers: the Global tab's always-rendered master switch, the disable
+// confirmation dialog's checkbox behavior (including the Critic-restored
+// Cancel-fires-zero-requests criterion), live propagation to Connections/
+// Library (no page reload — the load-bearing refetch requirement), Advanced's
+// compound gate, the UI tab's no-dangling-tab-bar requirement, and
+// EntityDatabaseSection staying visible regardless of switch state.
+describe("Adult mode disable switch", () => {
+  // adultModeFetch wires a STATEFUL override — GET returns the current value,
+  // PUT updates it — the same "live toggle" shape AppShell's real Provider
+  // exercises. This lets these tests assert on propagation through
+  // renderSettingsWithAdultMode's refetch, not just on the outgoing PUT body.
+  const adultModeFetch = (initialEnabled: boolean) => {
+    let enabled = initialEnabled;
+    let scanInterval = 300; // nonzero so "set to 0" is observable
+    const override: Override = (url, init) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/settings/adult-mode-enabled")) {
+        if (method === "PUT") {
+          enabled = JSON.parse(init!.body as string).enabled;
+          return noContent();
+        }
+        return jsonResponse({ enabled });
+      }
+      if (url.includes("/api/settings/adult-newest-scan-interval")) {
+        if (method === "PUT") {
+          scanInterval = JSON.parse(init!.body as string).intervalSeconds;
+          return noContent();
+        }
+        return jsonResponse({ intervalSeconds: scanInterval });
+      }
+      return undefined;
+    };
+    return {
+      override,
+      getEnabled: () => enabled,
+      getScanInterval: () => scanInterval,
+    };
+  };
+
+  const openDisableDialog = async () => {
+    const checkbox = (await screen.findByLabelText(
+      "Enable Adult mode",
+    )) as HTMLInputElement;
+    // The checkbox EXISTS as soon as AdultModeSection mounts, but its
+    // `checked` state only reflects the real value once the resource
+    // resolves — clicking before then would toggle it TO checked (firing the
+    // enable path, not disable). Wait for the actual enabled=true state.
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    fireEvent.click(checkbox);
+    await screen.findByText("Disable Adult mode?");
+  };
+
+  it("the master switch always renders when the underlying value is disabled", async () => {
+    stubFetch(adultModeFetch(false).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    const checkbox = (await screen.findByLabelText(
+      "Enable Adult mode",
+    )) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it("the master switch always renders when the underlying value is enabled", async () => {
+    stubFetch(adultModeFetch(true).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    const checkbox = (await screen.findByLabelText(
+      "Enable Adult mode",
+    )) as HTMLInputElement;
+    // The checkbox exists immediately at mount; its checked state only
+    // reflects the real value once the resource resolves.
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+  });
+
+  it("enabling is a plain, immediate single PUT with no confirmation dialog", async () => {
+    const calls = stubFetch(adultModeFetch(false).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    const checkbox = (await screen.findByLabelText(
+      "Enable Adult mode",
+    )) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "PUT" &&
+            c.url.includes("/api/settings/adult-mode-enabled"),
+        ),
+      ).toBe(true),
+    );
+    const put = calls.find(
+      (c) =>
+        c.method === "PUT" &&
+        c.url.includes("/api/settings/adult-mode-enabled"),
+    )!;
+    expect(put.body).toEqual({ enabled: true });
+    expect(screen.queryByText("Disable Adult mode?")).toBeNull();
+    expect(
+      calls.some((c) =>
+        c.url.includes("/api/settings/adult-newest-scan-interval"),
+      ),
+    ).toBe(false);
+  });
+
+  it("disabling opens a confirmation dialog instead of firing a request immediately", async () => {
+    const calls = stubFetch(adultModeFetch(true).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    await openDisableDialog();
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "PUT" &&
+          c.url.includes("/api/settings/adult-mode-enabled"),
+      ),
+    ).toBe(false);
+  });
+
+  it("Cancel fires zero requests and changes nothing", async () => {
+    const { override, getEnabled, getScanInterval } = adultModeFetch(true);
+    const calls = stubFetch(override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    await openDisableDialog();
+    fireEvent.click(
+      screen.getByLabelText("Also stop the Adult Newest background scanner"),
+    );
+    const callsBeforeCancel = calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Disable Adult mode?")).toBeNull();
+    expect(calls.length).toBe(callsBeforeCancel);
+    expect(getEnabled()).toBe(true);
+    expect(getScanInterval()).toBe(300);
+    expect(
+      (screen.getByLabelText("Enable Adult mode") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+  });
+
+  it("confirming WITHOUT the scanner checkbox fires only the adult-mode-enabled PUT", async () => {
+    const calls = stubFetch(adultModeFetch(true).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    await openDisableDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "PUT" &&
+            c.url.includes("/api/settings/adult-mode-enabled"),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "PUT" &&
+          c.url.includes("/api/settings/adult-newest-scan-interval"),
+      ),
+    ).toBe(false);
+  });
+
+  it("confirming WITH the scanner checkbox fires two sequential PUTs in order: adult-mode-enabled then adult-newest-scan-interval", async () => {
+    const calls = stubFetch(adultModeFetch(true).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    await openDisableDialog();
+    fireEvent.click(
+      screen.getByLabelText("Also stop the Adult Newest background scanner"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "PUT" &&
+            c.url.includes("/api/settings/adult-newest-scan-interval"),
+        ),
+      ).toBe(true),
+    );
+    const putCalls = calls.filter(
+      (c) =>
+        c.method === "PUT" &&
+        (c.url.includes("/api/settings/adult-mode-enabled") ||
+          c.url.includes("/api/settings/adult-newest-scan-interval")),
+    );
+    expect(putCalls).toHaveLength(2);
+    expect(putCalls[0]!.url).toContain("/api/settings/adult-mode-enabled");
+    expect(putCalls[0]!.body).toEqual({ enabled: false });
+    expect(putCalls[1]!.url).toContain(
+      "/api/settings/adult-newest-scan-interval",
+    );
+    expect(putCalls[1]!.body).toEqual({ intervalSeconds: 0 });
+  });
+
+  it("propagates live (no page reload): disabling from Global hides stash/stashdb/fansdb/tpdb in Connections", async () => {
+    stubFetch(adultModeFetch(true).override);
+    renderSettingsWithAdultMode();
+    // Connections is already the default section at mount — no navigation
+    // click needed (and clicking "Connections" here would be ambiguous: its
+    // own inner Connections/AI sub-tab button shares the same name).
+    expect(await screen.findByText("stashdb")).toBeInTheDocument();
+    expect(screen.getByText("stash")).toBeInTheDocument();
+    expect(screen.getByText("fansdb")).toBeInTheDocument();
+    expect(screen.getByText("tpdb")).toBeInTheDocument();
+
+    goToSection("Global");
+    await openDisableDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Enable Adult mode") as HTMLInputElement)
+          .checked,
+      ).toBe(false),
+    );
+
+    goToSection("Connections");
+    // Re-navigating remounts ConnectionsTabSection, which re-fetches
+    // /api/connections — wait for that to resolve. The Adult-only rows'
+    // absence is asserted via waitFor too: the remount's very first paint can
+    // land before adultEnabled() has settled (a real, brief reactive-settle
+    // window on a fresh mount, not a bug in the filter itself — it always
+    // converges to the correct filtered list).
+    expect(await screen.findByText("prowlarr")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("stashdb")).toBeNull());
+    expect(screen.queryByText("stash")).toBeNull();
+    expect(screen.queryByText("fansdb")).toBeNull();
+    expect(screen.queryByText("tpdb")).toBeNull();
+    // Non-Adult-exclusive services stay.
+    expect(screen.getByText("tmdb")).toBeInTheDocument();
+  });
+
+  it("mode-fallback: a screen with Adult selected falls back to Movies when disabled from elsewhere", async () => {
+    stubFetch(adultModeFetch(true).override);
+    renderSettingsWithAdultMode();
+    goToSection("Library");
+    fireEvent.click(await screen.findByText("Adult"));
+    await screen.findByText(/no naming preferences/);
+
+    goToSection("Global");
+    await openDisableDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Enable Adult mode") as HTMLInputElement)
+          .checked,
+      ).toBe(false),
+    );
+
+    goToSection("Library");
+    // Falls back to Movies — the naming-preferences panel (Movies/Series
+    // only) is back, and Adult is no longer a selectable tab.
+    expect(
+      await screen.findByText("File/folder naming (Movies)"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Adult")).toBeNull();
+  });
+
+  it("EntityDatabaseSection stays visible regardless of switch state", async () => {
+    stubFetch(adultModeFetch(false).override);
+    renderSettingsWithAdultMode();
+    goToSection("Global");
+    expect(
+      await screen.findByText("Entity Database — background sync"),
+    ).toBeInTheDocument();
+  });
+
+  it("Advanced's Adult-only IdentifyEnabledSetting never renders when disabled", async () => {
+    stubFetch(adultModeFetch(false).override);
+    renderSettingsWithAdultMode();
+    goToSection("Advanced");
+    await screen.findByText(/^Advanced Settings/);
+    expect(screen.queryByText("Adult")).toBeNull();
+    expect(
+      screen.queryByLabelText("Adult phash-first identification enabled"),
+    ).toBeNull();
+  });
+
+  it("UI tab renders no dangling tab bar when disabled — SliderAdminSection shows directly, no Mainstream/Adult pills", async () => {
+    stubFetch(adultModeFetch(false).override);
+    renderSettingsWithAdultMode();
+    goToSection("UI");
+    expect(
+      await screen.findByText("Custom Discover sliders"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mainstream" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Adult" })).toBeNull();
   });
 });
 

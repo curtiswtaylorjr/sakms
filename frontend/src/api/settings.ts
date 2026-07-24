@@ -129,6 +129,19 @@ export const CONNECTION_SERVICES = [
   "jellyfin",
 ];
 
+// ADULT_ONLY_CONNECTION_SERVICES are the 4 CONNECTION_SERVICES entries that
+// are exclusively Adult-related: `stash` for phash-first identification, the
+// other three for the stash-box identification network (StashDB/FansDB/TPDB).
+// Connections.tsx filters these out of the rendered table when the global
+// adult_mode_enabled switch (see fetchAdultModeEnabled below) is off — see
+// ralplan-adult-disable-switch.md step 9.
+export const ADULT_ONLY_CONNECTION_SERVICES = [
+  "stashdb",
+  "fansdb",
+  "tpdb",
+  "stash",
+];
+
 export const AI_PROVIDERS = ["ollama", "openai", "gemini", "anthropic"];
 export const QUALITY_TIERS = ["low", "medium", "high", "lossless"];
 export const MAX_RESOLUTIONS = [0, 480, 720, 1080, 2160];
@@ -599,6 +612,26 @@ export function putAdultNewestScanInterval(
   return api<void>("/api/settings/adult-newest-scan-interval", {
     method: "PUT",
     body: JSON.stringify({ intervalSeconds }),
+  });
+}
+
+// Adult mode enabled: the global visibility switch (adult_mode_enabled) that
+// hides Adult-related frontend UI when off — NOT a backend access-control
+// boundary, see ralplan-adult-disable-switch.md. Same single-key GET/PUT
+// shape as watch-folders-enabled directly below. The GET's resolved default
+// (when never explicitly set) is computed server-side from whether Adult's
+// library root folder is configured; the frontend just reads/writes the
+// resolved boolean.
+export function fetchAdultModeEnabled(): Promise<boolean> {
+  return api<{ enabled: boolean }>("/api/settings/adult-mode-enabled").then(
+    (r) => r.enabled,
+  );
+}
+
+export function putAdultModeEnabled(enabled: boolean): Promise<void> {
+  return api<void>("/api/settings/adult-mode-enabled", {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
   });
 }
 

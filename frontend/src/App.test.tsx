@@ -128,6 +128,11 @@ describe("boot branch: authed app shell", () => {
       // TraktWatchlistRow's own status check — not linked, so it stays hidden.
       if (url.includes("/api/trakt/status"))
         return jsonResponse({ configured: false, linked: false });
+      // AppShell's ShellRoot fetches the adult_mode_enabled switch once per
+      // boot (AdultModeContext's real Provider) — default it enabled so this
+      // boot-branch smoke test isn't coupled to the switch's own behavior.
+      if (url.includes("/api/settings/adult-mode-enabled"))
+        return jsonResponse({ enabled: true });
       throw new Error("unexpected " + url);
     });
     render(() => <App />);
@@ -144,6 +149,8 @@ describe("boot branch: authed app shell", () => {
       if (url.includes("/discover")) return jsonResponse([]);
       if (url.includes("/api/trakt/status"))
         return jsonResponse({ configured: false, linked: false });
+      if (url.includes("/api/settings/adult-mode-enabled"))
+        return jsonResponse({ enabled: true });
       throw new Error("unexpected " + url);
     });
     render(() => <App />);

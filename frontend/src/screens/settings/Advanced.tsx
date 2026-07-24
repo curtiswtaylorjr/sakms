@@ -23,7 +23,13 @@ import {
   putIdentifyEnabled,
   putPHashThreshold,
 } from "../../api/settings";
-import { Button, Muted, inputClass, labelClass } from "../../components/ui";
+import {
+  Button,
+  Muted,
+  inputClass,
+  labelClass,
+  useAdultEnabled,
+} from "../../components/ui";
 import {
   Card,
   MODE_LABELS,
@@ -463,6 +469,7 @@ const IdentifyEnabledSetting: Component<{ mode: () => Mode }> = (props) => {
 };
 
 export const AdvancedSection: Component<{ mode: () => Mode }> = (props) => {
+  const adultEnabled = useAdultEnabled();
   // phash-threshold is per-mode-generic; confidence is Movies/Series only;
   // identify-enabled is Adult only. Each keyed on the mode accessor.
   const [phash] = createResource(props.mode, fetchPHashThreshold);
@@ -495,7 +502,7 @@ export const AdvancedSection: Component<{ mode: () => Mode }> = (props) => {
             onSave={(v) => putConfidenceThreshold(props.mode(), v)}
           />
         </Show>
-        <Show when={props.mode() === "adult"}>
+        <Show when={props.mode() === "adult" && adultEnabled()}>
           <IdentifyEnabledSetting mode={props.mode} />
         </Show>
         </SectionSave>

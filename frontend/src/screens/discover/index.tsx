@@ -32,10 +32,16 @@
 import {
   type Component,
   createSignal,
+  Show,
   Switch,
   Match,
 } from "solid-js";
-import { Button, type TabDef, ScreenTabs } from "../../components/ui";
+import {
+  Button,
+  type TabDef,
+  ScreenTabs,
+  useAdultEnabled,
+} from "../../components/ui";
 import { MainstreamDiscover } from "./Mainstream";
 import { AdultDiscover } from "./Adult";
 
@@ -60,6 +66,7 @@ const MAINSTREAM_TABS: TabDef[] = [
 // on. Switching tabs resets it to false so a stale "Edit" state never
 // carries from one screen to the other.
 export const Discover: Component = () => {
+  const adultEnabled = useAdultEnabled();
   const [tab, setTab] = createSignal("mainstream");
   const [editMode, setEditMode] = createSignal(false);
 
@@ -70,30 +77,45 @@ export const Discover: Component = () => {
 
   return (
     <div>
-      <ScreenTabs
-        tabs={MAINSTREAM_TABS}
-        current={tab}
-        onSelect={selectTab}
-        trailing={
-          <Button
-            class="!px-3 !py-1.5 !text-sm"
-            onClick={() => setEditMode((v) => !v)}
-          >
-            {editMode() ? "Done" : "Edit"}
-          </Button>
-        }
-        class="flex items-center gap-1"
-      />
-      <div class="mt-4">
-        <Switch>
-          <Match when={tab() === "adult"}>
-            <AdultDiscover editMode={editMode} />
-          </Match>
-          <Match when={tab() === "mainstream"}>
+      {/* When Adult mode is disabled, do NOT render ScreenTabs at all — a
+          filtered-to-one-entry tab bar would show a visibly degenerate lone
+          "Mainstream" pill. Render Mainstream content directly instead (a
+          Critic-mandated fix, see ralplan-adult-disable-switch.md step 6). If
+          `tab()` was "adult" when this flips off, it resolves for free since
+          only MainstreamDiscover renders regardless of `tab()`'s value. */}
+      <Show
+        when={adultEnabled()}
+        fallback={
+          <div class="mt-4">
             <MainstreamDiscover editMode={editMode} />
-          </Match>
-        </Switch>
-      </div>
+          </div>
+        }
+      >
+        <ScreenTabs
+          tabs={MAINSTREAM_TABS}
+          current={tab}
+          onSelect={selectTab}
+          trailing={
+            <Button
+              class="!px-3 !py-1.5 !text-sm"
+              onClick={() => setEditMode((v) => !v)}
+            >
+              {editMode() ? "Done" : "Edit"}
+            </Button>
+          }
+          class="flex items-center gap-1"
+        />
+        <div class="mt-4">
+          <Switch>
+            <Match when={tab() === "adult"}>
+              <AdultDiscover editMode={editMode} />
+            </Match>
+            <Match when={tab() === "mainstream"}>
+              <MainstreamDiscover editMode={editMode} />
+            </Match>
+          </Switch>
+        </div>
+      </Show>
     </div>
   );
 };

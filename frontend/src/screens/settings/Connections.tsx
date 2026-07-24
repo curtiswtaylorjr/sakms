@@ -18,6 +18,7 @@ import {
   Show,
 } from "solid-js";
 import {
+  ADULT_ONLY_CONNECTION_SERVICES,
   API_KEY_HELP_URLS,
   CONNECTION_SERVICES,
   SERVICES_WITH_FIXED_URL,
@@ -49,6 +50,7 @@ import {
   inputClass,
   labelClass,
   Muted,
+  useAdultEnabled,
 } from "../../components/ui";
 import {
   Card,
@@ -709,6 +711,16 @@ const TraktConnectionSection: Component = () => {
 };
 
 const ConnectionsTable: Component = () => {
+  const adultEnabled = useAdultEnabled();
+  // Hides the 4 Adult-exclusive rows (stash, stashdb, fansdb, tpdb) when the
+  // global adult_mode_enabled switch is off — see
+  // ralplan-adult-disable-switch.md step 9.
+  const services = () =>
+    adultEnabled()
+      ? CONNECTION_SERVICES
+      : CONNECTION_SERVICES.filter(
+          (s) => !ADULT_ONLY_CONNECTION_SERVICES.includes(s),
+        );
   const [conns, { refetch }] = createResource(fetchConnections);
   const [findings] = createResource(fetchNetscanKnown);
   // failing maps service → true when its saved connection failed its most recent
@@ -774,7 +786,7 @@ const ConnectionsTable: Component = () => {
                 untouched save would send apiKey="" and WIPE the stored secret
                 (the exact Guardrail #5 bug). */}
             <Show when={conns() !== undefined}>
-              <For each={CONNECTION_SERVICES}>
+              <For each={services()}>
                 {(service) => (
                   <ConnectionRow
                     service={service}

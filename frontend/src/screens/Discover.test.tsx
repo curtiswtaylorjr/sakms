@@ -8,6 +8,7 @@ import type {
   TrackedItem,
 } from "@dto";
 import { Discover } from "./Discover";
+import { AdultModeContext } from "../components/ui";
 
 const jsonResponse = (obj: unknown): Response =>
   new Response(JSON.stringify(obj), {
@@ -1144,5 +1145,53 @@ describe("Discover — DetailPopup wiring (hover overlay + click-to-open, Poster
     expect(
       calls.mock.calls.some(([u]) => String(u).includes("/autograb")),
     ).toBe(true);
+  });
+});
+
+// Adult mode disabled — ralplan-adult-disable-switch.md step 6. Critic-mandated
+// fix: a filtered-to-one-entry tab bar (a lone "Mainstream" pill) is explicitly
+// the WRONG implementation — Discover must render NO tab bar at all and show
+// Mainstream content directly. Asserted by checking the tab buttons themselves
+// are absent, not merely that "Adult" is gone.
+describe("Discover — Adult mode disabled (no dangling tab bar)", () => {
+  const renderDiscoverDisabled = () =>
+    render(() => (
+      <AdultModeContext.Provider value={{ enabled: () => false, refetch: () => {} }}>
+        <Discover />
+      </AdultModeContext.Provider>
+    ));
+
+  it("renders no tab bar at all — neither 'Mainstream' nor 'Adult' pill — and shows Mainstream content directly", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/movies/discover") && url.includes("trending"))
+        return jsonResponse([movie({ id: 1, title: "Trend Movie" })]);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      return jsonResponse([]);
+    });
+
+    renderDiscoverDisabled();
+
+    // Mainstream content renders directly, unconditionally.
+    expect(await screen.findByText("Trending Movies")).toBeInTheDocument();
+
+    // No tab bar — neither pill button is present. (Content headers like
+    // "Trending Movies" don't collide with these, confirmed above.)
+    expect(screen.queryByRole("button", { name: "Mainstream" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Adult" })).toBeNull();
+    expect(screen.queryByText("Adult")).toBeNull();
+  });
+
+  it("never fetches Adult-only data (Studios/Performers/scene rows)", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/modes/adult/"))
+        throw new Error("Adult route fetched while disabled: " + url);
+      const d = mainstreamDefaults(url);
+      if (d) return d;
+      return jsonResponse([]);
+    });
+
+    renderDiscoverDisabled();
+    await screen.findByText("Trending Movies");
   });
 });

@@ -10,6 +10,7 @@ import {
   For,
   Show,
   createContext,
+  createEffect,
   createSignal,
   onCleanup,
   onMount,
@@ -198,6 +199,40 @@ export function useScreenTabs(reg: ScreenTabsRegistration): boolean {
   return true;
 }
 
+// AdultModeContext carries the global adult_mode_enabled visibility switch's
+// current value (plus a refetch trigger) down to any screen that needs to hide
+// Adult UI when it's off — a downward value-distribution channel, unlike
+// ScreenTabsContext above (an upward child->parent registration channel). See
+// .omc/plans/ralplan-adult-disable-switch.md step 4 / Open Question 2.
+//
+// The default value (used when no Provider is present — every screen's own
+// standalone unit test, none of which mount the full AppShell) resolves
+// `enabled` to true and `refetch` to a no-op. That matches this feature's
+// pre-existing behavior (Adult always visible) so the ~370 existing tests that
+// render a screen standalone keep passing unmodified. AppShell's ShellRoot is
+// the one real Provider: it backs `enabled` with a createResource fetching
+// GET /api/settings/adult-mode-enabled, defaulting its OWN loading/error state
+// to false (fail-safe toward hidden, per the plan's Risk table) — a different
+// default for a different scenario (context present but resource in flight,
+// vs. no context at all).
+export type AdultModeControl = {
+  enabled: () => boolean;
+  refetch: () => void;
+};
+
+export const AdultModeContext = createContext<AdultModeControl>({
+  enabled: () => true,
+  refetch: () => {},
+});
+
+// useAdultEnabled is the read-only accessor most consumers want (ModeTabs,
+// ModeSelector, Discover, Advanced/UI/Connections settings sections). Global's
+// AdultModeSection is the one caller that also needs `refetch` — it reads
+// useContext(AdultModeContext) directly for that.
+export function useAdultEnabled(): () => boolean {
+  return useContext(AdultModeContext).enabled;
+}
+
 // ScreenTabBar is the generic tab bar: a row of pill buttons over an opaque
 // TabDef set, plus an optional trailing slot rendered after them (e.g.
 // Discover's Edit-mode toggle). The shell renders it in its consistent
@@ -277,15 +312,39 @@ export function ModeTabs(props: {
   onSelect: (mode: Mode) => void;
   class?: string;
 }): JSX.Element {
+  const adultEnabled = useAdultEnabled();
+  // `tabs` stays a FUNCTION, called inline at each JSX call site below
+  // (never hoisted into a plain variable) — Solid compiles JSX prop
+  // expressions into getters, so calling it inline keeps the standalone
+  // <ScreenTabBar> fallback path properly reactive to adultEnabled()
+  // resolving after mount (e.g. AppShell's real resource is still loading at
+  // first paint). The useScreenTabs(reg) call just below is a plain object,
+  // NOT JSX, so ITS `tabs` snapshot is unavoidably taken once at mount —  a
+  // known, accepted constraint (see AdultModeContext's doc comment and the
+  // plan's Risks table: a live toggle won't re-register an already-mounted
+  // shell-registered ModeTabs; not a practical issue since workflow screens
+  // remount on navigation).
+  const tabs = () => (adultEnabled() ? MODES : MODES.filter((m) => m.id !== "adult"));
+
+  // Falls back to Movies the moment Adult mode becomes disabled while this
+  // screen has "adult" selected — a screen must never stay pointed at a mode
+  // with no tab for it. See ralplan-adult-disable-switch.md step 5 / Open
+  // Question 3.
+  createEffect(() => {
+    if (!adultEnabled() && props.current() === "adult") {
+      props.onSelect("movies");
+    }
+  });
+
   const registered = useScreenTabs({
-    tabs: MODES,
+    tabs: tabs(),
     current: props.current,
     onSelect: (id) => props.onSelect(id as Mode),
   });
   if (registered) return null as unknown as JSX.Element;
   return (
     <ScreenTabBar
-      tabs={MODES}
+      tabs={tabs()}
       current={props.current}
       onSelect={(id) => props.onSelect(id as Mode)}
       class={props.class}

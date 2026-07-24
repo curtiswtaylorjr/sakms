@@ -333,6 +333,10 @@ func NewMux(httpClient *http.Client, connStore *connections.Store, propStore *pr
 	// browser's own Notification permission is tracked separately client-side.
 	mux.HandleFunc("GET /api/settings/browser-notifications-enabled", getBrowserNotificationsEnabledHandler(settingsStore))
 	mux.HandleFunc("PUT /api/settings/browser-notifications-enabled", putBrowserNotificationsEnabledHandler(settingsStore))
+	// Adult mode visibility switch — a pure frontend UI-hiding toggle, never
+	// a backend access boundary; see adult_mode.go's package doc.
+	mux.HandleFunc("GET /api/settings/adult-mode-enabled", getAdultModeEnabledHandler(settingsStore))
+	mux.HandleFunc("PUT /api/settings/adult-mode-enabled", putAdultModeEnabledHandler(settingsStore))
 	// Entity cache admin — counts, per-source sync state, on-demand sync triggers
 	mux.HandleFunc("GET /api/admin/entity-sync", entitySyncStatusHandler(entityStore))
 	mux.HandleFunc("POST /api/admin/entity-sync/{source}", triggerEntitySyncHandler(entityStore, connStore, settingsStore, httpClient))

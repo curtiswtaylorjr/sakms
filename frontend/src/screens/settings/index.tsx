@@ -32,13 +32,14 @@
 // inline sub-tab split combining two of those section files under one
 // top-level tab; this file is the thin tab shell.
 
-import { type Component, createSignal, Show } from "solid-js";
+import { type Component, createEffect, createSignal, Show } from "solid-js";
 import type { Mode } from "../../api/discover";
 import {
   MODES,
   Muted,
   ScreenTabBar,
   ScreenTabs,
+  useAdultEnabled,
   type TabDef,
 } from "../../components/ui";
 import { ConnectionsTabSection } from "./ConnectionsTab";
@@ -74,17 +75,38 @@ const SECTION_TABS: TabDef[] = [
 // ModeSelector is the inline Movies/Series/Adult tab bar shared by the Library
 // and Advanced sections. It is a plain ScreenTabBar (NOT registered with the
 // shell) so it never competes with the section tabs for the shell's tab slot.
+// Omits "Adult" when the global adult_mode_enabled switch is off, and falls
+// back the shared `mode` signal to Movies if it's currently pointed at Adult
+// when that happens — same centralized pattern as ModeTabs (ui.tsx), see
+// ralplan-adult-disable-switch.md step 5 / Open Question 3.
 const ModeSelector: Component<{
   mode: () => Mode;
   onSelect: (m: Mode) => void;
-}> = (props) => (
-  <ScreenTabBar
-    tabs={MODES}
-    current={props.mode}
-    onSelect={(id) => props.onSelect(id as Mode)}
-    class="mb-4 flex gap-1"
-  />
-);
+}> = (props) => {
+  const adultEnabled = useAdultEnabled();
+  // Kept as a FUNCTION, called inline in the JSX below (never hoisted to a
+  // plain variable) — see ModeTabs' matching doc comment in ui.tsx for why:
+  // Solid compiles JSX prop expressions into getters, so this stays reactive
+  // to adultEnabled() resolving after mount (e.g. still loading at first
+  // paint) instead of freezing at whatever it read during this one synchronous
+  // render pass.
+  const tabs = () => (adultEnabled() ? MODES : MODES.filter((m) => m.id !== "adult"));
+
+  createEffect(() => {
+    if (!adultEnabled() && props.mode() === "adult") {
+      props.onSelect("movies");
+    }
+  });
+
+  return (
+    <ScreenTabBar
+      tabs={tabs()}
+      current={props.mode}
+      onSelect={(id) => props.onSelect(id as Mode)}
+      class="mb-4 flex gap-1"
+    />
+  );
+};
 
 export const Settings: Component<{ onReboot: () => void }> = (props) => {
   const [section, setSection] = createSignal<string>("connections");

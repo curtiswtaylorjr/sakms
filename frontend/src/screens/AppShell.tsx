@@ -21,11 +21,13 @@ import {
   For,
   Show,
   createEffect,
+  createResource,
   createSignal,
   onCleanup,
 } from "solid-js";
 import { A, Route, Router } from "@solidjs/router";
 import {
+  AdultModeContext,
   Button,
   ErrorText,
   Muted,
@@ -33,6 +35,7 @@ import {
   ScreenTabsContext,
   type ScreenTabsRegistration,
 } from "../components/ui";
+import { fetchAdultModeEnabled } from "../api/settings";
 import { Dashboard } from "./Dashboard";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
@@ -320,92 +323,109 @@ export const AppShell: Component<{
   // registers nothing, e.g. Settings today).
   const ShellRoot: Component<{ children?: JSX.Element }> = (rootProps) => {
     const [tabReg, setTabReg] = createSignal<ScreenTabsRegistration | null>(null);
+    // adultModeResource is fetched once here (not re-run on a settings
+    // toggle — boot only runs once per auth session, see App.tsx:29-31), so
+    // AdultModeSection's (Global.tsx) toggle handler calls the paired
+    // refetch after a successful PUT to propagate the change everywhere else
+    // without a page reload. Its own loading/error state defaults to false —
+    // fail-safe toward hidden, per the plan's Risk table — DIFFERENT from
+    // AdultModeContext's no-Provider default of true (see that context's doc
+    // comment in ui.tsx for why these are two different scenarios).
+    const [adultModeResource, { refetch: refetchAdultMode }] = createResource(
+      fetchAdultModeEnabled,
+    );
+    const adultModeControl = {
+      enabled: () => adultModeResource() ?? false,
+      refetch: () => void refetchAdultMode(),
+    };
     return (
-      <ScreenTabsContext.Provider value={setTabReg}>
-        <div class="flex h-screen overflow-hidden">
-          {/* No visible UI; lives here (persistent shell root, not a swapped
-              <Route>) so the notifications stream stays open across in-app
-              navigation. */}
-          <BrowserNotifications />
-          <Show when={mobileNavOpen()}>
-            <div
-              class="fixed inset-0 z-30 bg-black/50 md:hidden"
-              aria-hidden="true"
-              onClick={() => setMobileNavOpen(false)}
+      <AdultModeContext.Provider value={adultModeControl}>
+        <ScreenTabsContext.Provider value={setTabReg}>
+          <div class="flex h-screen overflow-hidden">
+            {/* No visible UI; lives here (persistent shell root, not a swapped
+                <Route>) so the notifications stream stays open across in-app
+                navigation. */}
+            <BrowserNotifications />
+            <Show when={mobileNavOpen()}>
+              <div
+                class="fixed inset-0 z-30 bg-black/50 md:hidden"
+                aria-hidden="true"
+                onClick={() => setMobileNavOpen(false)}
+              />
+            </Show>
+            <Sidebar
+              collapsed={collapsed}
+              onToggle={() => setCollapsed(!collapsed())}
+              mobileOpen={mobileNavOpen}
+              onCloseMobile={() => setMobileNavOpen(false)}
             />
-          </Show>
-          <Sidebar
-            collapsed={collapsed}
-            onToggle={() => setCollapsed(!collapsed())}
-            mobileOpen={mobileNavOpen}
-            onCloseMobile={() => setMobileNavOpen(false)}
-          />
-          <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <header class="z-10 flex shrink-0 items-center gap-4 bg-fixed bg-gradient-to-br from-chrome to-chrome-2 px-4 py-3 shadow-xl sm:px-6">
-              <button
-                type="button"
-                onClick={() => setMobileNavOpen(true)}
-                class="flex items-center rounded-md p-1 text-chrome-fg/80 transition hover:text-chrome-fg md:hidden"
-                aria-label="Open navigation"
-              >
-                <IconMenu />
-              </button>
-              <img src="/favicon.svg" alt="" class="h-6 w-6 shrink-0" />
-              <span class="truncate font-semibold text-chrome-fg">SAK Media Server</span>
-              <div class="ml-auto">
-                <Button onClick={logout}>Log out</Button>
-              </div>
-            </header>
+            <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <header class="z-10 flex shrink-0 items-center gap-4 bg-fixed bg-gradient-to-br from-chrome to-chrome-2 px-4 py-3 shadow-xl sm:px-6">
+                <button
+                  type="button"
+                  onClick={() => setMobileNavOpen(true)}
+                  class="flex items-center rounded-md p-1 text-chrome-fg/80 transition hover:text-chrome-fg md:hidden"
+                  aria-label="Open navigation"
+                >
+                  <IconMenu />
+                </button>
+                <img src="/favicon.svg" alt="" class="h-6 w-6 shrink-0" />
+                <span class="truncate font-semibold text-chrome-fg">SAK Media Server</span>
+                <div class="ml-auto">
+                  <Button onClick={logout}>Log out</Button>
+                </div>
+              </header>
 
-            <Show when={props.noneMode}>
-              <div class="shrink-0 border-b border-border bg-surface-2 px-4 py-2 sm:px-6">
-                <span class="text-sm text-danger">
-                  Authentication is disabled for this instance — it and every
-                  connected service is reachable by anyone who can reach it.
-                  Switch to a different mode in Settings to fix this.
-                </span>
-              </div>
-            </Show>
-
-            <Show when={props.connectionsSetupPending}>
-              <div class="shrink-0 border-b border-border bg-surface-2 px-4 py-2 sm:px-6">
-                <span class="text-sm text-muted">
-                  First-run connections setup hasn't been dismissed yet — the
-                  setup wizard lands in a later wave.
-                </span>
-              </div>
-            </Show>
-
-            {/* bg-fixed anchors the wallpaper to the viewport, not this box, so
-                it doesn't scroll with the content beneath it — same technique
-                as the sidebar/header gradient above, just applied to a
-                background-image instead of a gradient. The two source images
-                are pre-composed per sidebar width (collapsed-56 / expanded-192)
-                so the ticket art's decorative elements land in the same
-                on-screen position regardless of how much room the sidebar
-                takes up next to this column; swap on `collapsed()` accordingly. */}
-            <main
-              class="min-w-0 flex-1 overflow-y-auto bg-fixed bg-cover bg-center p-4 sm:p-6"
-              style={{
-                "background-image": `url(${collapsed() ? "/wallpaper-collapsed.webp" : "/wallpaper-expanded.webp"})`,
-              }}
-            >
-              {logoutError() && <ErrorText>{logoutError()}</ErrorText>}
-              <Show when={tabReg()}>
-                {(reg) => (
-                  <ScreenTabBar
-                    tabs={reg().tabs}
-                    current={reg().current}
-                    onSelect={reg().onSelect}
-                    trailing={reg().trailing}
-                  />
-                )}
+              <Show when={props.noneMode}>
+                <div class="shrink-0 border-b border-border bg-surface-2 px-4 py-2 sm:px-6">
+                  <span class="text-sm text-danger">
+                    Authentication is disabled for this instance — it and every
+                    connected service is reachable by anyone who can reach it.
+                    Switch to a different mode in Settings to fix this.
+                  </span>
+                </div>
               </Show>
-              {rootProps.children}
-            </main>
+
+              <Show when={props.connectionsSetupPending}>
+                <div class="shrink-0 border-b border-border bg-surface-2 px-4 py-2 sm:px-6">
+                  <span class="text-sm text-muted">
+                    First-run connections setup hasn't been dismissed yet — the
+                    setup wizard lands in a later wave.
+                  </span>
+                </div>
+              </Show>
+
+              {/* bg-fixed anchors the wallpaper to the viewport, not this box, so
+                  it doesn't scroll with the content beneath it — same technique
+                  as the sidebar/header gradient above, just applied to a
+                  background-image instead of a gradient. The two source images
+                  are pre-composed per sidebar width (collapsed-56 / expanded-192)
+                  so the ticket art's decorative elements land in the same
+                  on-screen position regardless of how much room the sidebar
+                  takes up next to this column; swap on `collapsed()` accordingly. */}
+              <main
+                class="min-w-0 flex-1 overflow-y-auto bg-fixed bg-cover bg-center p-4 sm:p-6"
+                style={{
+                  "background-image": `url(${collapsed() ? "/wallpaper-collapsed.webp" : "/wallpaper-expanded.webp"})`,
+                }}
+              >
+                {logoutError() && <ErrorText>{logoutError()}</ErrorText>}
+                <Show when={tabReg()}>
+                  {(reg) => (
+                    <ScreenTabBar
+                      tabs={reg().tabs}
+                      current={reg().current}
+                      onSelect={reg().onSelect}
+                      trailing={reg().trailing}
+                    />
+                  )}
+                </Show>
+                {rootProps.children}
+              </main>
+            </div>
           </div>
-        </div>
-      </ScreenTabsContext.Provider>
+        </ScreenTabsContext.Provider>
+      </AdultModeContext.Provider>
     );
   };
 

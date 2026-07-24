@@ -14,8 +14,8 @@
 // to this subsection — the same solution ModeSelector uses for the Library/
 // Advanced tabs' inner Movies/Series/Adult switch.
 
-import { type Component, createSignal, Match, Switch } from "solid-js";
-import { ScreenTabBar, type TabDef } from "../../components/ui";
+import { type Component, createSignal, Match, Show, Switch } from "solid-js";
+import { ScreenTabBar, useAdultEnabled, type TabDef } from "../../components/ui";
 import { SliderAdminSection } from "../SliderAdmin";
 import { AdultRowAdminSection } from "../AdultRowAdmin";
 
@@ -25,25 +25,36 @@ const DISCOVER_TABS: TabDef[] = [
 ];
 
 export const UISection: Component = () => {
+  const adultEnabled = useAdultEnabled();
   const [tab, setTab] = createSignal("mainstream");
 
   return (
     <div>
       <h3 class="mb-3 text-base font-semibold text-fg">Discover</h3>
-      <ScreenTabBar
-        tabs={DISCOVER_TABS}
-        current={tab}
-        onSelect={setTab}
-        class="mb-4 flex gap-1"
-      />
-      <Switch>
-        <Match when={tab() === "mainstream"}>
-          <SliderAdminSection />
-        </Match>
-        <Match when={tab() === "adult"}>
-          <AdultRowAdminSection />
-        </Match>
-      </Switch>
+      {/* Spec-mandated exact behavior (Critic finding, see
+          ralplan-adult-disable-switch.md step 8): when Adult mode is
+          disabled, do not render ScreenTabBar at all — a filtered-to-one-entry
+          bar would be a dangling lone-tab UI. Render SliderAdminSection (the
+          Mainstream content) directly instead. */}
+      <Show
+        when={adultEnabled()}
+        fallback={<SliderAdminSection />}
+      >
+        <ScreenTabBar
+          tabs={DISCOVER_TABS}
+          current={tab}
+          onSelect={setTab}
+          class="mb-4 flex gap-1"
+        />
+        <Switch>
+          <Match when={tab() === "mainstream"}>
+            <SliderAdminSection />
+          </Match>
+          <Match when={tab() === "adult"}>
+            <AdultRowAdminSection />
+          </Match>
+        </Switch>
+      </Show>
     </div>
   );
 };

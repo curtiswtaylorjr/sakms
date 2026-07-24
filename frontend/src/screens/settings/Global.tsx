@@ -15,6 +15,7 @@ import {
   For,
   on,
   Show,
+  useContext,
 } from "solid-js";
 import {
   fetchEntitySyncInterval,
@@ -22,6 +23,8 @@ import {
   fetchRecheckInterval,
   fetchWatchFolders,
   fetchWatchFoldersPollInterval,
+  putAdultModeEnabled,
+  putAdultNewestScanInterval,
   putEntitySyncInterval,
   putRecheckInterval,
   putWatchFoldersEnabled,
@@ -30,7 +33,7 @@ import {
   triggerRecheck,
   type EntitySyncSource,
 } from "../../api/settings";
-import { Button, Muted } from "../../components/ui";
+import { AdultModeContext, Button, Muted } from "../../components/ui";
 import { Card, SaveStatus, useSaveStatus } from "./shared";
 import { DurationSetting } from "./Advanced";
 
@@ -300,8 +303,161 @@ const EntityDatabaseSection: Component = () => {
   );
 };
 
+// AdultModeSection is the master switch for the adult_mode_enabled visibility
+// gate — see ralplan-adult-disable-switch.md step 10. It is ALWAYS rendered
+// unconditionally, regardless of the switch's own state (it must stay
+// reachable so an operator can always re-enable Adult). Enabling is a plain,
+// immediate single PUT, no confirmation. Disabling opens a confirmation
+// dialog (this is a visibility switch, not backend enforcement — see the
+// disclosure copy below) with an opt-in "also stop the Adult Newest
+// background scanner" checkbox; on confirm this fires the
+// adult-mode-enabled PUT first, then — only if the checkbox was checked —
+// a second, separate adult-newest-scan-interval PUT set to 0 (two sequential
+// single-key requests, per the plan's Open Question 1 — never a combined
+// request). Canceling fires zero requests and changes nothing.
+const AdultModeSection: Component = () => {
+  const { enabled, refetch } = useContext(AdultModeContext);
+  const [confirmOpen, setConfirmOpen] = createSignal(false);
+  const [stopScanner, setStopScanner] = createSignal(false);
+  const [busy, setBusy] = createSignal(false);
+  const saveStatus = useSaveStatus();
+
+  const onToggle = (checked: boolean) => {
+    if (checked) {
+      void enableNow();
+    } else {
+      setStopScanner(false);
+      setConfirmOpen(true);
+    }
+  };
+
+  const enableNow = async () => {
+    setBusy(true);
+    try {
+      await putAdultModeEnabled(true);
+      saveStatus.saved();
+      refetch();
+    } catch (e) {
+      saveStatus.failed(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmDisable = async () => {
+    setBusy(true);
+    try {
+      // Single-key toggle first...
+      await putAdultModeEnabled(false);
+      // ...then, only if opted in, the pre-existing interval endpoint —
+      // never a combined/compound request (Open Question 1).
+      if (stopScanner()) {
+        await putAdultNewestScanInterval(0);
+      }
+      saveStatus.saved();
+      refetch();
+      setConfirmOpen(false);
+    } catch (e) {
+      saveStatus.failed(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelDisable = () => {
+    // Fires zero requests and changes nothing (Critic-mandated fix — this
+    // criterion was dropped from an earlier draft, restore it deliberately).
+    setConfirmOpen(false);
+    setStopScanner(false);
+  };
+
+  return (
+    <Card title="Adult Mode">
+      <label class="mb-3 flex items-center gap-2">
+        <input
+          type="checkbox"
+          aria-label="Enable Adult mode"
+          // Depends on confirmOpen() too, not just enabled() — clicking to
+          // open the disable dialog natively flips the DOM checkbox before
+          // Solid re-touches it; since `enabled()` itself hasn't changed yet
+          // (only Cancel/Confirm change it), a `checked={enabled()}` binding
+          // alone would never re-assert on Cancel and the box would stay
+          // stuck showing unchecked. Tying it to confirmOpen() too forces a
+          // fresh evaluation whenever the dialog opens OR closes, so
+          // Cancel correctly snaps it back to the unchanged `enabled()`
+          // value.
+          checked={confirmOpen() ? false : enabled()}
+          disabled={busy()}
+          onChange={(e) => onToggle(e.currentTarget.checked)}
+        />
+        <span class="text-sm text-fg">Enable Adult mode</span>
+      </label>
+      <Muted>
+        Controls whether Adult-related screens, tabs, and settings sections
+        are visible anywhere in this app. This is a visibility switch only —
+        it never blocks API access to Adult routes, and it never stops the 3
+        shared background schedulers (watch folders, monitored title refresh,
+        scan scheduler), which keep running system-wide either way.
+      </Muted>
+      <SaveStatus
+        text={saveStatus.status().text}
+        error={saveStatus.status().error}
+      />
+
+      <Show when={confirmOpen()}>
+        <div
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={cancelDisable}
+        >
+          <div
+            class="w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 class="mb-3 text-base font-semibold text-fg">
+              Disable Adult mode?
+            </h3>
+            <p class="mb-3 text-sm text-muted">
+              Adult-related screens, tabs, and settings sections will be
+              hidden everywhere in this app. This does not restrict anything
+              on the backend — Adult API routes keep working exactly as
+              before, and the 3 shared background schedulers (watch folders,
+              monitored title refresh, scan scheduler) keep running
+              system-wide, including whatever Adult work they were already
+              doing.
+            </p>
+            <label class="mb-4 flex items-center gap-2">
+              <input
+                type="checkbox"
+                aria-label="Also stop the Adult Newest background scanner"
+                checked={stopScanner()}
+                onChange={(e) => setStopScanner(e.currentTarget.checked)}
+              />
+              <span class="text-sm text-fg">
+                Also stop the Adult Newest background scanner
+              </span>
+            </label>
+            <div class="flex justify-end gap-2">
+              <Button onClick={cancelDisable} disabled={busy()}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => void confirmDisable()}
+                disabled={busy()}
+              >
+                Disable
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Show>
+    </Card>
+  );
+};
+
 export const GlobalSection: Component = () => (
   <>
+    <AdultModeSection />
     <RecheckSection />
     <EntityDatabaseSection />
     <WatchFoldersSection />
